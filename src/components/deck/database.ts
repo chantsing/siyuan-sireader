@@ -53,6 +53,13 @@ export interface CardProgress {
 export class DeckDatabase {
   private db: any = null
   private initialized = false
+  private saveLock = false
+  private saveQueue: (() => Promise<void>)[] = []
+  private operationQueue: Array<() => Promise<any>> = []
+  private isProcessingQueue = false
+  private cardCache = new Map<string, CardProgress>()
+  private saveTimeout: NodeJS.Timeout | null = null
+  private pendingSaves = false
   
   async init(): Promise<void> {
     if (this.initialized) return
@@ -242,449 +249,844 @@ export class DeckDatabase {
   }
   
   
+  private async processQueue() {
+    if (this.isProcessingQueue) return;
+    this.isProcessingQueue = true;
+    
+    try {
+      while (this.operationQueue.length > 0) {
+        const operation = this.operationQueue.shift();
+        if (operation) {
+          await operation();
+        }
+      }
+    } finally {
+      this.isProcessingQueue = false;
+    }
+  }
+
+  private async queueOperation<T>(operation: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      this.operationQueue.push(async () => {
+        try {
+          const result = await operation();
+          resolve(result);
+        } catch (error) {
+          reject(error);
+        }
+      });
+      this.processQueue();
+    });
+  }
+
+  private monitorMemory() {
+    if (this.db && (this.db as any).memory) {
+      const memory = (this.db as any).memory;
+      const used = memory.buffer.byteLength;
+      console.log(`Deck SQL.js memory usage: ${(used / 1024 / 1024).toFixed(2)} MB`);
+      
+      if (used > 50 * 1024 * 1024) {
+        console.warn('High memory usage detected, clearing cache');
+        this.cardCache.clear();
+      }
+    }
+  }
+
+  private async scheduleSave() {
+    if (this.saveTimeout) {
+      clearTimeout(this.saveTimeout);
+    }
+    this.pendingSaves = true;
+    this.saveTimeout = setTimeout(async () => {
+      if (this.pendingSaves) {
+        await this.performSaveDb();
+        this.pendingSaves = false;
+      }
+    }, 1000);
+  }
+
   private async saveDb(): Promise<void> {
-    const data = this.db.export()
-    const formData = new FormData()
-    formData.append('path', DECK_DATA_PATH)
-    formData.append('file', new File([data], 'deck-data.db'))
-    formData.append('isDir', 'false')
-    await fetch('/api/file/putFile', { method: 'POST', body: formData })
+    this.scheduleSave();
+  }
+
+  private async performSaveDb(): Promise<void> {
+    this.saveLock = true;
+    try {
+      const data = this.db.export();
+      if (data.byteLength > 10 * 1024 * 1024) {
+        console.warn('Deck database size is large:', data.byteLength);
+      }
+      const formData = new FormData();
+      formData.append('path', DECK_DATA_PATH);
+      formData.append('file', new File([data], 'deck-data.db'));
+      formData.append('isDir', 'false');
+      await fetch('/api/file/putFile', { method: 'POST', body: formData });
+    } catch (error) {
+      console.error('Error saving deck database:', error);
+    } finally {
+      this.saveLock = false;
+      if (this.saveQueue.length > 0) {
+        const nextTask = this.saveQueue.shift();
+        nextTask?.();
+      }
+    }
   }
   
   // ========== 卡片进度操作 ==========
   async getProgress(id: string): Promise<CardProgress | null> {
-    await this.init()
-    const result = this.db.exec('SELECT * FROM card_progress WHERE id = ?', [id])
-    if (!result[0]?.values[0]) return null
-    return this.rowToProgress(result[0].values[0], result[0].columns)
+    try {
+      // 先检查缓存
+      if (this.cardCache.has(id)) {
+        return this.cardCache.get(id)!;
+      }
+      
+      return await this.queueOperation(async () => {
+        await this.init();
+        const result = this.db.exec('SELECT * FROM card_progress WHERE id = ?', [id]);
+        if (!result[0]?.values[0]) return null;
+        const progress = this.rowToProgress(result[0].values[0], result[0].columns);
+        
+        // 存入缓存
+        this.cardCache.set(id, progress);
+        this.monitorMemory();
+        return progress;
+      });
+    } catch (error) {
+      console.error('Error in getProgress:', error);
+      return null;
+    }
   }
   
   async getProgressByDeck(deckId: string): Promise<CardProgress[]> {
-    await this.init()
-    const result = this.db.exec('SELECT * FROM card_progress WHERE deck_id = ?', [deckId])
-    if (!result[0]) return []
-    return result[0].values.map((row: any) => this.rowToProgress(row, result[0].columns))
+    try {
+      return await this.queueOperation(async () => {
+        await this.init();
+        const result = this.db.exec('SELECT * FROM card_progress WHERE deck_id = ?', [deckId]);
+        if (!result[0]) return [];
+        const progressList = result[0].values.map((row: any) => {
+          const progress = this.rowToProgress(row, result[0].columns);
+          // 存入缓存
+          this.cardCache.set(progress.id, progress);
+          return progress;
+        });
+        this.monitorMemory();
+        return progressList;
+      });
+    } catch (error) {
+      console.error('Error in getProgressByDeck:', error);
+      return [];
+    }
   }
   
   async getAllProgress(): Promise<CardProgress[]> {
-    await this.init()
-    const result = this.db.exec('SELECT * FROM card_progress')
-    if (!result[0]) return []
-    return result[0].values.map((row: any) => this.rowToProgress(row, result[0].columns))
+    try {
+      return await this.queueOperation(async () => {
+        await this.init();
+        const result = this.db.exec('SELECT * FROM card_progress');
+        if (!result[0]) return [];
+        const progressList = result[0].values.map((row: any) => {
+          const progress = this.rowToProgress(row, result[0].columns);
+          // 存入缓存
+          this.cardCache.set(progress.id, progress);
+          return progress;
+        });
+        this.monitorMemory();
+        return progressList;
+      });
+    } catch (error) {
+      console.error('Error in getAllProgress:', error);
+      return [];
+    }
   }
   
   // 性能优化：按条件查询
   async getProgressByState(state: string): Promise<CardProgress[]> {
-    await this.init()
-    const result = this.db.exec('SELECT * FROM card_progress WHERE state = ?', [state])
-    if (!result[0]) return []
-    return result[0].values.map((row: any) => this.rowToProgress(row, result[0].columns))
+    try {
+      return await this.queueOperation(async () => {
+        await this.init();
+        const result = this.db.exec('SELECT * FROM card_progress WHERE state = ?', [state]);
+        if (!result[0]) return [];
+        const progressList = result[0].values.map((row: any) => {
+          const progress = this.rowToProgress(row, result[0].columns);
+          // 存入缓存
+          this.cardCache.set(progress.id, progress);
+          return progress;
+        });
+        this.monitorMemory();
+        return progressList;
+      });
+    } catch (error) {
+      console.error('Error in getProgressByState:', error);
+      return [];
+    }
   }
   
   async getTodayReviewedProgress(todayStart: number): Promise<CardProgress[]> {
-    await this.init()
-    const result = this.db.exec('SELECT * FROM card_progress WHERE last_review >= ?', [todayStart])
-    if (!result[0]) return []
-    return result[0].values.map((row: any) => this.rowToProgress(row, result[0].columns))
+    try {
+      return await this.queueOperation(async () => {
+        await this.init();
+        const result = this.db.exec('SELECT * FROM card_progress WHERE last_review >= ?', [todayStart]);
+        if (!result[0]) return [];
+        const progressList = result[0].values.map((row: any) => {
+          const progress = this.rowToProgress(row, result[0].columns);
+          // 存入缓存
+          this.cardCache.set(progress.id, progress);
+          return progress;
+        });
+        this.monitorMemory();
+        return progressList;
+      });
+    } catch (error) {
+      console.error('Error in getTodayReviewedProgress:', error);
+      return [];
+    }
   }
   
   async getProgressByInterval(minDays: number, maxDays: number): Promise<CardProgress[]> {
-    await this.init()
-    const minMinutes = minDays * 1440
-    const maxMinutes = maxDays * 1440
-    const result = this.db.exec(
-      'SELECT * FROM card_progress WHERE interval >= ? AND interval < ?',
-      [minMinutes, maxMinutes]
-    )
-    if (!result[0]) return []
-    return result[0].values.map((row: any) => this.rowToProgress(row, result[0].columns))
+    try {
+      return await this.queueOperation(async () => {
+        await this.init();
+        const minMinutes = minDays * 1440;
+        const maxMinutes = maxDays * 1440;
+        const result = this.db.exec(
+          'SELECT * FROM card_progress WHERE interval >= ? AND interval < ?',
+          [minMinutes, maxMinutes]
+        );
+        if (!result[0]) return [];
+        const progressList = result[0].values.map((row: any) => {
+          const progress = this.rowToProgress(row, result[0].columns);
+          // 存入缓存
+          this.cardCache.set(progress.id, progress);
+          return progress;
+        });
+        this.monitorMemory();
+        return progressList;
+      });
+    } catch (error) {
+      console.error('Error in getProgressByInterval:', error);
+      return [];
+    }
   }
   
   async getProgressByDifficulty(minDiff: number, maxDiff: number): Promise<CardProgress[]> {
-    await this.init()
-    const result = this.db.exec(
-      'SELECT * FROM card_progress WHERE difficulty >= ? AND difficulty < ? AND difficulty IS NOT NULL',
-      [minDiff, maxDiff]
-    )
-    if (!result[0]) return []
-    return result[0].values.map((row: any) => this.rowToProgress(row, result[0].columns))
+    try {
+      return await this.queueOperation(async () => {
+        await this.init();
+        const result = this.db.exec(
+          'SELECT * FROM card_progress WHERE difficulty >= ? AND difficulty < ? AND difficulty IS NOT NULL',
+          [minDiff, maxDiff]
+        );
+        if (!result[0]) return [];
+        const progressList = result[0].values.map((row: any) => {
+          const progress = this.rowToProgress(row, result[0].columns);
+          // 存入缓存
+          this.cardCache.set(progress.id, progress);
+          return progress;
+        });
+        this.monitorMemory();
+        return progressList;
+      });
+    } catch (error) {
+      console.error('Error in getProgressByDifficulty:', error);
+      return [];
+    }
   }
   
   async getDifficultCards(lapsesThreshold = 3): Promise<CardProgress[]> {
-    await this.init()
-    const result = this.db.exec('SELECT * FROM card_progress WHERE lapses >= ?', [lapsesThreshold])
-    if (!result[0]) return []
-    return result[0].values.map((row: any) => this.rowToProgress(row, result[0].columns))
+    try {
+      return await this.queueOperation(async () => {
+        await this.init();
+        const result = this.db.exec('SELECT * FROM card_progress WHERE lapses >= ?', [lapsesThreshold]);
+        if (!result[0]) return [];
+        const progressList = result[0].values.map((row: any) => {
+          const progress = this.rowToProgress(row, result[0].columns);
+          // 存入缓存
+          this.cardCache.set(progress.id, progress);
+          return progress;
+        });
+        this.monitorMemory();
+        return progressList;
+      });
+    } catch (error) {
+      console.error('Error in getDifficultCards:', error);
+      return [];
+    }
   }
   
   async saveProgress(progress: CardProgress): Promise<void> {
-    await this.init()
-    const exists = await this.getProgress(progress.id)
-    const now = Date.now()
-    
-    const params = [
-      progress.deckId,
-      progress.collectionId || null,
-      progress.ankiNoteId || null,
-      progress.ankiCardId || null,
-      progress.source,
-      progress.state,
-      progress.due,
-      progress.interval,
-      progress.ease,
-      progress.lapses,
-      progress.reps,
-      progress.lastReview || null,
-      progress.stability || null,
-      progress.difficulty || null,
-      progress.bookUrl || null,
-      progress.bookTitle || null,
-      progress.position || null,
-      progress.createdAt || now,
-      now
-    ]
-    
-    if (exists) {
-      this.db.run(`UPDATE card_progress SET deck_id=?,collection_id=?,anki_note_id=?,anki_card_id=?,
-        source=?,state=?,due=?,interval=?,ease=?,lapses=?,reps=?,last_review=?,stability=?,difficulty=?,
-        book_url=?,book_title=?,position=?,created_at=?,updated_at=? WHERE id=?`,
-        [...params, progress.id])
-    } else {
-      this.db.run(`INSERT INTO card_progress (id,deck_id,collection_id,anki_note_id,anki_card_id,source,state,due,interval,ease,lapses,reps,last_review,stability,difficulty,book_url,book_title,position,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [progress.id, ...params])
+    try {
+      await this.queueOperation(async () => {
+        await this.init();
+        const exists = await this.getProgress(progress.id);
+        const now = Date.now();
+        
+        const params = [
+          progress.deckId,
+          progress.collectionId || null,
+          progress.ankiNoteId || null,
+          progress.ankiCardId || null,
+          progress.source,
+          progress.state,
+          progress.due,
+          progress.interval,
+          progress.ease,
+          progress.lapses,
+          progress.reps,
+          progress.lastReview || null,
+          progress.stability || null,
+          progress.difficulty || null,
+          progress.bookUrl || null,
+          progress.bookTitle || null,
+          progress.position || null,
+          progress.createdAt || now,
+          now
+        ];
+        
+        if (exists) {
+          this.db.run(`UPDATE card_progress SET deck_id=?,collection_id=?,anki_note_id=?,anki_card_id=?,
+            source=?,state=?,due=?,interval=?,ease=?,lapses=?,reps=?,last_review=?,stability=?,difficulty=?,
+            book_url=?,book_title=?,position=?,created_at=?,updated_at=? WHERE id=?`,
+            [...params, progress.id]);
+        } else {
+          this.db.run(`INSERT INTO card_progress (id,deck_id,collection_id,anki_note_id,anki_card_id,source,state,due,interval,ease,lapses,reps,last_review,stability,difficulty,book_url,book_title,position,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            [progress.id, ...params]);
+        }
+        
+        await this.saveDb();
+        
+        // 更新缓存
+        this.cardCache.set(progress.id, progress);
+        this.monitorMemory();
+      });
+    } catch (error) {
+      console.error('Error in saveProgress:', error);
     }
-    
-    await this.saveDb()
   }
   
   async deleteProgress(id: string): Promise<void> {
-    await this.init()
-    this.db.run('DELETE FROM card_progress WHERE id = ?', [id])
-    await this.saveDb()
+    try {
+      await this.queueOperation(async () => {
+        await this.init();
+        this.db.run('DELETE FROM card_progress WHERE id = ?', [id]);
+        await this.saveDb();
+        
+        // 从缓存中删除
+        this.cardCache.delete(id);
+        this.monitorMemory();
+      });
+    } catch (error) {
+      console.error('Error in deleteProgress:', error);
+    }
   }
   
   // ========== 卡组操作 ==========
   async getDeck(id: string): Promise<Pack | null> {
-    await this.init()
-    const result = this.db.exec('SELECT * FROM decks WHERE id = ?', [id])
-    if (!result[0]?.values[0]) return null
-    return this.rowToDeck(result[0].values[0], result[0].columns)
+    try {
+      return await this.queueOperation(async () => {
+        await this.init();
+        const result = this.db.exec('SELECT * FROM decks WHERE id = ?', [id]);
+        if (!result[0]?.values[0]) return null;
+        const deck = this.rowToDeck(result[0].values[0], result[0].columns);
+        this.monitorMemory();
+        return deck;
+      });
+    } catch (error) {
+      console.error('Error in getDeck:', error);
+      return null;
+    }
   }
   
   async getDecks(): Promise<Pack[]> {
-    await this.init()
-    const result = this.db.exec('SELECT * FROM decks')
-    if (!result[0]) return []
-    return result[0].values.map((row: any) => this.rowToDeck(row, result[0].columns))
+    try {
+      return await this.queueOperation(async () => {
+        await this.init();
+        const result = this.db.exec('SELECT * FROM decks');
+        if (!result[0]) return [];
+        const decks = result[0].values.map((row: any) => this.rowToDeck(row, result[0].columns));
+        this.monitorMemory();
+        return decks;
+      });
+    } catch (error) {
+      console.error('Error in getDecks:', error);
+      return [];
+    }
   }
   
   async saveDeck(deck: Pack): Promise<void> {
-    await this.init()
-    const exists = await this.getDeck(deck.id)
-    const now = Date.now()
-    
-    const params = [
-      deck.name, deck.desc || null, deck.icon || null, deck.color || null,
-      deck.titleImg || null, JSON.stringify(deck.tags || []), deck.parent || null,
-      deck.collectionId || null, deck.ankiDeckId || null,
-      deck.stats.total, deck.stats.new, deck.stats.learning, deck.stats.review, deck.stats.suspended,
-      deck.enabled ? 1 : 0,
-      deck.created || now, now
-    ]
-    
-    if (exists) {
-      this.db.run(`UPDATE decks SET name=?,description=?,icon=?,color=?,title_img=?,tags=?,parent=?,
-        collection_id=?,anki_deck_id=?,total=?,new=?,learning=?,review=?,suspended=?,enabled=?,created_at=?,updated_at=? WHERE id=?`,
-        [...params, deck.id])
-    } else {
-      this.db.run(`INSERT INTO decks VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [deck.id, ...params])
+    try {
+      await this.queueOperation(async () => {
+        await this.init();
+        const exists = await this.getDeck(deck.id);
+        const now = Date.now();
+        
+        const params = [
+          deck.name, deck.desc || null, deck.icon || null, deck.color || null,
+          deck.titleImg || null, JSON.stringify(deck.tags || []), deck.parent || null,
+          deck.collectionId || null, deck.ankiDeckId || null,
+          deck.stats.total, deck.stats.new, deck.stats.learning, deck.stats.review, deck.stats.suspended,
+          deck.enabled ? 1 : 0,
+          deck.created || now, now
+        ];
+        
+        if (exists) {
+          this.db.run(`UPDATE decks SET name=?,description=?,icon=?,color=?,title_img=?,tags=?,parent=?,
+            collection_id=?,anki_deck_id=?,total=?,new=?,learning=?,review=?,suspended=?,enabled=?,created_at=?,updated_at=? WHERE id=?`,
+            [...params, deck.id]);
+        } else {
+          this.db.run(`INSERT INTO decks VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            [deck.id, ...params]);
+        }
+        
+        await this.saveDb();
+        this.monitorMemory();
+      });
+    } catch (error) {
+      console.error('Error in saveDeck:', error);
     }
-    
-    await this.saveDb()
   }
   
   async deleteDeck(id: string): Promise<void> {
-    await this.init()
-    // 级联删除所有相关数据
-    const sqls = [
-      `DELETE FROM card_progress WHERE deck_id = '${id}'`,
-      `DELETE FROM deck_settings WHERE deck_id = '${id}'`,
-      `DELETE FROM reviews WHERE deck_id = '${id}'`,
-      `DELETE FROM decks WHERE id = '${id}'`
-    ]
-    this.db.exec(sqls.join(';'))
-    await this.saveDb()
+    try {
+      await this.queueOperation(async () => {
+        await this.init();
+        // 级联删除所有相关数据
+        const sqls = [
+          `DELETE FROM card_progress WHERE deck_id = '${id}'`,
+          `DELETE FROM deck_settings WHERE deck_id = '${id}'`,
+          `DELETE FROM reviews WHERE deck_id = '${id}'`,
+          `DELETE FROM decks WHERE id = '${id}'`
+        ];
+        this.db.exec(sqls.join(';'));
+        await this.saveDb();
+        
+        // 清理缓存中相关的卡片进度
+        for (const [key, progress] of this.cardCache.entries()) {
+          if (progress.deckId === id) {
+            this.cardCache.delete(key);
+          }
+        }
+        this.monitorMemory();
+      });
+    } catch (error) {
+      console.error('Error in deleteDeck:', error);
+    }
   }
   
   async toggleDeckEnabled(id: string): Promise<boolean> {
-    await this.init()
-    const deck = await this.getDeck(id)
-    if (!deck) return false
-    
-    const newEnabled = !deck.enabled
-    this.db.run('UPDATE decks SET enabled = ?, updated_at = ? WHERE id = ?', [newEnabled ? 1 : 0, Date.now(), id])
-    await this.saveDb()
-    return newEnabled
+    try {
+      return await this.queueOperation(async () => {
+        await this.init();
+        const deck = await this.getDeck(id);
+        if (!deck) return false;
+        
+        const newEnabled = !deck.enabled;
+        this.db.run('UPDATE decks SET enabled = ?, updated_at = ? WHERE id = ?', [newEnabled ? 1 : 0, Date.now(), id]);
+        await this.saveDb();
+        this.monitorMemory();
+        return newEnabled;
+      });
+    } catch (error) {
+      console.error('Error in toggleDeckEnabled:', error);
+      return false;
+    }
   }
   
   async getEnabledDecks(): Promise<Pack[]> {
-    await this.init()
-    const result = this.db.exec('SELECT * FROM decks WHERE enabled = 1')
-    if (!result[0]) return []
-    return result[0].values.map((row: any) => this.rowToDeck(row, result[0].columns))
+    try {
+      return await this.queueOperation(async () => {
+        await this.init();
+        const result = this.db.exec('SELECT * FROM decks WHERE enabled = 1');
+        if (!result[0]) return [];
+        const decks = result[0].values.map((row: any) => this.rowToDeck(row, result[0].columns));
+        this.monitorMemory();
+        return decks;
+      });
+    } catch (error) {
+      console.error('Error in getEnabledDecks:', error);
+      return [];
+    }
   }
   
   async updateDeckStats(deckId: string): Promise<void> {
-    await this.init()
-    const result = this.db.exec(`
-      SELECT 
-        COUNT(*) as total,
-        SUM(CASE WHEN state = 'new' THEN 1 ELSE 0 END) as new,
-        SUM(CASE WHEN state = 'learning' THEN 1 ELSE 0 END) as learning,
-        SUM(CASE WHEN state = 'review' THEN 1 ELSE 0 END) as review,
-        SUM(CASE WHEN state = 'suspended' THEN 1 ELSE 0 END) as suspended
-      FROM card_progress WHERE deck_id = ?
-    `, [deckId])
-    
-    if (result[0]?.values[0]) {
-      const [total, newC, learning, review, suspended] = result[0].values[0]
-      this.db.run('UPDATE decks SET total=?,new=?,learning=?,review=?,suspended=? WHERE id=?',
-        [total, newC, learning, review, suspended, deckId])
-      await this.saveDb()
+    try {
+      await this.queueOperation(async () => {
+        await this.init();
+        const result = this.db.exec(`
+          SELECT 
+            COUNT(*) as total,
+            SUM(CASE WHEN state = 'new' THEN 1 ELSE 0 END) as new,
+            SUM(CASE WHEN state = 'learning' THEN 1 ELSE 0 END) as learning,
+            SUM(CASE WHEN state = 'review' THEN 1 ELSE 0 END) as review,
+            SUM(CASE WHEN state = 'suspended' THEN 1 ELSE 0 END) as suspended
+          FROM card_progress WHERE deck_id = ?
+        `, [deckId]);
+        
+        if (result[0]?.values[0]) {
+          const [total, newC, learning, review, suspended] = result[0].values[0];
+          this.db.run('UPDATE decks SET total=?,new=?,learning=?,review=?,suspended=? WHERE id=?',
+            [total, newC, learning, review, suspended, deckId]);
+          await this.saveDb();
+        }
+        this.monitorMemory();
+      });
+    } catch (error) {
+      console.error('Error in updateDeckStats:', error);
     }
   }
   
   // ========== 学习记录 ==========
   async recordReview(cardId: string, deckId: string, rating: number, isNew: boolean, timeSpent: number): Promise<void> {
-    await this.init()
-    this.db.run('INSERT INTO reviews (card_id,deck_id,rating,is_new,time_spent,reviewed_at) VALUES(?,?,?,?,?,?)',
-      [cardId, deckId, rating, isNew ? 1 : 0, timeSpent, Date.now()])
-    await this.saveDb()
+    try {
+      await this.queueOperation(async () => {
+        await this.init();
+        this.db.run('INSERT INTO reviews (card_id,deck_id,rating,is_new,time_spent,reviewed_at) VALUES(?,?,?,?,?,?)',
+          [cardId, deckId, rating, isNew ? 1 : 0, timeSpent, Date.now()]);
+        await this.saveDb();
+        this.monitorMemory();
+      });
+    } catch (error) {
+      console.error('Error in recordReview:', error);
+    }
   }
   
   async getCardReviewHistory(cardId: string, limit = 20): Promise<any[]> {
-    await this.init()
-    const result = this.db.exec(
-      'SELECT * FROM reviews WHERE card_id = ? ORDER BY reviewed_at DESC LIMIT ?',
-      [cardId, limit]
-    )
-    if (!result[0]) return []
-    return result[0].values.map((row: any) => ({
-      id: row[0],
-      cardId: row[1],
-      deckId: row[2],
-      rating: row[3],
-      isNew: row[4] === 1,
-      timeSpent: row[5],
-      reviewedAt: row[6]
-    }))
+    try {
+      return await this.queueOperation(async () => {
+        await this.init();
+        const result = this.db.exec(
+          'SELECT * FROM reviews WHERE card_id = ? ORDER BY reviewed_at DESC LIMIT ?',
+          [cardId, limit]
+        );
+        if (!result[0]) return [];
+        const history = result[0].values.map((row: any) => ({
+          id: row[0],
+          cardId: row[1],
+          deckId: row[2],
+          rating: row[3],
+          isNew: row[4] === 1,
+          timeSpent: row[5],
+          reviewedAt: row[6]
+        }));
+        this.monitorMemory();
+        return history;
+      });
+    } catch (error) {
+      console.error('Error in getCardReviewHistory:', error);
+      return [];
+    }
   }
   
   async getReviewsByDateRange(startDate: number, endDate: number): Promise<any[]> {
-    await this.init()
-    const result = this.db.exec(
-      'SELECT * FROM reviews WHERE reviewed_at >= ? AND reviewed_at < ? ORDER BY reviewed_at DESC',
-      [startDate, endDate]
-    )
-    if (!result[0]) return []
-    return result[0].values.map((row: any) => ({
-      id: row[0],
-      cardId: row[1],
-      deckId: row[2],
-      rating: row[3],
-      isNew: row[4] === 1,
-      timeSpent: row[5],
-      reviewedAt: row[6]
-    }))
+    try {
+      return await this.queueOperation(async () => {
+        await this.init();
+        const result = this.db.exec(
+          'SELECT * FROM reviews WHERE reviewed_at >= ? AND reviewed_at < ? ORDER BY reviewed_at DESC',
+          [startDate, endDate]
+        );
+        if (!result[0]) return [];
+        const reviews = result[0].values.map((row: any) => ({
+          id: row[0],
+          cardId: row[1],
+          deckId: row[2],
+          rating: row[3],
+          isNew: row[4] === 1,
+          timeSpent: row[5],
+          reviewedAt: row[6]
+        }));
+        this.monitorMemory();
+        return reviews;
+      });
+    } catch (error) {
+      console.error('Error in getReviewsByDateRange:', error);
+      return [];
+    }
   }
   
   async cleanOldReviews(daysToKeep = 90): Promise<void> {
-    await this.init()
-    const cutoff = Date.now() - (daysToKeep * 86400000)
-    this.db.run('DELETE FROM reviews WHERE reviewed_at < ?', [cutoff])
-    await this.saveDb()
+    try {
+      await this.queueOperation(async () => {
+        await this.init();
+        const cutoff = Date.now() - (daysToKeep * 86400000);
+        this.db.run('DELETE FROM reviews WHERE reviewed_at < ?', [cutoff]);
+        await this.saveDb();
+        this.monitorMemory();
+      });
+    } catch (error) {
+      console.error('Error in cleanOldReviews:', error);
+    }
   }
   
   async getDailyStats(date: string): Promise<DailyStats> {
-    await this.init()
-    const result = this.db.exec('SELECT * FROM daily_stats WHERE date = ?', [date])
-    if (!result[0]?.values[0]) {
+    try {
+      return await this.queueOperation(async () => {
+        await this.init();
+        const result = this.db.exec('SELECT * FROM daily_stats WHERE date = ?', [date]);
+        if (!result[0]?.values[0]) {
+          return { date, newCards: 0, reviews: 0, correctRate: 0, studyTime: 0,
+            ratings: { again: 0, hard: 0, good: 0, easy: 0 }, mature: 0, young: 0 };
+        }
+        const stats = this.rowToStats(result[0].values[0], result[0].columns);
+        this.monitorMemory();
+        return stats;
+      });
+    } catch (error) {
+      console.error('Error in getDailyStats:', error);
       return { date, newCards: 0, reviews: 0, correctRate: 0, studyTime: 0,
-        ratings: { again: 0, hard: 0, good: 0, easy: 0 }, mature: 0, young: 0 }
+        ratings: { again: 0, hard: 0, good: 0, easy: 0 }, mature: 0, young: 0 };
     }
-    return this.rowToStats(result[0].values[0], result[0].columns)
   }
   
   async saveDailyStats(stats: DailyStats): Promise<void> {
-    await this.init()
-    const exists = await this.getDailyStats(stats.date)
-    const params = [
-      stats.newCards, stats.reviews, stats.correctRate, stats.studyTime,
-      stats.ratings.again, stats.ratings.hard, stats.ratings.good, stats.ratings.easy,
-      stats.mature, stats.young
-    ]
-    
-    if (exists.reviews > 0 || exists.newCards > 0) {
-      this.db.run(`UPDATE daily_stats SET new_cards=?,reviews=?,correct_rate=?,study_time=?,
-        rating_again=?,rating_hard=?,rating_good=?,rating_easy=?,mature=?,young=? WHERE date=?`,
-        [...params, stats.date])
-    } else {
-      this.db.run('INSERT INTO daily_stats VALUES(?,?,?,?,?,?,?,?,?,?,?)',
-        [stats.date, ...params])
+    try {
+      await this.queueOperation(async () => {
+        await this.init();
+        const exists = await this.getDailyStats(stats.date);
+        const params = [
+          stats.newCards, stats.reviews, stats.correctRate, stats.studyTime,
+          stats.ratings.again, stats.ratings.hard, stats.ratings.good, stats.ratings.easy,
+          stats.mature, stats.young
+        ];
+        
+        if (exists.reviews > 0 || exists.newCards > 0) {
+          this.db.run(`UPDATE daily_stats SET new_cards=?,reviews=?,correct_rate=?,study_time=?,
+            rating_again=?,rating_hard=?,rating_good=?,rating_easy=?,mature=?,young=? WHERE date=?`,
+            [...params, stats.date]);
+        } else {
+          this.db.run('INSERT INTO daily_stats VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+            [stats.date, ...params]);
+        }
+        
+        await this.saveDb();
+        this.monitorMemory();
+      });
+    } catch (error) {
+      console.error('Error in saveDailyStats:', error);
     }
-    
-    await this.saveDb()
   }
   
   async getStatsHistory(days: number): Promise<DailyStats[]> {
-    await this.init()
-    const result = this.db.exec('SELECT * FROM daily_stats ORDER BY date DESC LIMIT ?', [days])
-    if (!result[0]) return []
-    return result[0].values.map((row: any) => this.rowToStats(row, result[0].columns))
+    try {
+      return await this.queueOperation(async () => {
+        await this.init();
+        const result = this.db.exec('SELECT * FROM daily_stats ORDER BY date DESC LIMIT ?', [days]);
+        if (!result[0]) return [];
+        const statsList = result[0].values.map((row: any) => this.rowToStats(row, result[0].columns));
+        this.monitorMemory();
+        return statsList;
+      });
+    } catch (error) {
+      console.error('Error in getStatsHistory:', error);
+      return [];
+    }
   }
   
   // ========== 集合操作 ==========
   async saveCollection(col: { id: string; name: string; path: string; apkgPath?: string; imported: number }): Promise<void> {
-    await this.init()
-    this.db.run('INSERT OR REPLACE INTO collections VALUES(?,?,?,?,?)',
-      [col.id, col.name, col.path, col.apkgPath || null, col.imported])
-    await this.saveDb()
+    try {
+      await this.queueOperation(async () => {
+        await this.init();
+        this.db.run('INSERT OR REPLACE INTO collections VALUES(?,?,?,?,?)',
+          [col.id, col.name, col.path, col.apkgPath || null, col.imported]);
+        await this.saveDb();
+        this.monitorMemory();
+      });
+    } catch (error) {
+      console.error('Error in saveCollection:', error);
+    }
   }
   
   async getCollections(): Promise<any[]> {
-    await this.init()
-    const result = this.db.exec('SELECT * FROM collections')
-    if (!result[0]) return []
-    return result[0].values.map((row: any) => ({
-      id: row[0], name: row[1], path: row[2], apkgPath: row[3], imported: row[4]
-    }))
+    try {
+      return await this.queueOperation(async () => {
+        await this.init();
+        const result = this.db.exec('SELECT * FROM collections');
+        if (!result[0]) return [];
+        const collections = result[0].values.map((row: any) => ({
+          id: row[0], name: row[1], path: row[2], apkgPath: row[3], imported: row[4]
+        }));
+        this.monitorMemory();
+        return collections;
+      });
+    } catch (error) {
+      console.error('Error in getCollections:', error);
+      return [];
+    }
   }
   
   async deleteCollection(id: string): Promise<void> {
-    await this.init()
-    this.db.run('DELETE FROM collections WHERE id = ?', [id])
-    await this.saveDb()
+    try {
+      await this.queueOperation(async () => {
+        await this.init();
+        this.db.run('DELETE FROM collections WHERE id = ?', [id]);
+        await this.saveDb();
+        this.monitorMemory();
+      });
+    } catch (error) {
+      console.error('Error in deleteCollection:', error);
+    }
   }
   
   // ========== 设置操作 ==========
   async getSettings(deckId: string): Promise<any | null> {
-    await this.init()
-    const result = this.db.exec('SELECT * FROM deck_settings WHERE deck_id = ?', [deckId])
-    if (!result[0]?.values[0]) return null
-    return this.rowToSettings(result[0].values[0], result[0].columns)
+    try {
+      return await this.queueOperation(async () => {
+        await this.init();
+        const result = this.db.exec('SELECT * FROM deck_settings WHERE deck_id = ?', [deckId]);
+        if (!result[0]?.values[0]) return null;
+        const settings = this.rowToSettings(result[0].values[0], result[0].columns);
+        this.monitorMemory();
+        return settings;
+      });
+    } catch (error) {
+      console.error('Error in getSettings:', error);
+      return null;
+    }
   }
   
   async saveSettings(settings: any): Promise<void> {
-    await this.init()
-    const exists = await this.getSettings(settings.deckId)
-    const now = Date.now()
-    
-    const params = [
-      settings.deckId,
-      '', // notebook_id 已废弃，保留空值以兼容旧数据库
-      settings.newCardsPerDay,
-      settings.reviewsPerDay,
-      Array.isArray(settings.learningSteps) ? settings.learningSteps.join(',') : settings.learningSteps,
-      settings.graduatingInterval,
-      settings.easyInterval,
-      settings.newCardOrder,
-      settings.newReviewPriority,
-      Array.isArray(settings.relearningSteps) ? settings.relearningSteps.join(',') : settings.relearningSteps,
-      settings.minimumInterval,
-      settings.leechThreshold,
-      settings.newCardGatherPriority,
-      settings.reviewSortOrder,
-      settings.enableFsrs ? 1 : 0,
-      settings.desiredRetention || 0.9,
-      settings.fsrsWeights ? JSON.stringify(settings.fsrsWeights) : null,
-      settings.buryRelatedNew ? 1 : 0,
-      settings.buryRelatedReviews ? 1 : 0,
-      settings.autoPlayAudio ? 1 : 0,
-      settings.playAnswerAudio ? 1 : 0,
-      settings.showTimer ? 1 : 0,
-      settings.maxAnswerSeconds,
-      settings.autoShowAnswer ? 1 : 0,
-      settings.autoNextCard ? 1 : 0,
-      settings.autoAnswerDelay,
-      settings.autoNextDelay,
-      Array.isArray(settings.easyDays) ? settings.easyDays.join(',') : settings.easyDays,
-      settings.maxInterval,
-      settings.startingEase,
-      settings.easyBonus,
-      settings.intervalModifier,
-      settings.hardInterval,
-      settings.newInterval,
-      settings.createdAt || now,
-      now
-    ]
-    
-    if (exists) {
-      this.db.run(`UPDATE deck_settings SET 
-        deck_id=?,notebook_id=?,new_cards_per_day=?,reviews_per_day=?,learning_steps=?,
-        graduating_interval=?,easy_interval=?,new_card_order=?,new_review_priority=?,
-        relearning_steps=?,minimum_interval=?,leech_threshold=?,new_card_gather_priority=?,
-        review_sort_order=?,enable_fsrs=?,desired_retention=?,fsrs_weights=?,
-        bury_related_new=?,bury_related_reviews=?,auto_play_audio=?,
-        play_answer_audio=?,show_timer=?,max_answer_seconds=?,auto_show_answer=?,
-        auto_next_card=?,auto_answer_delay=?,auto_next_delay=?,easy_days=?,max_interval=?,
-        starting_ease=?,easy_bonus=?,interval_modifier=?,hard_interval=?,new_interval=?,
-        created_at=?,updated_at=? WHERE id=?`,
-        [...params, settings.id])
-    } else {
-      this.db.run(`INSERT INTO deck_settings VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [settings.id, ...params])
+    try {
+      await this.queueOperation(async () => {
+        await this.init();
+        const exists = await this.getSettings(settings.deckId);
+        const now = Date.now();
+        
+        const params = [
+          settings.deckId,
+          '', // notebook_id 已废弃，保留空值以兼容旧数据库
+          settings.newCardsPerDay,
+          settings.reviewsPerDay,
+          Array.isArray(settings.learningSteps) ? settings.learningSteps.join(',') : settings.learningSteps,
+          settings.graduatingInterval,
+          settings.easyInterval,
+          settings.newCardOrder,
+          settings.newReviewPriority,
+          Array.isArray(settings.relearningSteps) ? settings.relearningSteps.join(',') : settings.relearningSteps,
+          settings.minimumInterval,
+          settings.leechThreshold,
+          settings.newCardGatherPriority,
+          settings.reviewSortOrder,
+          settings.enableFsrs ? 1 : 0,
+          settings.desiredRetention || 0.9,
+          settings.fsrsWeights ? JSON.stringify(settings.fsrsWeights) : null,
+          settings.buryRelatedNew ? 1 : 0,
+          settings.buryRelatedReviews ? 1 : 0,
+          settings.autoPlayAudio ? 1 : 0,
+          settings.playAnswerAudio ? 1 : 0,
+          settings.showTimer ? 1 : 0,
+          settings.maxAnswerSeconds,
+          settings.autoShowAnswer ? 1 : 0,
+          settings.autoNextCard ? 1 : 0,
+          settings.autoAnswerDelay,
+          settings.autoNextDelay,
+          Array.isArray(settings.easyDays) ? settings.easyDays.join(',') : settings.easyDays,
+          settings.maxInterval,
+          settings.startingEase,
+          settings.easyBonus,
+          settings.intervalModifier,
+          settings.hardInterval,
+          settings.newInterval,
+          settings.createdAt || now,
+          now
+        ];
+        
+        if (exists) {
+          this.db.run(`UPDATE deck_settings SET 
+            deck_id=?,notebook_id=?,new_cards_per_day=?,reviews_per_day=?,learning_steps=?,
+            graduating_interval=?,easy_interval=?,new_card_order=?,new_review_priority=?,
+            relearning_steps=?,minimum_interval=?,leech_threshold=?,new_card_gather_priority=?,
+            review_sort_order=?,enable_fsrs=?,desired_retention=?,fsrs_weights=?,
+            bury_related_new=?,bury_related_reviews=?,auto_play_audio=?,
+            play_answer_audio=?,show_timer=?,max_answer_seconds=?,auto_show_answer=?,
+            auto_next_card=?,auto_answer_delay=?,auto_next_delay=?,easy_days=?,max_interval=?,
+            starting_ease=?,easy_bonus=?,interval_modifier=?,hard_interval=?,new_interval=?,
+            created_at=?,updated_at=? WHERE id=?`,
+            [...params, settings.id]);
+        } else {
+          this.db.run(`INSERT INTO deck_settings VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            [settings.id, ...params]);
+        }
+        
+        await this.saveDb();
+        this.monitorMemory();
+      });
+    } catch (error) {
+      console.error('Error in saveSettings:', error);
     }
-    
-    await this.saveDb()
   }
   
   async deleteSettings(deckId: string): Promise<void> {
-    await this.init()
-    this.db.run('DELETE FROM deck_settings WHERE deck_id = ?', [deckId])
-    await this.saveDb()
+    try {
+      await this.queueOperation(async () => {
+        await this.init();
+        this.db.run('DELETE FROM deck_settings WHERE deck_id = ?', [deckId]);
+        await this.saveDb();
+        this.monitorMemory();
+      });
+    } catch (error) {
+      console.error('Error in deleteSettings:', error);
+    }
   }
   
   // ========== 总体统计操作 ==========
   async getTotalStats(): Promise<any> {
-    await this.init()
-    const result = this.db.exec('SELECT * FROM total_stats WHERE id = 1')
-    if (!result[0]?.values[0]) {
+    try {
+      return await this.queueOperation(async () => {
+        await this.init();
+        const result = this.db.exec('SELECT * FROM total_stats WHERE id = 1');
+        if (!result[0]?.values[0]) {
+          return {
+            cards: 0, reviews: 0, studyDays: 0, avgCorrectRate: 0,
+            totalTime: 0, avgStudyTime: 0, streak: 0, longestStreak: 0
+          };
+        }
+        const stats = this.rowToTotalStats(result[0].values[0], result[0].columns);
+        this.monitorMemory();
+        return stats;
+      });
+    } catch (error) {
+      console.error('Error in getTotalStats:', error);
       return {
         cards: 0, reviews: 0, studyDays: 0, avgCorrectRate: 0,
         totalTime: 0, avgStudyTime: 0, streak: 0, longestStreak: 0
-      }
+      };
     }
-    return this.rowToTotalStats(result[0].values[0], result[0].columns)
   }
   
   async updateTotalStats(stats: any): Promise<void> {
-    await this.init()
-    const exists = await this.getTotalStats()
-    const now = Date.now()
-    
-    const params = [
-      stats.cards ?? exists.cards,
-      stats.reviews ?? exists.reviews,
-      stats.studyDays ?? exists.studyDays,
-      stats.avgCorrectRate ?? exists.avgCorrectRate,
-      stats.totalTime ?? exists.totalTime,
-      stats.avgStudyTime ?? exists.avgStudyTime,
-      stats.streak ?? exists.streak,
-      stats.longestStreak ?? exists.longestStreak,
-      now
-    ]
-    
-    if (exists.reviews > 0 || exists.cards > 0) {
-      this.db.run(`UPDATE total_stats SET 
-        cards=?,reviews=?,study_days=?,avg_correct_rate=?,total_time=?,
-        avg_study_time=?,streak=?,longest_streak=?,updated_at=? WHERE id=1`,
-        params)
-    } else {
-      this.db.run('INSERT INTO total_stats VALUES(1,?,?,?,?,?,?,?,?,?)', params)
+    try {
+      await this.queueOperation(async () => {
+        await this.init();
+        const exists = await this.getTotalStats();
+        const now = Date.now();
+        
+        const params = [
+          stats.cards ?? exists.cards,
+          stats.reviews ?? exists.reviews,
+          stats.studyDays ?? exists.studyDays,
+          stats.avgCorrectRate ?? exists.avgCorrectRate,
+          stats.totalTime ?? exists.totalTime,
+          stats.avgStudyTime ?? exists.avgStudyTime,
+          stats.streak ?? exists.streak,
+          stats.longestStreak ?? exists.longestStreak,
+          now
+        ];
+        
+        if (exists.reviews > 0 || exists.cards > 0) {
+          this.db.run(`UPDATE total_stats SET 
+            cards=?,reviews=?,study_days=?,avg_correct_rate=?,total_time=?,
+            avg_study_time=?,streak=?,longest_streak=?,updated_at=? WHERE id=1`,
+            params);
+        } else {
+          this.db.run('INSERT INTO total_stats VALUES(1,?,?,?,?,?,?,?,?,?)', params);
+        }
+        
+        await this.saveDb();
+        this.monitorMemory();
+      });
+    } catch (error) {
+      console.error('Error in updateTotalStats:', error);
     }
-    
-    await this.saveDb()
   }
   
   // ========== 辅助方法 ==========

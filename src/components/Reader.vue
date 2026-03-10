@@ -251,6 +251,9 @@ const init=async()=>{
       await bookshelfManager.restoreProgress(bookUrl,reader,null)
       
       reader.on('relocate',()=>onProgress())
+      reader.on('loaded',()=>{
+        if(props.bookInfo?.pos?.cfi)initJump(props.bookInfo.pos.cfi)
+      })
       setupEpubKeyboard(reader,handleKeydown,(doc,e)=>markPanelRef.value?.checkSelection(doc,e))
       currentView.value=reader.getView()
       setActiveReader(currentView.value,reader,props.settings)
@@ -267,8 +270,6 @@ const init=async()=>{
   }finally{
     loading.value=false
     await restorePos(getBookUrl(),reader,pdfViewer.value,getMobilePosition)
-    // 初始化跳转
-    if(props.bookInfo?.pos?.cfi)initJump(props.bookInfo.pos.cfi)
   }
 }
 
@@ -389,9 +390,87 @@ const setupTabObserver=()=>{if(isMobile())return;let el=containerRef.value?.pare
 // 形状创建后自动显示编辑窗口
 const handleShapeCreated=(e:CustomEvent)=>{const{shape,x,y,edit}=e.detail;markPanelRef.value&&edit&&markPanelRef.value.showCard(shape,x,y,true)}
 
-onMounted(()=>{init();containerRef.value?.focus();events.forEach(([e,h])=>window.addEventListener(e,h as any));window.addEventListener('keydown',handleKeydown);window.addEventListener('unhandledrejection',suppressError);window.addEventListener('shape-created',handleShapeCreated as any);setupTabObserver();if(isMobile()&&containerRef.value){containerRef.value.addEventListener('touchstart',handleTouchStart);containerRef.value.addEventListener('touchend',handleTouchEnd)};const bookUrl=props.bookInfo?.url||props.url||(props.file?`file://${props.file.name}`:`book-${Date.now()}`);window.dispatchEvent(new CustomEvent('reader:open',{detail:{bookUrl}}))})
+onMounted(() => {
+  // 清理之前可能的全局状态
+  clearActiveReader()
+  // 清理可能的全局变量
+  ;(window as any).__sireader_active_view = null
+  ;(window as any).__sireader_active_reader = null
+  ;(window as any).__sireader_settings = null
+  ;(window as any).__currentBookUrl = null
+  ;(window as any).__pdfViewer = null
+  ;(window as any).__pdfDoc = null
+  
+  init()
+  containerRef.value?.focus()
+  
+  events.forEach(([e, h]) => window.addEventListener(e, h as any))
+  window.addEventListener('keydown', handleKeydown)
+  window.addEventListener('unhandledrejection', suppressError)
+  window.addEventListener('shape-created', handleShapeCreated as any)
+  
+  setupTabObserver()
+  
+  if (isMobile() && containerRef.value) {
+    containerRef.value.addEventListener('touchstart', handleTouchStart)
+    containerRef.value.addEventListener('touchend', handleTouchEnd)
+  }
+  
+  const bookUrl = props.bookInfo?.url || props.url || (props.file ? `file://${props.file.name}` : `book-${Date.now()}`)
+  window.dispatchEvent(new CustomEvent('reader:open', { detail: { bookUrl } }))
+})
 
-onUnmounted(async()=>{window.dispatchEvent(new CustomEvent('reader:close'));savePosition();clearActiveReader();await markManager.value?.destroy();try{reader?.destroy();currentView.value?.cleanup?.();currentView.value?.viewer?.destroy?.()}catch{};inkToolManager?.destroy?.();shapeToolManager?.destroy?.();ttsController.destroy();setTimeout(()=>viewerContainerRef.value&&(viewerContainerRef.value.innerHTML=''),50);events.forEach(([e,h])=>window.removeEventListener(e,h as any));window.removeEventListener('keydown',handleKeydown);window.removeEventListener('unhandledrejection',suppressError);window.removeEventListener('shape-created',handleShapeCreated as any);containerRef.value&&(containerRef.value as any).__observer?.disconnect();if(isMobile()&&containerRef.value){containerRef.value.removeEventListener('touchstart',handleTouchStart);containerRef.value.removeEventListener('touchend',handleTouchEnd)}})
+onUnmounted(async () => {
+  window.dispatchEvent(new CustomEvent('reader:close'))
+  savePosition()
+  
+  // 清理全局状态
+  clearActiveReader()
+  // 清理全局变量
+  ;(window as any).__sireader_active_view = null
+  ;(window as any).__sireader_active_reader = null
+  ;(window as any).__sireader_settings = null
+  ;(window as any).__currentBookUrl = null
+  ;(window as any).__pdfViewer = null
+  ;(window as any).__pdfDoc = null
+  
+  // 清理资源
+  await markManager.value?.destroy()
+  try {
+    reader?.destroy()
+    currentView.value?.cleanup?.()
+    currentView.value?.viewer?.destroy?.()
+  } catch {}
+  
+  inkToolManager?.destroy?.()
+  shapeToolManager?.destroy?.()
+  ttsController.destroy()
+  
+  // 清理DOM和事件监听器
+  setTimeout(() => {
+    if (viewerContainerRef.value) {
+      viewerContainerRef.value.innerHTML = ''
+      // 清理可能的ResizeObserver引用
+      const view = viewerContainerRef.value.querySelector('foliate-view')
+      if (view) {
+        const observer = (view as any).__resizeObserver
+        if (observer) observer.disconnect()
+      }
+    }
+  }, 50)
+  
+  events.forEach(([e, h]) => window.removeEventListener(e, h as any))
+  window.removeEventListener('keydown', handleKeydown)
+  window.removeEventListener('unhandledrejection', suppressError)
+  window.removeEventListener('shape-created', handleShapeCreated as any)
+  
+  containerRef.value && (containerRef.value as any).__observer?.disconnect()
+  
+  if (isMobile() && containerRef.value) {
+    containerRef.value.removeEventListener('touchstart', handleTouchStart)
+    containerRef.value.removeEventListener('touchend', handleTouchEnd)
+  }
+})
 </script>
 
 <style scoped lang="scss">

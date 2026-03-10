@@ -3,7 +3,6 @@
  */
 import { reactive } from 'vue';
 import { getDatabase } from './database';
-import { fetchSyncPost } from 'siyuan';
 
 export type BookFormat = 'pdf' | 'epub' | 'mobi' | 'azw3' | 'online';
 export type BookStatus = 'unread' | 'reading' | 'finished';
@@ -22,6 +21,8 @@ export const FORMAT_OPTIONS: BookFormat[] = ['epub','pdf','mobi','azw3','online'
 class BookshelfManager {
   private ready = false;
   private coverCache = reactive<Record<string, string | null>>({});
+  private loadingCovers = new Set<string>(); // 跟踪正在加载的封面路径
+  private coverLoadPromises = new Map<string, Promise<void>>(); // 存储封面加载的Promise
   
   async init() { if (this.ready) return; await (await getDatabase()).init(); this.ready = true; }
   async getBooks() { await this.init(); return (await getDatabase()).getBooks(); }
@@ -192,7 +193,7 @@ class BookshelfManager {
     if(!gs.find(g=>g.id===GID))await this.saveGroups([...gs,{id:GID,name:'Assets PDF',order:gs.length,type:'folder'}])
     const r=await fetch('/api/file/readDir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:'/data/assets'})}),d=await r.json()
     if(!r.ok||d.code!==0)throw new Error('读取失败')
-    const assets=new Set(d.data.filter((f:any)=>!f.isDir&&f.name.endsWith('.pdf')).map((f:any)=>`asset://assets/${f.name}`)),all=new Set((await this.getBooks()).map(b=>b.url)),grp=new Set((await this.getGroupBooks(GID)).map(b=>b.url))
+    const assets=new Set<string>(d.data.filter((f:any)=>!f.isDir&&f.name.endsWith('.pdf')).map((f:any)=>`asset://assets/${f.name}`)),all=new Set<string>((await this.getBooks()).map(b=>b.url)),grp=new Set<string>((await this.getGroupBooks(GID)).map(b=>b.url))
     let add=0,del=0
     for(const u of assets){if(all.has(u)){grp.has(u)||await this.manageGroup(u,GID,'add');continue}try{const n=u.split('/').pop()!;await this.addAssetBook(`assets/${n}`,new File([await(await fetch(`/assets/${n}`)).blob()],n,{type:'application/pdf'}));await this.manageGroup(u,GID,'add');add++}catch(e){console.error('[同步]',u,e)}}
     for(const b of await this.getGroupBooks(GID))assets.has(b.url)||await this.removeBook(b.url)&&del++
@@ -213,20 +214,43 @@ class BookshelfManager {
   getCoverUrl(book: any) {
     if (!book.cover) return '';
     if (book.cover.startsWith('/data/')) {
-      if (!this.coverCache[book.cover]) this.loadCover(book.cover);
+      if (!this.coverCache[book.cover] && !this.loadingCovers.has(book.cover)) {
+        this.loadCover(book.cover);
+      }
       return this.coverCache[book.cover] || '';
     }
     return book.cover;
   }
   
   private async loadCover(path: string) {
-    try {
-      const res = await fetch('/api/file/getFile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) });
-      if (!res.ok) throw new Error();
-      this.coverCache[path] = URL.createObjectURL(await res.blob());
-    } catch {
-      this.coverCache[path] = null;
+    // 防止重复加载
+    if (this.coverLoadPromises.has(path)) {
+      return this.coverLoadPromises.get(path);
     }
+    
+    this.loadingCovers.add(path);
+    
+    const promise = (async () => {
+      try {
+        const res = await fetch('/api/file/getFile', { 
+          method: 'POST', 
+          headers: { 'Content-Type': 'application/json' }, 
+          body: JSON.stringify({ path }),
+          signal: AbortSignal.timeout(30000) // 添加30秒超时
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        this.coverCache[path] = URL.createObjectURL(await res.blob());
+      } catch (e) {
+        console.error('[Cover] 加载失败:', path, e);
+        this.coverCache[path] = null;
+      } finally {
+        this.loadingCovers.delete(path);
+        this.coverLoadPromises.delete(path);
+      }
+    })();
+    
+    this.coverLoadPromises.set(path, promise);
+    return promise;
   }
   
   // ===== 书籍操作 =====

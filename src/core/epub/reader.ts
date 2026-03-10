@@ -34,6 +34,7 @@ function createFoliateView(container: HTMLElement): FoliateView {
 }
 
 function configureView(view: FoliateView, s: ReaderSettings) {
+  if (!view) return
   const r = view.renderer
   if (!r) return
   const { viewMode = 'single', pageAnimation = 'slide', layoutSettings: l = { gap: 5, headerFooterMargin: 0 }, visualSettings: v } = s
@@ -61,6 +62,7 @@ function applyViewTheme(view: FoliateView, th: any) {
 }
 
 function applyCustomCSS(view: FoliateView, s: ReaderSettings) {
+  if (!view || !view.renderer) return
   const { 
     textSettings: t = { fontFamily: 'inherit', fontSize: 16, letterSpacing: 0, customFont: { fontFamily: '', fontFile: '' } }, 
     paragraphSettings: p = { lineHeight: 1.8, textIndent: 2, paragraphSpacing: 1 }, 
@@ -139,10 +141,11 @@ function applyCustomCSS(view: FoliateView, s: ReaderSettings) {
   
   // 组合所有样式
   const styles = [namespace,fontFace,baseStyles,fontForceStyles,paragraphStyles,alignStyles,codeStyles,footnoteHideStyles].join('')
-  view.renderer?.setStyles?.(styles)
+  view.renderer.setStyles?.(styles)
 }
 
 function getCurrentLocation(view: FoliateView): Location | null {
+  if (!view) return null
   try {
     const renderer = view.renderer as any
     if (renderer?.index !== undefined) return { index: renderer.index ?? 0, fraction: renderer.fraction ?? 0, cfi: view.lastLocation?.cfi }
@@ -295,7 +298,14 @@ export class FoliateReader {
    * 导航方法
    */
   private check = () => this.view.renderer || (console.warn('[Reader] Renderer not ready'), null)
-  async goTo(target: string | number | Location) { this.check() && await this.view.goTo(target) }
+  async goTo(target: string | number | Location) { 
+    if (!this.check()) return
+    try {
+      await this.view.goTo(target)
+    } catch (error) {
+      console.warn('[Reader] Failed to go to target:', error)
+    }
+  }
   async goLeft() { this.check() && await this.view.goLeft() }
   async goRight() { this.check() && await this.view.goRight() }
   async prev() { this.check() && await this.view.prev() }

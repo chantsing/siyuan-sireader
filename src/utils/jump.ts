@@ -86,7 +86,20 @@ export const gotoPDF=(page:number,id:string|undefined,pdfViewer:any,markManager:
 
 // EPUB跳转并高亮
 export const gotoEPUB=(cfi:string,id:string|undefined,reader:any,markManager:any)=>{
-  reader?.goTo(cfi)
+  if(!reader){
+    console.warn('[gotoEPUB] Reader is not available')
+    return
+  }
+  
+  const tryGoto=()=>{
+    try{
+      reader.goTo(cfi)
+    }catch(error){
+      console.warn('[gotoEPUB] Failed to goTo:', error)
+    }
+  }
+  
+  tryGoto()
   
   const tryFlash=()=>{
     let targetCfi=cfi
@@ -95,7 +108,13 @@ export const gotoEPUB=(cfi:string,id:string|undefined,reader:any,markManager:any
       if(mark?.cfi)targetCfi=mark.cfi
     }
     
-    reader?.getView()?.renderer?.getContents?.()?.forEach(({doc,overlayer}:any)=>{
+    const view=reader?.getView()
+    if(!view?.renderer){
+      console.warn('[gotoEPUB] Renderer not ready')
+      return
+    }
+    
+    view?.renderer?.getContents?.()?.forEach(({doc,overlayer}:any)=>{
       if(!overlayer)return
       
       const iframe=doc.defaultView?.frameElement as HTMLIFrameElement
@@ -108,23 +127,29 @@ export const gotoEPUB=(cfi:string,id:string|undefined,reader:any,markManager:any
       let target=null
       if(targetCfi){
         try{
-          const resolved=reader.getView().resolveCFI(targetCfi)
+          const resolved=view.resolveCFI(targetCfi)
           if(resolved?.anchor){
-            const range=resolved.anchor(doc)
-            if(range){
-              const rects=range.getClientRects()
-              if(rects.length>0){
-                const rect=rects[0]
-                const ir=iframe.getBoundingClientRect()
-                const vx=rect.left+ir.left,vy=rect.top+ir.top
-                const[key]=overlayer.hitTest({x:rect.left+rect.width/2,y:rect.top+rect.height/2})
-                if(key===targetCfi){
-                  target=groups.find(g=>{const r=g.getBoundingClientRect();return Math.abs(r.left-vx)<20&&Math.abs(r.top-vy)<20})
+            try {
+              const range=resolved.anchor(doc)
+              if(range){
+                const rects=range.getClientRects()
+                if(rects.length>0){
+                  const rect=rects[0]
+                  const ir=iframe.getBoundingClientRect()
+                  const vx=rect.left+ir.left,vy=rect.top+ir.top
+                  const[key]=overlayer.hitTest({x:rect.left+rect.width/2,y:rect.top+rect.height/2})
+                  if(key===targetCfi){
+                    target=groups.find(g=>{const r=g.getBoundingClientRect();return Math.abs(r.left-vx)<20&&Math.abs(r.top-vy)<20})
+                  }
                 }
               }
+            } catch (error) {
+              console.warn('[gotoEPUB] Failed to create range:', error)
             }
           }
-        }catch{}
+        }catch(error){
+          console.warn('[gotoEPUB] Failed to resolve CFI:', error)
+        }
       }
       
       (target?[target]:groups).forEach(g=>flashSVG(g))
@@ -152,11 +177,15 @@ export const restorePosition=async(bookUrl:string,reader:any,pdfViewer:any,getMo
   if(!bookUrl)return
   const pos=await getMobilePosition(bookUrl)
   if(!pos)return
-  if(pos.cfi&&reader)reader.goTo(pos.cfi)
-  else if(pos.page&&pdfViewer)pdfViewer.goToPage(pos.page)
+  try{
+    if(pos.cfi&&reader)reader.goTo(pos.cfi)
+    else if(pos.page&&pdfViewer)pdfViewer.goToPage(pos.page)
+  }catch(error){
+    console.warn('[restorePosition] Failed to restore position:', error)
+  }
 }
 
 export const initJump=(cfi:string)=>{
   if(!cfi)return
-  setTimeout(()=>window.dispatchEvent(new CustomEvent('sireader:goto',{detail:{cfi}})),500)
+  setTimeout(()=>window.dispatchEvent(new CustomEvent('sireader:goto',{detail:{cfi}})),1000)
 }
