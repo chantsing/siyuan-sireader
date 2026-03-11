@@ -156,7 +156,7 @@ export const restorePosition=async(bookUrl:string,reader:any,pdfViewer:any,getMo
   else if(pos.page&&pdfViewer)pdfViewer.goToPage(pos.page)
 }
 
-export const initJump=(cfi:string)=>{
+export const initJump=(cfi:string,bookUrl?:string)=>{
   if(!cfi)return
-  setTimeout(()=>window.dispatchEvent(new CustomEvent('sireader:goto',{detail:{cfi}})),500)
+  setTimeout(()=>window.dispatchEvent(new CustomEvent('sireader:goto',{detail:{cfi,bookUrl}})),500)
 }

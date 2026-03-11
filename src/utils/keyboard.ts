@@ -15,8 +15,9 @@ export interface KeyboardHandlers {
   handlePrint?: () => void
 }
 
-export const createKeyboardHandler = (handlers: KeyboardHandlers, isPdfMode: () => boolean) => {
+export const createKeyboardHandler = (handlers: KeyboardHandlers, isPdfMode: () => boolean, isActive?: () => boolean) => {
   return (e: KeyboardEvent) => {
+    if(isActive&&!isActive())return
     const t = e.target as HTMLElement
     if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return
     

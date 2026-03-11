@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI translation, Anki flashcards
 
-[![Version](https://img.shields.io/badge/version-0.9.0-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-0.9.2-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -19,12 +19,42 @@ Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI tr
 
 ## 📝 Latest Updates
 
+### v0.9.2 (2026.3.12)
+
+**✨ New Features**
+
+- **🔄 License Recovery** - Authorized accounts can quickly activate without re-entering activation code, just click "Recover License"
+
+**📚 Drag & Drop Operations**
+- **Drag to Add** - Drag files directly to bookshelf to add books, supports batch import
+- **Drag to Group** - Drag books to group folders for quick organization
+- **Visual Feedback** - Highlight display during dragging, intuitive and smooth operation
+
+**🐛 Bug Fixes**
+
+- **✅ Bookmark Operation** - Fixed bookmark toggle issue when clicking again (TOC and bottom toolbar)
+- **✅ Keyboard Shortcut Conflict** - Fixed keyboard shortcuts triggering simultaneously in split-screen readers
+- **✅ TXT Import** - Fixed slow TXT import conversion failure issue
+- **✅ Progress Save** - Fixed progress save failure when opening multiple books
+- **✅ PDF Color** - Fixed PDF color illustrations not displaying colors issue [#22](https://github.com/mm-o/siyuan-sireader/issues/22)
+- **✅ Memory Leak** - Fixed potential memory leak from frequent database read/write operations with multiple books
+- **✅ Annotation Display** - Fixed annotation content truncation issue when content is too long [#20](https://github.com/mm-o/siyuan-sireader/issues/20)
+
+**⚙️ Improvements**
+
+- **📚 Batch Import** - Optimized batch import logic methods to improve import efficiency
+- **🔤 Encoding Detection** - Improved TXT encoding detection for better accuracy
+- **📖 Status Logic** - Manual "finished" status won't be overridden by progress updates
+- **🎨 License Interface** - Unified license panel layout and styling for better user experience
+
+---
+
 ### v0.9.1 (2026.3.8)
 
 **🎊 Membership System Launch**
 - Website: [sireader.745201.xyz](https://sireader.745201.xyz)
 - Authorization: Trial (7 days)/Monthly/Annual/Lifetime membership
-- Online Activation: Enter activation code to activate, View status and remaining days
+- Online Activation: Enter activation code to activate, view status and remaining days
 - Feature Tiers: Different features based on membership level
 - **🎁 Limited Time Offer**: Lifetime membership ~~¥128~~ **¥108** (Until May 5th)
 

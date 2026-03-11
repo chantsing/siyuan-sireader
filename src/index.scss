@@ -309,10 +309,8 @@
   position: relative;
   margin: 20px auto;
   box-shadow: 0 2px 8px #0001;
-  background: white;
   canvas { 
     display: block;
-    // 确保高质量渲染（auto是默认值，保持浏览器优化）
     image-rendering: auto;
   }
 }
@@ -532,9 +530,9 @@
 .sr-main { flex: 1; min-width: 0; position: relative; }
 .sr-popup .sr-main { gap: 8px; display: flex; flex-direction: column; }
 .sr-head { display: flex; gap: 8px; margin-bottom: 6px; }
-.sr-title { flex: 1; font-size: 14px; font-weight: 600; line-height: 1.5; color: var(--b3-theme-on-background); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; outline: none; &[contenteditable="true"] { padding: 4px; border: 1px solid var(--b3-border-color); border-radius: 4px; display: block; &:focus { border-color: var(--b3-theme-primary); } } }
+.sr-title { flex: 1; font-size: 14px; font-weight: 600; line-height: 1.5; color: var(--b3-theme-on-background); word-break: break-word; outline: none; &[contenteditable="true"] { padding: 4px; border: 1px solid var(--b3-border-color); border-radius: 4px; display: block; &:focus { border-color: var(--b3-theme-primary); } } }
 .sr-time { font-size: 11px; color: var(--b3-theme-on-surface-variant); opacity: .6; white-space: nowrap; }
-.sr-note { font-size: 12px; line-height: 1.5; color: var(--b3-theme-on-surface-variant); opacity: .7; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.sr-note { font-size: 12px; line-height: 1.5; color: var(--b3-theme-on-surface-variant); opacity: .7; word-break: break-word; }
 .sr-note-input { width: 100%; min-height: 60px; padding: 8px; border: 1px solid var(--b3-border-color); border-radius: 4px; background: var(--b3-theme-background); color: var(--b3-theme-on-surface); resize: vertical; font-family: inherit; font-size: 12px; line-height: 1.5; box-sizing: border-box; margin-bottom: 8px; &:focus { outline: none; border-color: var(--b3-theme-primary); } &::placeholder { color: var(--b3-theme-on-surface-variant); opacity: .6; } &.readonly { border: none; background: transparent; resize: none; padding: 0; min-height: auto; opacity: .7; margin: 0; } }
 .sr-options { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
 .sr-colors { display: flex; gap: 4px; flex-wrap: wrap; }

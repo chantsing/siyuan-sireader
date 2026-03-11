@@ -7,7 +7,8 @@ export function useLicense(plugin: any, i18n: any) {
   const userAvatar = ref<string | null>(null)
   const code = ref('')
   const loading = ref(false)
-  const activating = ref(false)
+  const processing = ref(false)
+  let lastActionTime = 0
 
   const load = async () => {
     loading.value = true
@@ -20,34 +21,40 @@ export function useLicense(plugin: any, i18n: any) {
     }
   }
 
-  // 立即加载 license（不等待 onMounted）
   load()
 
-  const activate = async () => {
-    if (!code.value.trim()) return showMessage(i18n.enterActivationCode || '请输入激活码', 2000, 'error')
-    
-    activating.value = true
+  const handleAction = async (action: 'activate' | 'recover', param?: string) => {
+    // 防抖：10秒内只能操作一次
+    const now = Date.now()
+    if (now - lastActionTime < 10000) return showMessage(i18n.tooFrequent || '操作过于频繁', 2000, 'error')
+    lastActionTime = now
+
+    if (action === 'activate' && !param?.trim()) return showMessage(i18n.enterActivationCode || '请输入激活码', 2000, 'error')
+
+    processing.value = true
     try {
-      const result = await LicenseManager.activate(code.value, plugin)
+      const result = action === 'activate' 
+        ? await LicenseManager.activate(param!, plugin)
+        : await LicenseManager.recover(plugin)
+
       if (result.success) {
         license.value = result.license || null
         if (license.value) userAvatar.value = await LicenseManager.getUserAvatar()
-        code.value = ''
-        showMessage(result.message || '激活成功，即将刷新页面...', 2000, 'info')
-        // 激活成功后自动刷新页面以应用权限
+        if (action === 'activate') code.value = ''
+        showMessage(result.message || '操作成功，即将刷新页面...', 2000, 'info')
         setTimeout(() => location.reload(), 2000)
       }
       else {
-        showMessage(result.error || '激活失败', 3000, 'error')
+        showMessage(result.error || '操作失败', 3000, 'error')
       }
     }
-    catch (error) {
-      showMessage(error instanceof Error ? error.message : '激活失败', 3000, 'error')
-    }
     finally {
-      activating.value = false
+      processing.value = false
     }
   }
+
+  const activate = () => handleAction('activate', code.value)
+  const recover = () => handleAction('recover')
 
   const clear = async () => {
     await LicenseManager.clear(plugin)
@@ -86,5 +93,5 @@ export function useLicense(plugin: any, i18n: any) {
     )
   }
 
-  return { license, userAvatar, code, loading, activating, load, activate, clear, status, can, showUpgrade }
+  return { license, userAvatar, code, loading, processing, load, activate, recover, clear, status, can, showUpgrade }
 }

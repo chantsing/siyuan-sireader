@@ -94,16 +94,29 @@ export class LicenseManager {
     }
   }
 
-  // 验证
-  static async verify(plugin: any): Promise<boolean> {
-    const data = await this.load(plugin)
-    if (!data) return false
+  // 恢复授权（复用refresh逻辑）
+  static async recover(plugin: any) {
+    const user = await this.getUser()
+    if (!user) return { success: false, error: '请先登录思源账号' }
 
-    const { license, lastReport } = data
-    if (this.needRefresh(license)) return await this.refresh(license, plugin)
+    try {
+      const res = await fetch(`${this.API}/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.userId })
+      })
 
-    this.reportDaily(license, lastReport, plugin).catch(() => {})
-    return true
+      const data = await res.json()
+      if (!res.ok) return { success: false, error: data.error || '未找到授权信息' }
+
+      const license: LicenseInfo = { userId: user.userId, userName: user.userName, ...data, lastVerified: Date.now() }
+      await this.save(license, new Date().toDateString(), plugin)
+
+      return { success: true, message: '恢复成功', license: this.enrich(license) }
+    }
+    catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : '恢复失败' }
+    }
   }
 
   // 刷新
@@ -123,6 +136,18 @@ export class LicenseManager {
       return true
     }
     catch { return false }
+  }
+
+  // 验证
+  static async verify(plugin: any): Promise<boolean> {
+    const data = await this.load(plugin)
+    if (!data) return false
+
+    const { license, lastReport } = data
+    if (this.needRefresh(license)) return await this.refresh(license, plugin)
+
+    this.reportDaily(license, lastReport, plugin).catch(() => {})
+    return true
   }
 
   // 每日上报

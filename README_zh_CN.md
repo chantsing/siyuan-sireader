@@ -7,7 +7,7 @@
 让思源笔记变身专业阅读器，支持 EPUB/PDF/TXT/在线小说  
 提供智能标注、TTS 朗读、词典查询、AI 翻译、Anki 闪卡等功能
 
-[![Version](https://img.shields.io/badge/version-0.9.0-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-0.9.2-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,36 @@
 ---
 
 ## 📝 最新更新
+
+### v0.9.2 (2026.3.12)
+
+**✨ 新增功能**
+
+- **🔄 授权恢复** - 已授权账号无需重复输入激活码，点击"恢复授权"即可快速激活
+
+**📚 拖拽操作**
+- **拖拽添加** - 支持直接拖拽文件到书架添加书籍，支持批量导入
+- **拖拽分组** - 支持拖拽书籍到分组文件夹，快速整理书架
+- **视觉反馈** - 拖拽时显示高亮提示，操作直观流畅
+
+**🐛 问题修复**
+
+- **✅ 书签操作** - 修复书签再次点击无法取消的问题（目录和底部工具栏）
+- **✅ 快捷键冲突** - 修复分屏两个阅读界面快捷键会同时翻页的问题
+- **✅ TXT 导入** - 修复 txt 导入转换缓慢失败的问题
+- **✅ 进度保存** - 修复打开多本书籍导致的进度保存失败问题
+- **✅ PDF 彩色** - 修复 pdf 彩色插图不显示颜色的问题 [#22](https://github.com/mm-o/siyuan-sireader/issues/22)
+- **✅ 内存泄露** - 修复多本书频繁读写数据库可能导致的内存泄露问题
+- **✅ 标注显示** - 修复标注内容过多会省略掉后面内容的问题 [#20](https://github.com/mm-o/siyuan-sireader/issues/20)
+
+**⚙️ 优化改进**
+
+- **📚 批量导入** - 优化批量导入的逻辑方法，提升导入效率
+- **🔤 编码检测** - 优化 txt 编码检测，提高识别准确率
+- **📖 状态逻辑** - 手动标注为"读完"后，进度更新不会覆盖状态
+- **🎨 授权界面** - 统一授权面板布局和样式，提升用户体验
+
+---
 
 ### v0.9.1 (2026.3.8)
 

@@ -126,7 +126,6 @@ export class MarkManager{
     try{
       const db=await getDatabase()
       const annotations=this.marks.filter(m=>m.type==='highlight'||m.type==='note'||m.type==='vocab'||m.type==='bookmark')
-      console.log(`[Mark] 保存 ${annotations.length} 条标注`)
       for(const m of annotations){
         const ann:Annotation={
           id:m.id,
@@ -340,7 +339,7 @@ export class MarkManager{
 
 
   async addHighlight(loc:string|number,text:string,color:HighlightColor,style:MarkStyle='highlight',rects?:any[],textOffset?:number):Promise<Mark>{
-    const m=this.add({type:'highlight',[typeof loc==='string'?'cfi':this.format==='pdf'?'page':'section']:loc,text:text.substring(0,200),color,style,rects,textOffset})
+    const m=this.add({type:'highlight',[typeof loc==='string'?'cfi':this.format==='pdf'?'page':'section']:loc,text,color,style,rects,textOffset})
     this.undoStack.push({...m})
     if(this.undoStack.length>10)this.undoStack.shift()
     if(this.format==='pdf')this.renderPdf(m.page!)
@@ -352,7 +351,7 @@ export class MarkManager{
   }
 
   async addNote(loc:string|number,note:string,text:string,color:HighlightColor='blue',style:MarkStyle='outline',rects?:any[],textOffset?:number):Promise<Mark>{
-    const m=this.add({type:'note',[typeof loc==='string'?'cfi':this.format==='pdf'?'page':'section']:loc,text:text.substring(0,200),note,color,style,rects,textOffset})
+    const m=this.add({type:'note',[typeof loc==='string'?'cfi':this.format==='pdf'?'page':'section']:loc,text,note,color,style,rects,textOffset})
     this.undoStack.push({...m})
     if(this.undoStack.length>10)this.undoStack.shift()
     if(this.format==='pdf')this.renderPdf(m.page!)

@@ -18,8 +18,9 @@ const loadPDFJS = async () => {
 // 工具函数
 const resolveColor = (c: string) => c.startsWith('var(') ? getComputedStyle(document.documentElement).getPropertyValue(c.slice(4, -1)).trim() : c
 const resolveTheme = (t: any) => ({ ...t, bg: resolveColor(t.bg), color: resolveColor(t.color) })
-const watchTheme = (cb: () => void) => new MutationObserver(() => requestAnimationFrame(() => requestAnimationFrame(cb))).observe(document.documentElement, { attributeFilter: ['data-theme-mode', 'class'] })
+const watchTheme = (cb: () => void) => new MutationObserver(() => requestAnimationFrame(cb)).observe(document.documentElement, { attributeFilter: ['data-theme-mode', 'class'] })
 const isDarkBg = (bg: string) => { const h = bg?.replace('#', '') || '0'; return parseInt(h.length === 3 ? h.split('').map(x => x + x).join('') : h, 16) < 0x808080 }
+const parseRgb = (c: string) => { const t = document.createElement('div'); t.style.color = c; document.body.appendChild(t); const rgb = getComputedStyle(t).color.match(/\d+/g)!.map(Number); document.body.removeChild(t); return rgb }
 
 export class PDFViewer {
   private pdf: PDFDocumentProxy | null = null
@@ -51,16 +52,11 @@ export class PDFViewer {
     if (!th) return
     const s = this.container.style, img = th.bgImg, fixUrl = (u: string) => u.startsWith('http') || u.startsWith('/') ? u : `/${u}`
     Object.assign(s, { color: th.color, backgroundColor: img ? 'transparent' : th.bg, backgroundImage: img ? `url("${fixUrl(img)}")` : '', backgroundSize: img ? 'cover' : '', backgroundPosition: img ? 'center' : '', backgroundRepeat: img ? 'no-repeat' : '' })
-    s.setProperty('--pdf-page-bg', th.bg)
+    s.setProperty('--page-bg-color', th.bg)
     const { visualSettings: v = {} } = settings
     const filters = [v.brightness !== 1 && `brightness(${v.brightness})`, v.contrast !== 1 && `contrast(${v.contrast})`, v.sepia > 0 && `sepia(${v.sepia})`, v.saturate !== 1 && `saturate(${v.saturate})`, (v.invert || isDarkBg(th.bg)) && 'invert(1) hue-rotate(180deg)'].filter(Boolean).join(' ')
     s.setProperty('--pdf-canvas-filter', filters || 'none')
-    this.container.querySelectorAll('.pdf-page').forEach((p: Element) => {
-      const el = p as HTMLElement
-      el.style.background = th.bg
-      const canvas = el.querySelector('canvas')
-      if (canvas) canvas.style.filter = filters || 'none'
-    })
+    this.container.querySelectorAll('.pdf-page canvas').forEach((c: any) => c.style.filter = filters || 'none')
     if (settings.viewMode) this.viewMode = settings.viewMode
     settings.theme === 'auto' && !this.themeObserver && (this.themeObserver = watchTheme(() => this.updateTheme(settings)) as any)
   }
@@ -87,17 +83,12 @@ export class PDFViewer {
   private async createPlaceholders() {
     if (!this.pdf) return
     const n = this.pdf.numPages, isD = this.viewMode === 'double', isS = this.viewMode === 'single'
-    this.container.innerHTML = ''
-    Object.assign(this.container.style, isD ? { display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '20px' } : { display: 'block' })
-    const frag = document.createDocumentFragment()
-    const firstPage = this.pages.get(1) || await this.pdf.getPage(1)
-    const vp = firstPage.getViewport({ scale: this.scale, rotation: this.rotation })
-    const bg = this.container.style.getPropertyValue('--pdf-page-bg') || getComputedStyle(this.container).backgroundColor || '#fff'
+    this.container.innerHTML = '', Object.assign(this.container.style, isD ? { display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '20px' } : { display: 'block' })
+    const frag = document.createDocumentFragment(), firstPage = this.pages.get(1) || await this.pdf.getPage(1), vp = firstPage.getViewport({ scale: this.scale, rotation: this.rotation })
     for (let i = 1; i <= n; i++) {
       const d = document.createElement('div')
-      d.className = 'pdf-page'
-      d.dataset.page = String(i)
-      d.style.cssText = `position:relative;margin:${isS ? '0 auto' : isD ? '0' : '20px auto'};width:${vp.width}px;height:${vp.height}px;box-shadow:0 2px 8px #0003;background:${bg}${isD ? ';flex-shrink:0' : ''}`
+      d.className = 'pdf-page', d.dataset.page = String(i)
+      d.style.cssText = `position:relative;margin:${isS ? '0 auto' : isD ? '0' : '20px auto'};width:${vp.width}px;height:${vp.height}px;box-shadow:0 2px 8px #0003${isD ? ';flex-shrink:0' : ''}`
       frag.appendChild(d)
       if (isS && i < n) { const s = document.createElement('div'); s.style.height = '100vh'; frag.appendChild(s) }
     }
@@ -118,45 +109,37 @@ export class PDFViewer {
   private async renderPage(n: number) {
     const w = this.container.querySelector(`[data-page="${n}"]`) as HTMLElement
     if (!w || this.rendered.has(n)) return
-    this.rendered.add(n)
-    w.setAttribute('data-page-number', String(n))
-    w.classList.add('page')
+    this.rendered.add(n), w.setAttribute('data-page-number', String(n)), w.classList.add('page')
     const ver = this.renderVersion
     let p = this.pages.get(n)
-    if (!p && this.pdf) { p = markRaw(await this.pdf.getPage(n)); this.pages.set(n, p) }
+    if (!p && this.pdf) p = markRaw(await this.pdf.getPage(n)), this.pages.set(n, p)
     if (!p) return
-    const pdfjs = await loadPDFJS()
-    const bg = this.container.style.getPropertyValue('--pdf-page-bg') || '#fff'
-    w.style.background = bg
-    const vp = p.getViewport({ scale: this.scale, rotation: this.rotation })
-    const dpr = window.devicePixelRatio || 1
-    const { visualSettings: v = {} } = this.themeSettings || {}
+    const pdfjs = await loadPDFJS(), vp = p.getViewport({ scale: this.scale, rotation: this.rotation }), dpr = window.devicePixelRatio || 1
+    const { visualSettings: v = {} } = this.themeSettings || {}, bg = this.container.style.getPropertyValue('--page-bg-color') || '#fff'
     const dark = v.invert || isDarkBg(bg)
     const filters = [v.brightness !== 1 && `brightness(${v.brightness})`, v.contrast !== 1 && `contrast(${v.contrast})`, v.sepia > 0 && `sepia(${v.sepia})`, v.saturate !== 1 && `saturate(${v.saturate})`, dark && 'invert(1) hue-rotate(180deg)'].filter(Boolean).join(' ')
     
-    // Canvas层
     try {
       const c = document.createElement('canvas'), ctx = c.getContext('2d', { alpha: false })!
-      c.width = Math.floor(vp.width * dpr)
-      c.height = Math.floor(vp.height * dpr)
-      c.style.cssText = `width:${vp.width}px;height:${vp.height}px${filters ? `;filter:${filters}` : ''}`
-      await p.render({ canvasContext: ctx, viewport: vp, transform: [dpr, 0, 0, dpr, 0, 0], pageColors: { background: bg, foreground: this.container.style.color || '#000' }, enableWebGL: true }).promise
+      c.width = Math.floor(vp.width * dpr), c.height = Math.floor(vp.height * dpr)
+      await p.render({ canvasContext: ctx, viewport: vp, transform: [dpr, 0, 0, dpr, 0, 0], enableWebGL: true }).promise
+      
+      if (!dark && bg !== '#fff' && bg !== '#ffffff') {
+        const d = ctx.getImageData(0, 0, c.width, c.height).data, [r, g, b] = parseRgb(bg)
+        for (let i = 0; i < d.length; i += 4) if (d[i] > 240 && d[i + 1] > 240 && d[i + 2] > 240) d[i] = r, d[i + 1] = g, d[i + 2] = b
+        ctx.putImageData(new ImageData(d, c.width, c.height), 0, 0)
+      }
+      
       if (ver !== this.renderVersion) return
-      w.appendChild(c)
+      c.style.cssText = `width:${vp.width}px;height:${vp.height}px${filters ? `;filter:${filters}` : ''}`, w.appendChild(c)
     } catch (e: any) { console.error(`[PDF] 渲染失败 ${n}:`, e); w.style.background = '#fee'; w.innerHTML = `<div style="padding:20px;color:#c00">渲染失败</div>`; return }
     
-    // 文本层
     requestIdleCallback(() => this.renderTextLayer(w, p, vp, pdfjs, ver))
-    
-    // 链接层和墨迹层
     requestIdleCallback(async () => {
       if (ver !== this.renderVersion || !w.isConnected) return
       const ann = document.createElement('div')
-      ann.className = 'pdf-annotation-layer'
-      ann.style.cssText = 'position:absolute;inset:0;pointer-events:none'
-      w.appendChild(ann)
-      await this.renderLinks(n, w, p, vp)
-      this.createInkLayer(n, w, vp)
+      ann.className = 'pdf-annotation-layer', ann.style.cssText = 'position:absolute;inset:0;pointer-events:none', w.appendChild(ann)
+      await this.renderLinks(n, w, p, vp), this.createInkLayer(n, w, vp)
       requestAnimationFrame(() => { if (ver === this.renderVersion && w.isConnected) window.dispatchEvent(new CustomEvent('pdf:layer-ready', { detail: { page: n } })) })
     })
   }
@@ -202,17 +185,12 @@ export class PDFViewer {
 
   // 创建墨迹层
   private createInkLayer(pageNum: number, pageEl: HTMLElement, vp: any) {
-    const createLayer = (className: string, zIndex: number) => {
-      const canvas = document.createElement('canvas')
-      canvas.className = className
-      canvas.dataset.page = String(pageNum)
-      canvas.width = vp.width
-      canvas.height = vp.height
-      canvas.style.cssText = `position:absolute;inset:0;width:${vp.width}px;height:${vp.height}px;z-index:${zIndex};pointer-events:none`
-      pageEl.appendChild(canvas)
-    }
-    createLayer('pdf-ink-layer', 10)
-    createLayer('pdf-shape-layer', 11)
+    ['pdf-ink-layer', 'pdf-shape-layer'].forEach((cls, i) => {
+      const c = document.createElement('canvas')
+      c.className = cls, c.dataset.page = String(pageNum), c.width = vp.width, c.height = vp.height
+      c.style.cssText = `position:absolute;inset:0;width:${vp.width}px;height:${vp.height}px;z-index:${10 + i};pointer-events:none`
+      pageEl.appendChild(c)
+    })
   }
 
   // 渲染链接
@@ -248,14 +226,9 @@ export class PDFViewer {
   private setupScroll() { 
     let t: any
     this.container.addEventListener('scroll', () => { 
-      clearTimeout(t)
-      t = setTimeout(() => { 
+      clearTimeout(t), t = setTimeout(() => { 
         const p = this.getCurrentPage()
-        if (p !== this.current) { 
-          this.current = p
-          this.onChange?.(p)
-          this.cleanupDistantPages() 
-        } 
+        p !== this.current && (this.current = p, this.onChange?.(p), this.cleanupDistantPages())
       }, 100) 
     }) 
   }
@@ -265,23 +238,15 @@ export class PDFViewer {
     this.rendered.forEach(n => { 
       if (Math.abs(n - this.current) > 5) { 
         const el = this.container.querySelector(`[data-page="${n}"]`) as HTMLElement
-        if (el) {
-          el.innerHTML = ''
-          el.style.background = this.container.style.getPropertyValue('--pdf-page-bg') || '#fff'
-        }
-        this.rendered.delete(n) 
+        el && (el.innerHTML = ''), this.rendered.delete(n)
       } 
     }) 
   }
 
   // 页面导航
   getCurrentPage() { 
-    const s = this.container.scrollTop + this.container.clientHeight / 2
-    const ps = this.container.querySelectorAll('.pdf-page')
-    for (let i = 0; i < ps.length; i++) { 
-      const el = ps[i] as HTMLElement
-      if (el.offsetTop + el.offsetHeight > s) return i + 1 
-    } 
+    const s = this.container.scrollTop + this.container.clientHeight / 2, ps = this.container.querySelectorAll('.pdf-page')
+    for (let i = 0; i < ps.length; i++) if ((ps[i] as HTMLElement).offsetTop + (ps[i] as HTMLElement).offsetHeight > s) return i + 1
     return this.pdf?.numPages || 1 
   }
   
@@ -293,11 +258,8 @@ export class PDFViewer {
   goToPage(p: number) { 
     const el = this.container.querySelector(`[data-page="${p}"]`) as HTMLElement
     if (!el) return
-    this.container.scrollTop = el.offsetTop
-    this.current = p
-    this.onChange?.(p)
-    this.renderQueue = [p, ...Array.from({ length: 3 }, (_, i) => [p - 1 + i, p + 1 + i]).flat().filter(i => i > 0 && i <= this.pdf?.numPages && i !== p && !this.rendered.has(i))]
-    this.processQueue() 
+    this.container.scrollTop = el.offsetTop, this.current = p, this.onChange?.(p)
+    this.renderQueue = [p, ...Array.from({ length: 3 }, (_, i) => [p - 1 + i, p + 1 + i]).flat().filter(i => i > 0 && i <= this.pdf?.numPages && i !== p && !this.rendered.has(i))], this.processQueue()
   }
 
   // 缩放和视图

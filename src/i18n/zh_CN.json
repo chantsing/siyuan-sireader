@@ -376,11 +376,13 @@
   "days": "天",
   "enterActivationCode": "请输入激活码",
   "activate": "激活",
-  "activating": "激活中...",
+  "processing": "处理中...",
+  "recover": "恢复授权",
+  "tooFrequent": "操作过于频繁，请稍后再试",
   "clearLicense": "清除授权",
   "licenseCleared": "授权已清除",
-  "purchase": "购买授权",
-  "activatedAt": "激活时间",
-  "daysRemaining": "剩余",
-  "userId": "用户ID"
+  "membership": "会员订阅",
+  "activatedAt": "激活于",
+  "logout": "退出登录",
+  "purchase": "购买"
 }

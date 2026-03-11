@@ -71,7 +71,7 @@ const fontsLoaded = ref(false)
 const removingDict = ref<string|null>(null)
 const quickDocSearch = ref('')
 const quickDocResults = ref<any[]>([])
-const {license,userAvatar,code:activationCode,loading:loadingLicense,activating,load:loadLicense,activate:activateLicense,clear:clearLicense,status:getLicenseStatus,can,showUpgrade} = useLicense(plugin,props.i18n)
+const {license,userAvatar,code:activationCode,loading:loadingLicense,processing,load:loadLicense,activate:activateLicense,recover:recoverLicense,clear:clearLicense,status:getLicenseStatus,can,showUpgrade} = useLicense(plugin,props.i18n)
 
 // 方法
 const toggleAccordion = (key:string) => activeAccordion.value=activeAccordion.value===key?'':key
@@ -144,7 +144,7 @@ const saveTheme = () => {if(!can.value('reader-theme')){settings.value.theme='de
 const handleReadOnline = async (book:any) => {const {openOrActivateBook} = await import('@/utils/bookOpen');openOrActivateBook(plugin,book,settings.value)}
 const togglePreview = () => (previewExpanded.value=!previewExpanded.value,localStorage.setItem('sr-preview-expanded',previewExpanded.value?'1':'0'))
 const openPurchasePage = () => window.open('https://pay.ldxp.cn/shop/J7MJJ8YR/lillyt','_blank')
-const openMembershipInfo = () => window.open('https://github.com/mm-o/siyuan-sireader','_blank')
+const openMembershipInfo = () => window.open('https://sireader.745201.xyz','_blank')
 
 // 打开授权面板
 ;(window as any)._openLicense = () => {
@@ -198,12 +198,20 @@ watch(canShowToc,(show) => !show&&['toc','bookmark','mark'].includes(activeTab.v
             <Transition name="expand">
               <div v-if="activeAccordion==='license'" @click.stop>
                 <div v-if="loadingLicense" class="sr-empty">{{i18n.loading||'加载中'}}...</div>
-                <button v-else-if="license" class="b3-button b3-button--text license-btn" @click="clearLicense">{{i18n.logout||'退出登录'}}</button>
-                <div v-else class="license-input-group">
-                  <input v-model="activationCode" type="text" class="b3-text-field" :placeholder="i18n.enterActivationCode||'请输入激活码'" :disabled="activating">
-                  <button class="b3-button b3-button--outline" :disabled="activating||!activationCode.trim()" @click="activateLicense">{{activating?(i18n.activating||'激活中'):(i18n.activate||'激活')}}</button>
-                  <button class="b3-button b3-button--primary" @click="openPurchasePage">{{i18n.purchase||'购买'}}</button>
-                </div>
+                <template v-else>
+                  <div v-if="license" class="license-actions">
+                    <button class="b3-button b3-button--text" @click="clearLicense">{{i18n.logout||'退出登录'}}</button>
+                    <button class="b3-button b3-button--text" @click="openPurchasePage">{{i18n.purchase||'购买'}}</button>
+                  </div>
+                  <div v-else class="license-actions">
+                    <input v-model="activationCode" type="text" class="b3-text-field" :placeholder="i18n.enterActivationCode||'请输入激活码'" :disabled="processing">
+                    <div class="license-btn-row">
+                      <button class="b3-button b3-button--outline" :disabled="processing||!activationCode.trim()" @click="activateLicense">{{processing?(i18n.processing||'处理中'):(i18n.activate||'激活')}}</button>
+                      <button class="b3-button b3-button--text" :disabled="processing" @click="recoverLicense">{{i18n.recover||'恢复授权'}}</button>
+                    </div>
+                    <button class="b3-button b3-button--text" @click="openPurchasePage">{{i18n.purchase||'购买'}}</button>
+                  </div>
+                </template>
               </div>
             </Transition>
           </div>
@@ -459,7 +467,7 @@ watch(canShowToc,(show) => !show&&['toc','bookmark','mark'].includes(activeTab.v
 .ds-help-icon{width:16px;height:16px;margin-left:6px;opacity:.5;cursor:pointer;transition:all .15s;vertical-align:text-bottom;transform:translateY(-1px);&:hover{opacity:1;color:var(--b3-theme-primary)}}
 .license-tag{font-size:11px;padding:2px 7px;border-radius:3px;font-weight:500;margin-left:6px;opacity:.9;&.license-lifetime{background:rgba(156,39,176,.1);color:#9c27b0}&.license-annual{background:rgba(76,175,80,.1);color:#4caf50}&.license-monthly{background:rgba(33,150,243,.1);color:#2196f3}&.license-trial{background:rgba(255,152,0,.1);color:#ff9800}}
 .license-btn{width:100%;margin-top:8px}
-.license-input-group{display:flex;gap:8px;margin-top:8px;input{flex:1;min-width:0}button{flex-shrink:0;white-space:nowrap}}
+.license-actions{display:flex;flex-direction:column;gap:8px;margin-top:8px;>button{width:100%}input{width:100%}.license-btn-row{display:flex;gap:8px;>button{flex:1;white-space:nowrap}}}
 .sr-preview{position:sticky;top:0;z-index:10;margin:20px 20px 0;background:var(--b3-theme-surface);border-radius:8px;overflow:hidden;display:flex;flex-direction:column;transition:max-height .3s;column-count:var(--column-count,1);column-gap:var(--gap);max-height:50px;&.expanded{max-height:min(300px,var(--max-block))}p{margin:0;padding:var(--margin-v) var(--margin-h);text-indent:calc(1em * var(--text-indent,0));break-inside:avoid;& + p{margin-top:calc(1em * var(--paragraph-spacing,0.8))}}}
 .sr-preview-hf{height:50px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;font-size:12px;opacity:.6;border:1px dashed currentColor;border-width:1px 0 0;user-select:none;&:first-child{border-width:0 0 1px;font-weight:500}&:hover{opacity:.8;background:var(--b3-list-hover)}}
 .sr-preview-toggle{width:14px;height:14px;transition:transform .3s}

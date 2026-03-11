@@ -76,6 +76,8 @@ const getSql = async () => sqlJs || (sqlJs = await initSqlJs({ locateFile: f => 
 export class ReaderDatabase {
   private db: any;
   private ready = false;
+  private saveTimer: any = null;
+  private pendingSave = false;
 
   async init() {
     if (this.ready) return;
@@ -105,12 +107,34 @@ export class ReaderDatabase {
   }
 
   private async save() {
-    const data = this.db.export(), form = new FormData();
-    form.append('path', DB_PATH);
-    form.append('file', new File([data], 'reader.db'));
-    form.append('isDir', 'false');
-    await fetch('/api/file/putFile', { method: 'POST', body: form });
+    clearTimeout(this.saveTimer)
+    this.pendingSave=true
+    this.saveTimer=setTimeout(async()=>{
+      if(!this.pendingSave)return
+      this.pendingSave=false
+      try{
+        const d=this.db.export(),f=new FormData()
+        f.append('path',DB_PATH)
+        f.append('file',new File([d],'reader.db'))
+        f.append('isDir','false')
+        await fetch('/api/file/putFile',{method:'POST',body:f})
+      }catch(e){console.error('[DB] Save failed:',e)}
+    },1000)
   }
+  
+  // 立即保存（关键操作）
+  async saveNow(){
+    clearTimeout(this.saveTimer)
+    this.pendingSave=false
+    const d=this.db.export(),f=new FormData()
+    f.append('path',DB_PATH)
+    f.append('file',new File([d],'reader.db'))
+    f.append('isDir','false')
+    await fetch('/api/file/putFile',{method:'POST',body:f})
+  }
+  
+  // 清理资源
+  async cleanup(){this.pendingSave&&await this.saveNow()}
 
   // ==================== 书籍 ====================
 
@@ -158,7 +182,7 @@ export class ReaderDatabase {
     this.db.run('DELETE FROM annotations WHERE book=?', [url]);
     this.db.run('DELETE FROM tags WHERE book=?', [url]);
     this.db.run('DELETE FROM groups WHERE book=?', [url]);
-    await this.save(); 
+    await this.saveNow(); // 立即保存，避免数据丢失
   }
 
   async searchBooks(q: string) {

@@ -266,7 +266,7 @@ const list=computed(()=>{
 })
 const emptyText=computed(()=>keyword.value?`${props.i18n?.notFound||'未找到'}${placeholders[props.mode].replace(/搜索|\.\.\./g,'')}`:`${props.i18n?.empty||'暂无'}${placeholders[props.mode].replace(/搜索|\.\.\./g,'')}`)
 // ===== 目录 =====
-let tocView:any,relocateHandler:any,bookmarkObs:IntersectionObserver|null,tocInteract=0
+let tocView:any,relocateHandler:any,tocInteract=0
 
 const initToc=async()=>{
   if(props.mode!=='toc'||!tocRef.value)return
@@ -275,65 +275,53 @@ const initToc=async()=>{
   if(!view?.book?.toc?.length){isPdfMode.value&&(showThumbnail.value=true);return}
   try{
     const{createTOCView}=await import('foliate-js/ui/tree.js')
-    const toc=isReverse.value?[...view.book.toc].reverse():view.book.toc
-    tocView=createTOCView(toc,goToLocation)
+    tocView=createTOCView(isReverse.value?[...view.book.toc].reverse():view.book.toc,goToLocation)
     tocRef.value.innerHTML=''
     tocRef.value.appendChild(tocView.element)
     tocRef.value.addEventListener('scroll',()=>tocInteract=Date.now(),{passive:true})
-    if(view?.addEventListener){
+    if(view.addEventListener){
       relocateHandler=(e:any)=>Date.now()-tocInteract>1e4&&tocView?.setCurrentHref?.(e.detail?.tocItem?.href)
       view.addEventListener('relocate',relocateHandler)
     }
-    requestAnimationFrame(()=>{Date.now()-tocInteract>1e4&&tocView?.setCurrentHref?.(view.lastLocation?.tocItem?.href);setTimeout(addBookmarks,100)})
+    setTimeout(()=>{tocView?.setCurrentHref?.(view.lastLocation?.tocItem?.href);addBookmarks()},50)
   }catch(e){console.error('[TOC]',e)}
 }
 
 const cleanupToc=()=>{
   activeView.value?.removeEventListener?.('relocate',relocateHandler)
-  tocRef.value?.removeEventListener('scroll',()=>tocInteract=Date.now())
   tocRef.value&&(tocRef.value.innerHTML='')
-  bookmarkObs?.disconnect()
-  relocateHandler=tocView=bookmarkObs=null
+  relocateHandler=tocView=null
 }
 
 const addBookmarks=()=>{
   if(!tocRef.value||!marks.value)return
-  bookmarkObs?.disconnect()
-  const bks=data.value.bookmarks
-  bookmarkObs=new IntersectionObserver(es=>es.forEach(e=>{
-    if(!e.isIntersecting)return
-    const a=e.target as HTMLElement,h=a.getAttribute('href'),l=a.textContent?.trim()
-    if(!h||!l||a.querySelector('.toc-bookmark-btn'))return
-    const has=bks.some((b:any)=>b.title===l),btn=document.createElement('button')
-    btn.className='toc-bookmark-btn b3-tooltips b3-tooltips__w'
-    btn.innerHTML='<svg style="width:14px;height:14px"><use xlink:href="#iconBookmark"/></svg>'
+  const bks=new Set(data.value.bookmarks.map((b:any)=>b.title))
+  tocRef.value.querySelectorAll('a[href]').forEach(a=>{
+    const h=a.getAttribute('href'),l=a.textContent?.trim()
+    if(!h||!l)return
+    let btn=a.querySelector('.toc-bookmark-btn') as HTMLButtonElement
+    if(!btn){
+      btn=Object.assign(document.createElement('button'),{className:'toc-bookmark-btn b3-tooltips b3-tooltips__w',innerHTML:'<svg style="width:14px;height:14px"><use xlink:href="#iconBookmark"/></svg>',onclick:(e:Event)=>{e.stopPropagation();e.preventDefault();toggleBookmark(h,l)}})
+      a.style.position='relative'
+      a.appendChild(btn)
+    }
+    const has=bks.has(l)
+    btn.classList.toggle('has-bookmark',has)
     btn.setAttribute('aria-label',has?'移除书签':'添加书签')
-    btn.onclick=e=>{e.stopPropagation();e.preventDefault();toggleBookmark(btn,h,l)}
-    if(has){btn.style.opacity='1';btn.classList.add('has-bookmark')}
-    a.style.position='relative';a.appendChild(btn);bookmarkObs?.unobserve(a)
-  }),{root:tocRef.value,rootMargin:'100px'})
-  tocRef.value.querySelectorAll('a[href]').forEach(a=>bookmarkObs?.observe(a))
+  })
 }
 
-const toggleBookmark=async(btn:HTMLButtonElement,href:string,label:string)=>{
-  const view=activeView.value
-  if(!marks.value||!view)return showMessage('书签功能未初始化',2000,'error')
+const toggleBookmark=async(href:string,label:string)=>{
+  if(!marks.value||!activeView.value)return showMessage('书签功能未初始化',2000,'error')
   try{
     tocInteract=Date.now()
-    btn.style.transform='translateY(-50%) scale(1.3)'
-    await view.goTo(href)
+    await activeView.value.goTo(href)
     await new Promise(r=>setTimeout(r,200))
-    const add=marks.value.toggleBookmark(undefined,undefined,label)
-    btn.classList.toggle('has-bookmark',add)
-    btn.style.opacity=add?'1':'0'
-    btn.setAttribute('aria-label',add?'移除书签':'添加书签')
-    btn.style.transform=`translateY(-50%) scale(${add?1.2:0.8})`
-    setTimeout(()=>btn.style.transform='translateY(-50%) scale(1)',150)
+    const add=await marks.value.toggleBookmark(undefined,undefined,label)
     showMessage(add?'已添加':'已删除',1500,'info')
-  }catch(e:any){
-    btn.style.transform='translateY(-50%) scale(1)'
-    showMessage(e.message||'操作失败',2000,'error')
-  }
+    refreshKey.value++
+    requestAnimationFrame(addBookmarks)
+  }catch(e:any){showMessage(e.message||'操作失败',2000,'error')}
 }
 
 // ===== 操作 =====

@@ -1,15 +1,14 @@
 /**
- * TXT转EPUB转换器 - 高性能、健壮的转换实现
+ * TXT转EPUB转换器 - 优化大文件处理
  */
 
 import JSZip from 'jszip'
 
 interface Chapter { index: number; title: string; content: string }
 
-// 编码检测 - 优化性能，只检测前1KB
+// 编码检测 - 增强准确性
 const detectEncoding = (buffer: ArrayBuffer): string => {
   const bytes = new Uint8Array(buffer)
-  const sample = bytes.subarray(0, Math.min(1024, bytes.length))
   
   // BOM检测
   if (bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) 
@@ -19,34 +18,61 @@ const detectEncoding = (buffer: ArrayBuffer): string => {
     if (bytes[0] === 0xFE && bytes[1] === 0xFF) return new TextDecoder('utf-16be').decode(bytes.slice(2))
   }
   
-  // UTF-8验证
+  // 扩大检测样本到前 4KB
+  const sample = bytes.subarray(0, Math.min(4096, bytes.length))
+  
+  // UTF-8 验证 - 更严格的检测
   try {
     const text = new TextDecoder('utf-8', { fatal: true }).decode(sample)
-    if (!text.includes('�')) return new TextDecoder('utf-8').decode(bytes)
+    // 检查是否包含常见中文字符
+    if (/[\u4e00-\u9fa5]/.test(text)) {
+      return new TextDecoder('utf-8').decode(bytes)
+    }
+    // 如果没有中文但解码成功，也认为是 UTF-8
+    if (!text.includes('�')) {
+      return new TextDecoder('utf-8').decode(bytes)
+    }
   } catch {}
   
-  // GBK回退
-  try { return new TextDecoder('gbk').decode(bytes) } 
-  catch { return new TextDecoder('utf-8').decode(bytes) }
+  // GBK 检测 - 检查是否包含 GBK 特征
+  try {
+    const gbkText = new TextDecoder('gbk').decode(sample)
+    // 如果包含常见中文字符，优先使用 GBK
+    if (/[\u4e00-\u9fa5]/.test(gbkText) && !gbkText.includes('�')) {
+      return new TextDecoder('gbk').decode(bytes)
+    }
+  } catch {}
+  
+  // 默认 UTF-8
+  return new TextDecoder('utf-8').decode(bytes)
 }
 
-// 章节分割 - 优化正则，减少内存分配
+// 章节分割 - 优化大文件处理
 const splitChapters = (text: string): Chapter[] => {
-  const regex = /^(第[零一二三四五六七八九十百千万\d]+[章节回集部]|Chapter\s+\d+|\d+\.|【[^】]+】)/im
+  const regex = /^(第[零一二三四五六七八九十百千万\d]+[章节回集部]|Chapter\s+\d+|\d+\.|【[^】]+】)/m
   const lines = text.split('\n')
   const chapters: Chapter[] = []
   let title = '开始', content: string[] = [], idx = 0
+  
+  // 限制单章最大行数，避免内存溢出
+  const MAX_LINES_PER_CHAPTER = 5000
   
   for (const line of lines) {
     const trimmed = line.trim()
     if (!trimmed) continue
     
-    if (regex.test(trimmed)) {
-      if (content.length) chapters.push({ index: idx++, title, content: content.join('\n') })
+    if (regex.test(trimmed) && content.length > 0) {
+      chapters.push({ index: idx++, title, content: content.join('\n') })
       title = trimmed
       content = []
     } else {
       content.push(trimmed)
+      // 强制分章，避免单章过大
+      if (content.length >= MAX_LINES_PER_CHAPTER) {
+        chapters.push({ index: idx++, title: title || `第${idx + 1}部分`, content: content.join('\n') })
+        title = `第${idx + 1}部分（续）`
+        content = []
+      }
     }
   }
   
@@ -54,18 +80,18 @@ const splitChapters = (text: string): Chapter[] => {
   return chapters.length ? chapters : [{ index: 0, title: '全文', content: text }]
 }
 
-// XML转义 - 使用查找表优化性能
+// XML转义
 const XML_ESCAPE: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }
 const escapeXml = (text: string): string => text.replace(/[&<>"']/g, m => XML_ESCAPE[m])
 
-// HTML转义 - 复用DOM API
+// HTML转义
 const escapeHtml = (text: string): string => {
   const div = document.createElement('div')
   div.textContent = text
   return div.innerHTML
 }
 
-// UUID生成 - 使用crypto API提升性能
+// UUID生成
 const generateUUID = (): string => {
   if (crypto.randomUUID) return crypto.randomUUID()
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
@@ -74,7 +100,7 @@ const generateUUID = (): string => {
   })
 }
 
-// 生成章节HTML - 模板优化
+// 生成章节HTML
 const toChapterHtml = (title: string, content: string): string => {
   const escaped = escapeHtml(content)
   const paragraphs = escaped.split(/\n+/).filter(Boolean).map(p => `    <p>${p}</p>`).join('\n')
@@ -93,7 +119,7 @@ ${paragraphs}
 </html>`
 }
 
-// 生成EPUB文件 - 主函数
+// 生成EPUB文件
 export const generateEpubFile = async (
   content: ArrayBuffer | string,
   title = '未命名',
@@ -189,21 +215,21 @@ ${navList}
 </body>
 </html>`)
   
-  // 章节内容
+  // 章节内容 - 批量添加
   chapters.forEach((ch, i) => zip.file(`OEBPS/ch${i}.xhtml`, toChapterHtml(ch.title, ch.content)))
   
-  // 生成ZIP
+  // 生成ZIP - 降低压缩级别提升速度
   const blob = await zip.generateAsync({ 
     type: 'blob', 
     mimeType: 'application/epub+zip',
     compression: 'DEFLATE',
-    compressionOptions: { level: 6 }
+    compressionOptions: { level: 3 }
   })
   
   return new File([blob], `${title}.epub`, { type: 'application/epub+zip' })
 }
 
-// 转换TXT文件为EPUB - 高层封装
+// 转换TXT文件为EPUB
 export const convertTxtFile = async (file: File): Promise<File> => {
   const name = file.name.replace(/\.txt$/i, '')
   return generateEpubFile(await file.arrayBuffer(), name, '未知作者')

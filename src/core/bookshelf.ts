@@ -5,7 +5,7 @@ import { reactive } from 'vue';
 import { getDatabase } from './database';
 import { fetchSyncPost } from 'siyuan';
 
-export type BookFormat = 'pdf' | 'epub' | 'mobi' | 'azw3' | 'online';
+export type BookFormat = 'pdf' | 'epub' | 'mobi' | 'azw3' | 'online' | 'txt';
 export type BookStatus = 'unread' | 'reading' | 'finished';
 export interface GroupConfig { id: string; name: string; icon?: string; color?: string; parentId?: string; order: number; type: 'folder' | 'smart'; rules?: { tags?: string[]; format?: BookFormat[]; status?: BookStatus[]; rating?: number } }
 export type SortType = 'time' | 'name' | 'author' | 'update' | 'progress' | 'rating' | 'readTime' | 'added';
@@ -17,7 +17,7 @@ export const SORTS = [['time','最近阅读'],['added','最近添加'],['progres
 export const STATUS_OPTIONS = [['unread','未读'],['reading','在读'],['finished','读完']] as const;
 export const STATUS_MAP: Record<BookStatus,string> = {unread:'未读',reading:'在读',finished:'读完'};
 export const RATING_OPTIONS = [[0,'☆☆☆☆☆ 全部'],[5,'★★★★★ 仅5星'],[4,'★★★★☆ 4星及以上'],[3,'★★★☆☆ 3星及以上']] as const;
-export const FORMAT_OPTIONS: BookFormat[] = ['epub','pdf','mobi','azw3','online'];
+export const FORMAT_OPTIONS: BookFormat[] = ['epub','pdf','mobi','azw3','txt','online'];
 
 class BookshelfManager {
   private ready = false;
@@ -77,38 +77,52 @@ class BookshelfManager {
   }
   
   // ===== 进度管理 =====
-  // 更新阅读进度：保存进度百分比、章节、位置信息
+  private progressTimer: any = null
+  // 更新阅读进度
   async updateProgress(url:string,progress:number,chapter?:number,cfi?:string){
-    const book=await this.getBook(url);if(!book)return false
-    const p=Math.max(0,Math.min(100,progress)),now=Date.now(),status=p===0?'unread':p===100?'finished':'reading'
-    return this.updateBook(url,{progress:p,status,read:now,pos:{...book.pos,chapter:chapter??book.pos.chapter,timestamp:now,cfi},...(chapter!==undefined&&{chapter}),...(p===100&&{finished:now})})
+    const b=await this.getBook(url);if(!b)return false
+    const p=Math.max(0,Math.min(100,progress)),now=Date.now()
+    // 状态逻辑：手动标注为finished后不再自动更新状态
+    const s=b.status==='finished'?'finished':p>0&&p<100?'reading':p===100?'finished':'unread'
+    return this.updateBook(url,{progress:p,status:s,read:now,pos:{...b.pos,chapter:chapter??b.pos.chapter,timestamp:now,cfi},...(chapter!==undefined&&{chapter}),...(p===100&&{finished:now})})
   }
   
-  // 自动更新进度
+  // 自动更新进度（防抖）
   async updateProgressAuto(url:string,reader?:any,pdfViewer?:any,view?:any){
-    try{
-      if(pdfViewer){const p=pdfViewer.getCurrentPage()||1,t=pdfViewer.getPageCount()||1;await this.updateProgress(url,Math.round(p/t*100),p,`#page-${p}`)}
-      else{
+    clearTimeout(this.progressTimer)
+    this.progressTimer=setTimeout(async()=>{
+      try{
+        if(pdfViewer){const p=pdfViewer.getCurrentPage()||1,t=pdfViewer.getPageCount()||1;return this.updateProgress(url,Math.round(p/t*100),p,`#page-${p}`)}
         const loc=reader?.getLocation?.()??view?.lastLocation;if(!loc)return
         const{getCurrentChapter}=await import('@/core/online'),ch=getCurrentChapter(reader)
-        if(ch!==undefined){const b=await this.getBook(url);await this.updateProgress(url,b?.total?Math.round((ch+1)/b.total*100):0,ch,loc.cfi)}
-        else if(loc.fraction!==undefined)await this.updateProgress(url,Math.round(loc.fraction*100),loc.index,loc.cfi)
-      }
-    }catch(e){console.error('[Progress]',e)}
+        if(ch!==undefined){const b=await this.getBook(url);return this.updateProgress(url,b?.total?Math.round((ch+1)/b.total*100):0,ch,loc.cfi)}
+        loc.fraction!==undefined&&this.updateProgress(url,Math.round(loc.fraction*100),loc.index,loc.cfi)
+      }catch{}
+    },2000)
   }
   
   // 恢复阅读进度
   async restoreProgress(url:string,reader?:any,pdfViewer?:any,view?:any){
     try{
-      const book=await this.getBook(url);if(!book)return
-      if(pdfViewer){const p=book.chapter||0,t=pdfViewer.getPageCount();if(p>=1&&p<=t)pdfViewer.goToPage(p);else if(book.pos?.cfi?.startsWith('#page-')){const pg=parseInt(book.pos.cfi.replace('#page-',''));if(pg>=1&&pg<=t)pdfViewer.goToPage(pg)}}
-      else{const target=reader||view;if(target&&(book.pos?.cfi||book.chapter!==undefined))await target.goTo(book.pos?.cfi||book.chapter)}
-    }catch(e){console.error('[Restore]',e)}
+      const b=await this.getBook(url);if(!b?.pos&&!b?.chapter)return
+      if(pdfViewer){
+        const p=b.chapter||0,t=pdfViewer.getPageCount()
+        if(p>=1&&p<=t)return pdfViewer.goToPage(p)
+        const cfi=b.pos?.cfi;if(cfi?.startsWith('#page-')){const pg=parseInt(cfi.slice(6));pg>=1&&pg<=t&&pdfViewer.goToPage(pg)}
+      }else{
+        const tgt=reader||view,loc=b.pos?.cfi||b.chapter;if(!tgt||!loc)return
+        await new Promise(r=>setTimeout(r,300))
+        try{await tgt.goTo(loc)}catch{b.chapter&&tgt.goTo(b.chapter).catch(()=>{})}
+      }
+    }catch{}
   }
   
-  updateRating=async(url:string,rating:number)=>this.updateBook(url,{rating:rating?Math.max(1,Math.min(5,rating)):undefined}) // 更新评分(1-5星)
-  updateStatus=async(url:string,status:BookStatus)=>this.updateBook(url,{status,...(status==='finished'&&{finished:Date.now(),progress:100})}) // 更新状态(未读/在读/已读)
-  updateReadTime=async(url:string,seconds:number)=>{const book=await this.getBook(url);return book?this.updateBook(url,{time:(book.time||0)+seconds}):false} // 累加阅读时长
+  // 清理资源
+  cleanup(){clearTimeout(this.progressTimer)}
+  
+  updateRating=async(url:string,rating:number)=>this.updateBook(url,{rating:rating?Math.max(1,Math.min(5,rating)):undefined}); // 更新评分(1-5星)
+  updateStatus=async(url:string,status:BookStatus)=>this.updateBook(url,{status,...(status==='finished'&&{finished:Date.now(),progress:100})}); // 更新状态(未读/在读/已读)
+  updateReadTime=async(url:string,seconds:number)=>{const book=await this.getBook(url);return book?this.updateBook(url,{time:(book.time||0)+seconds}):false}; // 累加阅读时长
   
   // ===== 标签管理 =====
   manageTags = async (url: string, action: 'add' | 'remove' | 'set', data: string | string[]) => {
@@ -116,33 +130,35 @@ class BookshelfManager {
     if (action === 'set') return this.updateBook(url, { tags: data as string[] });
     if (action === 'add') return tags.includes(data as string) ? false : this.updateBook(url, { tags: [...tags, data as string] });
     return this.updateBook(url, { tags: tags.filter(t => t !== data) });
-  }
+  };
   
-  getAllTags = async () => (await getDatabase()).getAllTags()
+  getAllTags = async () => (await getDatabase()).getAllTags();
   
   // ===== 分组管理 =====
-  getGroups = async () => { await this.init(); return (await getDatabase()).getGroups() }
-  saveGroups = async (groups: GroupConfig[]) => { await this.init(); await (await getDatabase()).saveGroups(groups); this.notify() }
+  getGroups = async () => { await this.init(); return (await getDatabase()).getGroups() };
+  saveGroups = async (groups: GroupConfig[]) => { await this.init(); await (await getDatabase()).saveGroups(groups); this.notify() };
   createGroup = async (name: string, type: 'folder' | 'smart' = 'folder', icon?: string) => { 
     const groups = await this.getGroups(); 
     const newGroup: GroupConfig = { id: `group_${Date.now()}`, name, icon: icon || (type === 'folder' ? '📁' : '⚡'), order: groups.length, type }; 
     await this.saveGroups([...groups, newGroup]); 
     return newGroup; 
-  }
-  async deleteGroup(gid: string) { 
+  };
+  
+  deleteGroup = async (gid: string) => { 
     await this.init();
     await (await getDatabase()).deleteGroup(gid);
     this.notify();
     return true;
-  }
+  };
   
   manageGroup = async (url: string, gid: string, action: 'add' | 'remove') => {
     const groups = (await this.getBook(url))?.groups || [];
     if (action === 'add') return groups.includes(gid) ? false : this.updateBook(url, { groups: [...groups, gid] });
     return this.updateBook(url, { groups: groups.filter(g => g !== gid) });
-  }
+  };
   
-  addBooksToGroup = async (urls: string[], gid: string) => this.batch(urls, url => this.manageGroup(url, gid, 'add'))
+  addBooksToGroup = async (urls: string[], gid: string) => this.batch(urls, url => this.manageGroup(url, gid, 'add'));;
+  
   getGroupCount = async (gid: string, groups?: GroupConfig[]) => {
     await this.init();
     const allGroups = groups || await this.getGroups();
@@ -150,7 +166,7 @@ class BookshelfManager {
     if (!group) return 0;
     if (group.type === 'smart') return (await this.getGroupBooks(gid)).length;
     return (await getDatabase()).getGroupCount(gid);
-  }
+  };
   getGroupPreviewBooks = async (gid: string, limit = 4, groups?: GroupConfig[]) => {
     await this.init();
     const allGroups = groups || await this.getGroups();
@@ -158,8 +174,8 @@ class BookshelfManager {
     if (!group) return [];
     if (group.type === 'smart') return (await this.getGroupBooks(gid)).slice(0, limit);
     return (await getDatabase()).getGroupPreviewBooks(gid, limit);
-  }
-  async getGroupBooks(gid: string) { 
+  };
+  getGroupBooks = async (gid: string) => { 
     const group = (await this.getGroups()).find(g => g.id === gid); 
     if (!group) return []; 
     const books = await this.getBooks(); 
@@ -174,16 +190,16 @@ class BookshelfManager {
       ); 
     } 
     return []; 
-  }
+  };
   
   // 批量操作
   private batch = async <T>(items: T[], op: (item: T) => Promise<boolean>) => { 
     const results = await Promise.allSettled(items.map(op)), success = results.filter(r => r.status === 'fulfilled' && r.value).length; 
     return { success, failed: items.length - success }; 
-  }
+  };
   
-  batchUpdateRating = async (urls: string[], rating: number) => this.batch(urls, url => this.updateRating(url, rating))
-  batchUpdateStatus = async (urls: string[], status: BookStatus) => this.batch(urls, url => this.updateStatus(url, status))
+  batchUpdateRating=async(urls:string[],rating:number)=>this.batch(urls,url=>this.updateRating(url,rating));
+  batchUpdateStatus=async(urls:string[],status:BookStatus)=>this.batch(urls,url=>this.updateStatus(url,status));
   
   // ===== Assets PDF 同步 =====
   async syncAssetsPDF() {
@@ -244,19 +260,20 @@ class BookshelfManager {
     return { success: true }
   }
   
-  // ===== 书籍导入 =====
   async uploadBooks(files: File[]) {
-    const results = await Promise.allSettled(files.map(f => this.addLocalBook(f)))
-    return { success: results.filter(r => r.status === 'fulfilled').length, failed: results.filter(r => r.status === 'rejected').length }
+    const r={success:0,failed:0}
+    for(const f of files){try{await this.addLocalBook(f);r.success++}catch{r.failed++}}
+    return r
   }
   
   async addLocalBook(file: File) {
     await this.init()
-    if (file.name.toLowerCase().endsWith('.txt')) file = await (await import('@/core/txt')).convertTxtFile(file)
-    const format = this.getFormat(file.name), name = file.name.replace(/\.[^.]+$/, ''), url = `${format}://${file.name}_${file.size}`
-    const meta = await this.extractMeta(file, format, name)
-    const [path, cover] = await Promise.all([this.saveFile(file, meta.title || name, url), meta.coverBlob ? this.saveCover(meta.coverBlob, meta.title || name, url) : undefined])
-    await this.addBook({ url, title: meta.title || name, author: meta.author || '未知作者', cover, format, path, size: file.size, metadata: this.buildMetadata(meta) })
+    const originalFormat=this.getFormat(file.name)
+    if(file.name.toLowerCase().endsWith('.txt'))file=await(await import('@/core/txt')).convertTxtFile(file)
+    const format=originalFormat,name=file.name.replace(/\.[^.]+$/,''),url=`${format}://${name}_${file.size}`
+    const meta=await this.extractMeta(file,format,name)
+    const[path,cover]=await Promise.all([this.saveFile(file,meta.title||name,url),meta.coverBlob?this.saveCover(meta.coverBlob,meta.title||name,url):Promise.resolve(undefined)])
+    await this.addBook({url,title:meta.title||name,author:meta.author||'未知作者',cover,format,path,size:file.size,metadata:this.buildMetadata(meta)})
   }
   
   async addUrlBook(url: string, coverUrl?: string, bookInfo?: { title?: string; author?: string }) {
@@ -336,10 +353,10 @@ class BookshelfManager {
   }
   
   private buildMetadata = (meta: any) => ({ publisher: meta.publisher, publishDate: meta.published, language: meta.language, isbn: meta.identifier, description: meta.intro, series: meta.series })
-  private getFormat = (path: string): BookFormat => { const ext = path.split('.').pop()?.toLowerCase() || ''; return ({ epub: 'epub', pdf: 'pdf', mobi: 'mobi', azw3: 'azw3', azw: 'azw3' } as Record<string, BookFormat>)[ext] || 'epub' }
+  private getFormat = (path: string): BookFormat => { const ext = path.split('.').pop()?.toLowerCase() || ''; return ({ epub: 'epub', pdf: 'pdf', mobi: 'mobi', azw3: 'azw3', azw: 'azw3', txt: 'txt' } as Record<string, BookFormat>)[ext] || 'epub' }
   private async extractMeta(file: File, format: BookFormat, defaultName: string) {
     const def = { title: defaultName, author: '未知作者', publisher: undefined, published: undefined, language: undefined, identifier: undefined, intro: undefined, subjects: [], series: undefined, coverBlob: undefined, subtitle: undefined }
-    if (!['epub', 'mobi', 'azw3'].includes(format)) return def
+    if (!['epub', 'mobi', 'azw3', 'txt'].includes(format)) return def
     try {
       const view = document.createElement('foliate-view') as any
       await Promise.race([view.open(file), new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 10000))])
@@ -347,7 +364,7 @@ class BookshelfManager {
       const norm = (v: any) => typeof v === 'string' ? v : (v?.['zh-CN'] || v?.['zh'] || v?.['en'] || Object.values(v || {})[0] || '')
       const arr = (v: any) => v ? (Array.isArray(v) ? v : [v]) : []
       const contrib = (v: any) => arr(v).map((c: any) => typeof c === 'string' ? c : norm(c?.name)).filter(Boolean).join(', ') || undefined
-      const coverBlob = format === 'epub' ? await this.extractCover(file).catch(() => undefined) : undefined
+      const coverBlob = (format === 'epub' || format === 'txt') ? await this.extractCover(file).catch(() => undefined) : undefined
       view.remove()
       return {
         title: norm(metadata.title) || defaultName, subtitle: norm(metadata.subtitle), author: contrib(metadata.author) || '未知作者',
@@ -377,19 +394,18 @@ class BookshelfManager {
     } catch {}
   }
   
-  private async saveFile(file: File, title: string, url: string) { 
-    const { putFile } = await import('@/api'), hash = this.hash(url), name = this.sanitize(title), ext = file.name.split('.').pop()
-    const path = `/data/storage/petal/siyuan-sireader/books/${name}_${hash}.${ext}`
-    try { await putFile(path, false, file); return path } 
-    catch (err) { throw new Error(`文件保存失败: ${err instanceof Error ? err.message : '未知错误'}`) } 
+  private async saveFile(file: File, title: string, url: string) {
+    const{putFile}=await import('@/api'),hash=this.hash(url),name=this.sanitize(title),ext=file.name.split('.').pop()
+    const path=`/data/storage/petal/siyuan-sireader/books/${name}_${hash}.${ext}`
+    try{await putFile(path,false,file);return path}catch(err){throw new Error(`文件保存失败: ${err instanceof Error?err.message:'未知错误'}`)}
   }
-  private async saveCover(blob: Blob, title: string, url: string) { 
-    const { putFile } = await import('@/api'), hash = this.hash(url), name = this.sanitize(title), path = `/data/storage/petal/siyuan-sireader/books/${name}_${hash}.jpg`
-    try { await putFile(path, false, new File([blob], `${name}_${hash}.jpg`, { type: 'image/jpeg' })); return path } 
-    catch { return '' } 
+  
+  private async saveCover(blob: Blob, title: string, url: string) {
+    const{putFile}=await import('@/api'),hash=this.hash(url),name=this.sanitize(title),path=`/data/storage/petal/siyuan-sireader/books/${name}_${hash}.jpg`
+    try{await putFile(path,false,new File([blob],`${name}_${hash}.jpg`,{type:'image/jpeg'}));return path}catch{return ''}
   }
-  private hash = (str: string): string => { let h = 0; for (let i = 0; i < str.length; i++) h = (((h << 5) - h) + str.charCodeAt(i)) | 0; return Math.abs(h).toString(36) }
-  private sanitize = (name: string): string => name.replace(/[<>:"/\\|?*\x00-\x1f《》【】「」『』（）()[\]{};,]/g, '').replace(/\s+/g, '_').replace(/[._-]+/g, '_').replace(/^[._-]+|[._-]+$/g, '').slice(0, 50) || 'book'
+  private hash = (str: string): string => { let h = 0; for (let i = 0; i < str.length; i++) h = (((h << 5) - h) + str.charCodeAt(i)) | 0; return Math.abs(h).toString(36) };
+  private sanitize = (name: string): string => name.replace(/[<>:"/\\|?*\x00-\x1f《》【】「」『』（）()[\]{};,]/g, '').replace(/\s+/g, '_').replace(/[._-]+/g, '_').replace(/^[._-]+|[._-]+$/g, '').slice(0, 50) || 'book';
 }
 
 export const bookshelfManager = new BookshelfManager();

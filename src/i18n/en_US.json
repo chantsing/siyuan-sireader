@@ -378,7 +378,13 @@
   "days": "days",
   "enterActivationCode": "Enter activation code",
   "activate": "Activate",
-  "activating": "Activating...",
+  "processing": "Processing...",
+  "recover": "Recover License",
+  "tooFrequent": "Too frequent, please try again later",
   "clearLicense": "Clear License",
-  "licenseCleared": "License cleared"
+  "licenseCleared": "License cleared",
+  "membership": "Membership",
+  "activatedAt": "Activated at",
+  "logout": "Logout",
+  "purchase": "Purchase"
 }
