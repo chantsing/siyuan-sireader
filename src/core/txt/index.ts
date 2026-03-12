@@ -1,0 +1,210 @@
+/**
+ * TXT转EPUB转换器 - 高性能、健壮的转换实现
+ */
+
+import JSZip from 'jszip'
+
+interface Chapter { index: number; title: string; content: string }
+
+// 编码检测 - 优化性能，只检测前1KB
+const detectEncoding = (buffer: ArrayBuffer): string => {
+  const bytes = new Uint8Array(buffer)
+  const sample = bytes.subarray(0, Math.min(1024, bytes.length))
+  
+  // BOM检测
+  if (bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) 
+    return new TextDecoder('utf-8').decode(bytes.slice(3))
+  if (bytes.length >= 2) {
+    if (bytes[0] === 0xFF && bytes[1] === 0xFE) return new TextDecoder('utf-16le').decode(bytes.slice(2))
+    if (bytes[0] === 0xFE && bytes[1] === 0xFF) return new TextDecoder('utf-16be').decode(bytes.slice(2))
+  }
+  
+  // UTF-8验证
+  try {
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(sample)
+    if (!text.includes('�')) return new TextDecoder('utf-8').decode(bytes)
+  } catch {}
+  
+  // GBK回退
+  try { return new TextDecoder('gbk').decode(bytes) } 
+  catch { return new TextDecoder('utf-8').decode(bytes) }
+}
+
+// 章节分割 - 优化正则，减少内存分配
+const splitChapters = (text: string): Chapter[] => {
+  const regex = /^(第[零一二三四五六七八九十百千万\d]+[章节回集部]|Chapter\s+\d+|\d+\.|【[^】]+】)/im
+  const lines = text.split('\n')
+  const chapters: Chapter[] = []
+  let title = '开始', content: string[] = [], idx = 0
+  
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    
+    if (regex.test(trimmed)) {
+      if (content.length) chapters.push({ index: idx++, title, content: content.join('\n') })
+      title = trimmed
+      content = []
+    } else {
+      content.push(trimmed)
+    }
+  }
+  
+  if (content.length) chapters.push({ index: idx, title, content: content.join('\n') })
+  return chapters.length ? chapters : [{ index: 0, title: '全文', content: text }]
+}
+
+// XML转义 - 使用查找表优化性能
+const XML_ESCAPE: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }
+const escapeXml = (text: string): string => text.replace(/[&<>"']/g, m => XML_ESCAPE[m])
+
+// HTML转义 - 复用DOM API
+const escapeHtml = (text: string): string => {
+  const div = document.createElement('div')
+  div.textContent = text
+  return div.innerHTML
+}
+
+// UUID生成 - 使用crypto API提升性能
+const generateUUID = (): string => {
+  if (crypto.randomUUID) return crypto.randomUUID()
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = crypto.getRandomValues(new Uint8Array(1))[0] % 16
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16)
+  })
+}
+
+// 生成章节HTML - 模板优化
+const toChapterHtml = (title: string, content: string): string => {
+  const escaped = escapeHtml(content)
+  const paragraphs = escaped.split(/\n+/).filter(Boolean).map(p => `    <p>${p}</p>`).join('\n')
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8"/>
+  <title>${escapeHtml(title)}</title>
+  <style>body{max-width:800px;margin:0 auto;padding:2em;font-size:18px;line-height:1.8}h1{text-align:center;margin-bottom:2em}p{text-indent:2em;margin:1em 0}</style>
+</head>
+<body>
+  <h1>${escapeHtml(title)}</h1>
+${paragraphs}
+</body>
+</html>`
+}
+
+// 生成EPUB文件 - 主函数
+export const generateEpubFile = async (
+  content: ArrayBuffer | string,
+  title = '未命名',
+  author = '未知作者'
+): Promise<File> => {
+  // 解码
+  const text = content instanceof ArrayBuffer ? detectEncoding(content) : content
+  if (!text.trim()) throw new Error('文件内容为空')
+  
+  // 分割章节
+  const chapters = splitChapters(text)
+  if (!chapters.length) throw new Error('无法识别章节')
+  
+  // 创建ZIP
+  const zip = new JSZip()
+  const uuid = generateUUID()
+  const timestamp = new Date().toISOString().split('.')[0] + 'Z'
+  
+  // mimetype (无压缩)
+  zip.file('mimetype', 'application/epub+zip', { compression: 'STORE' })
+  
+  // META-INF/container.xml
+  zip.file('META-INF/container.xml', 
+    `<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>`)
+  
+  // 生成manifest和spine
+  const manifest = chapters.map((_, i) => 
+    `    <item id="ch${i}" href="ch${i}.xhtml" media-type="application/xhtml+xml"/>`).join('\n')
+  const spine = chapters.map((_, i) => `    <itemref idref="ch${i}"/>`).join('\n')
+  
+  // OEBPS/content.opf
+  zip.file('OEBPS/content.opf',
+    `<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>${escapeXml(title)}</dc:title>
+    <dc:creator>${escapeXml(author)}</dc:creator>
+    <dc:language>zh</dc:language>
+    <dc:identifier id="uid">urn:uuid:${uuid}</dc:identifier>
+    <meta property="dcterms:modified">${timestamp}</meta>
+  </metadata>
+  <manifest>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+${manifest}
+  </manifest>
+  <spine toc="ncx">
+${spine}
+  </spine>
+</package>`)
+  
+  // OEBPS/toc.ncx
+  const navPoints = chapters.map((ch, i) =>
+    `    <navPoint id="np${i}" playOrder="${i + 1}">
+      <navLabel><text>${escapeXml(ch.title)}</text></navLabel>
+      <content src="ch${i}.xhtml"/>
+    </navPoint>`).join('\n')
+  
+  zip.file('OEBPS/toc.ncx',
+    `<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head>
+    <meta name="dtb:uid" content="urn:uuid:${uuid}"/>
+    <meta name="dtb:depth" content="1"/>
+  </head>
+  <docTitle><text>${escapeXml(title)}</text></docTitle>
+  <navMap>
+${navPoints}
+  </navMap>
+</ncx>`)
+  
+  // OEBPS/nav.xhtml
+  const navList = chapters.map((ch, i) =>
+    `      <li><a href="ch${i}.xhtml">${escapeXml(ch.title)}</a></li>`).join('\n')
+  
+  zip.file('OEBPS/nav.xhtml',
+    `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><meta charset="utf-8"/><title>目录</title></head>
+<body>
+  <nav epub:type="toc">
+    <h1>目录</h1>
+    <ol>
+${navList}
+    </ol>
+  </nav>
+</body>
+</html>`)
+  
+  // 章节内容
+  chapters.forEach((ch, i) => zip.file(`OEBPS/ch${i}.xhtml`, toChapterHtml(ch.title, ch.content)))
+  
+  // 生成ZIP
+  const blob = await zip.generateAsync({ 
+    type: 'blob', 
+    mimeType: 'application/epub+zip',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 6 }
+  })
+  
+  return new File([blob], `${title}.epub`, { type: 'application/epub+zip' })
+}
+
+// 转换TXT文件为EPUB - 高层封装
+export const convertTxtFile = async (file: File): Promise<File> => {
+  const name = file.name.replace(/\.txt$/i, '')
+  return generateEpubFile(await file.arrayBuffer(), name, '未知作者')
+}

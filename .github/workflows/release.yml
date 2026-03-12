@@ -1,0 +1,91 @@
+name: Release from Local Build
+
+# 触发条件：当 package.json 或 package.zip 被推送到 main 分支时
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'package.json'
+      - 'package.zip'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "📦 Version: v$VERSION"
+
+      - name: Check if tag exists
+        id: check-tag
+        run: |
+          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "⏭️ Tag v${{ steps.version.outputs.version }} already exists, skipping release"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "✨ Tag v${{ steps.version.outputs.version }} is new, will create release"
+          fi
+
+      - name: Verify package.zip
+        if: steps.check-tag.outputs.exists == 'false'
+        run: |
+          if [ ! -f "package.zip" ]; then
+            echo "❌ package.zip not found! Please build locally and commit package.zip"
+            echo "💡 Run: pnpm build && git add package.zip && git commit -m 'chore: update package.zip'"
+            exit 1
+          fi
+          echo "✅ package.zip found"
+          ls -lh package.zip
+          echo "📦 Package contents:"
+          unzip -l package.zip | head -30
+
+      - name: Create tag
+        if: steps.check-tag.outputs.exists == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
+          git push origin "v${{ steps.version.outputs.version }}"
+          echo "✅ Tag v${{ steps.version.outputs.version }} created"
+
+      - name: Get changelog
+        if: steps.check-tag.outputs.exists == 'false'
+        id: changelog
+        run: |
+          # 提取当前版本的更新内容
+          VERSION="${{ steps.version.outputs.version }}"
+          CHANGELOG=$(awk "/## 🚀 v${VERSION}/,/^## 🚀 v[0-9]|^---$/" CHANGELOG.md | sed '1d;$d')
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        if: steps.check-tag.outputs.exists == 'false'
+        uses: ncipollo/release-action@v1
+        with:
+          tag: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          artifacts: "package.zip"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          generateReleaseNotes: true
+          makeLatest: true
+          body: |
+            ## 📦 完整更新日志
+            
+            ${{ steps.changelog.outputs.changelog }}
+            
+            ---
+            
+            查看完整更新日志：[CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)
