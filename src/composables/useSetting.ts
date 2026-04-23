@@ -2,6 +2,8 @@
 import { ref, toRaw } from 'vue'
 import { showMessage, fetchSyncPost } from 'siyuan'
 import type { Plugin } from 'siyuan'
+import { readDir } from '@/api'
+import { bookshelfManager } from '@/core/bookshelf'
 
 export type PdfToolbarStyle = 'float' | 'fixed'
 export type PageAnimation = 'slide' | 'none'
@@ -9,6 +11,9 @@ export type ViewMode = 'single' | 'double' | 'scroll'
 export type NavPosition = 'left' | 'right' | 'top' | 'bottom'
 export type NavItem = { id: string; icon: string; tip: string; enabled: boolean; order: number }
 export type DocInfo = { id: string; name: string; path: string; notebook: string }
+export type NoteInsertTarget = 'clipboard' | 'current' | 'notebook' | 'document' | 'dailynote'
+export type NoteInsertMode = 'insertBlock' | 'prependBlock' | 'appendBlock' | 'updateBlock' | 'prependDoc' | 'appendDoc'
+export type LinkFormatPreset = 'simple' | 'heading' | 'list' | 'quote' | 'code'
 export interface ReadTheme { name: string; color: string; bg: string; bgImg?: string }
 export interface FontFileInfo { name: string; displayName: string }
 export interface TextSettings { fontFamily: string; fontSize: number; letterSpacing: number; customFont: { fontFamily: string; fontFile: string } }
@@ -17,13 +22,13 @@ export interface LayoutSettings { marginHorizontal: number; marginVertical: numb
 export interface VisualSettings { brightness: number; contrast: number; sepia: number; saturate: number; invert: boolean }
 export interface TTSVoice { name: string; displayName: string; locale: string; isLocal?: boolean }
 export interface TTSSettings { enabled: boolean; voice: string; rate: number; autoTurnPage: boolean; highlightText: boolean; favoriteVoices: TTSVoice[] }
-export interface ReaderSettings { enabled: boolean; openMode: 'newTab' | 'rightTab' | 'bottomTab' | 'newWindow'; navPosition: NavPosition; pageAnimation: PageAnimation; viewMode: ViewMode; theme: string; customTheme: ReadTheme; annotationMode: 'notebook' | 'document'; notebookId?: string; parentDoc?: DocInfo; linkFormat: string; pdfToolbarStyle: PdfToolbarStyle; bookshelfCoverSize: number; openDocAssets: boolean; toolbarOpacity: number; quickSendDocs?: DocInfo[]; navItems?: NavItem[]; textSettings: TextSettings; paragraphSettings: ParagraphSettings; layoutSettings: LayoutSettings; visualSettings: VisualSettings; tts?: TTSSettings }
+export interface ReaderSettings { enabled: boolean; openMode: 'newTab' | 'rightTab' | 'bottomTab' | 'newWindow'; navPosition: NavPosition; pageAnimation: PageAnimation; viewMode: ViewMode; theme: string; customTheme: ReadTheme; annotationMode: 'notebook' | 'document'; notebookId?: string; parentDoc?: DocInfo; noteInsertTarget: NoteInsertTarget; noteInsertMode: NoteInsertMode; linkFormat: string; pdfToolbarStyle: PdfToolbarStyle; bookshelfCoverSize: number; openDocAssets: boolean; toolbarOpacity: number; quickSendDocs?: DocInfo[]; navItems?: NavItem[]; textSettings: TextSettings; paragraphSettings: ParagraphSettings; layoutSettings: LayoutSettings; visualSettings: VisualSettings; tts?: TTSSettings }
 
 // ===== 预设主题 =====
 export const PRESET_THEMES: Record<string, ReadTheme> = { default: { name: 'themeDefault', color: '#202124', bg: '#ffffff' }, auto: { name: 'themeAuto', color: 'var(--b3-theme-on-background)', bg: 'var(--b3-theme-background)' }, almond: { name: 'themeAlmond', color: '#414441', bg: '#FAF9DE' }, autumn: { name: 'themeAutumn', color: '#414441', bg: '#FFF2E2' }, green: { name: 'themeGreen', color: '#414441', bg: '#E3EDCD' }, blue: { name: 'themeBlue', color: '#414441', bg: '#DCE2F1' }, night: { name: 'themeNight', color: '#fff6e6', bg: '#415062' }, dark: { name: 'themeDark', color: '#d5cecd', bg: '#414441' }, gold: { name: 'themeGold', color: '#b58931', bg: '#081010' } }
 
 // ===== 工具 =====
-const fixUrl = (u: string) => u[0] === '/' || u.startsWith('http') ? u : `/${u}`;
+const fixUrl = (u: string) => !u || u[0] === '/' || u.startsWith('http') ? u : `/${u}`;
 const msg = { success: (m: string) => showMessage(m, 2000, 'info'), error: (m: string) => showMessage(m, 3000, 'error') };
 const getTheme = (s: ReaderSettings) => s.theme === 'custom' ? s.customTheme : PRESET_THEMES[s.theme];
 const getFont = (t: TextSettings) => { const c = t.fontFamily === 'custom' && t.customFont.fontFamily; return { font: c ? `"${t.customFont.fontFamily}", sans-serif` : t.fontFamily || 'inherit', fontFace: c ? `@font-face{font-family:"${t.customFont.fontFamily}";src:url("/plugins/custom-fonts/${t.customFont.fontFile}")}` : '' }; };
@@ -33,7 +38,14 @@ export const applyTheme = (el: HTMLElement, s: ReaderSettings) => { const t = ge
 export const applyPageStyles = (iframe: HTMLIFrameElement, s: ReaderSettings) => { const doc = iframe.contentDocument; if (!doc?.body) return; const { textSettings: t, paragraphSettings: p, layoutSettings: l } = s; doc.querySelectorAll('style[data-sireader-page]').forEach(s => s.remove()); const { font, fontFace } = getFont(t); doc.head.appendChild(Object.assign(doc.createElement('style'), { 'data-sireader-page': 'true', textContent: `${fontFace}body{font-family:${font}!important;font-size:${t.fontSize}px!important;letter-spacing:${t.letterSpacing}em!important;padding:${l.marginVertical}px ${l.marginHorizontal}px!important}p,div{line-height:${p.lineHeight}!important;margin:${p.paragraphSpacing}em 0!important}p{text-indent:${p.textIndent}em!important}` })); };
 
 // ===== 默认配置 =====
-const DEFAULT_SETTINGS: ReaderSettings = { enabled: true, openMode: 'newTab', navPosition: 'top', pageAnimation: 'slide', viewMode: 'single', theme: 'auto', customTheme: { name: 'custom', color: '#202124', bg: '#ffffff' }, annotationMode: 'notebook', notebookId: '', parentDoc: undefined, linkFormat: '> [!NOTE] 📑 书名\n> [章节](链接) 文本\n> 截图\n> 笔记', pdfToolbarStyle: 'fixed', bookshelfCoverSize: 120, openDocAssets: true, toolbarOpacity: 70, quickSendDocs: [], textSettings: { fontFamily: 'inherit', fontSize: 16, letterSpacing: 0, customFont: { fontFamily: '', fontFile: '' } }, paragraphSettings: { lineHeight: 1.6, paragraphSpacing: 0.8, textIndent: 0 }, layoutSettings: { marginHorizontal: 40, marginVertical: 20, gap: 5, headerFooterMargin: 0 }, visualSettings: { brightness: 1, contrast: 1, sepia: 0, saturate: 1, invert: false }, tts: { enabled: false, voice: 'zh-CN-XiaoxiaoNeural', rate: 1.0, autoTurnPage: true, highlightText: true, favoriteVoices: [] } }
+const DEFAULT_SETTINGS: ReaderSettings = { enabled: true, openMode: 'newTab', navPosition: 'top', pageAnimation: 'slide', viewMode: 'single', theme: 'auto', customTheme: { name: 'custom', color: '#202124', bg: '#ffffff' }, annotationMode: 'notebook', notebookId: '', parentDoc: undefined, noteInsertTarget: 'clipboard', noteInsertMode: 'insertBlock', linkFormat: '> [!NOTE] 📑 书名\n> [章节](链接) 文本\n> 截图\n> 笔记', pdfToolbarStyle: 'fixed', bookshelfCoverSize: 120, openDocAssets: true, toolbarOpacity: 70, quickSendDocs: [], textSettings: { fontFamily: 'inherit', fontSize: 16, letterSpacing: 0, customFont: { fontFamily: '', fontFile: '' } }, paragraphSettings: { lineHeight: 1.6, paragraphSpacing: 0.8, textIndent: 0 }, layoutSettings: { marginHorizontal: 40, marginVertical: 20, gap: 5, headerFooterMargin: 0 }, visualSettings: { brightness: 1, contrast: 1, sepia: 0, saturate: 1, invert: false }, tts: { enabled: false, voice: 'zh-CN-XiaoxiaoNeural', rate: 1.0, autoTurnPage: true, highlightText: true, favoriteVoices: [] } }
+export const LINK_FORMAT_PRESETS: Record<LinkFormatPreset, string> = {
+  simple: '[书名](链接) 文本',
+  heading: '## 书名\n- [章节](链接) 文本\n- 位置\n- 笔记\n- 截图',
+  list: '- [书名 / 章节](链接)\n- 文本\n- 笔记\n- 截图',
+  quote: '> [书名 · 章节](链接) 文本\n>\n> 笔记\n>\n> 截图',
+  code: '### 书名\n```md\n[章节](链接) 文本\n笔记\n```\n截图'
+}
 
 // ===== UI配置常量 =====
 const r = (k: string, min: number, max: number, step: number, unit = '') => ({ key: k, type: 'range' as const, min, max, step, unit })
@@ -41,7 +53,12 @@ export const UI_CONFIG = { interfaceItems: [{ key: 'openMode', opts: ['newTab', 
 
 // ===== 字体 =====
 let cachedFonts: FontFileInfo[] | null = null;
-export const scanCustomFonts = async (force = false): Promise<FontFileInfo[]> => { if (!force && cachedFonts) return cachedFonts; try { const r = await fetchSyncPost('/api/file/readDir', { path: '/data/plugins/custom-fonts' }); return cachedFonts = r?.code === 0 && Array.isArray(r.data) ? r.data.filter((f: any) => !f.isDir && /\.(ttf|otf|woff2?)$/i.test(f.name)).map((f: any) => ({ name: f.name, displayName: f.name.replace(/\.(ttf|otf|woff2?)$/i, '') })) : [] } catch { return cachedFonts = [] } };
+export const scanCustomFonts = async (force = false): Promise<FontFileInfo[]> => {
+  if (!force && cachedFonts) return cachedFonts
+  const files = await readDir('/data/plugins/custom-fonts').catch(() => null) as any
+  const list = Array.isArray(files?.data) ? files.data : Array.isArray(files) ? files : []
+  return cachedFonts = list.filter((f: any) => !f.isDir && /\.(ttf|otf|woff2?)$/i.test(f.name)).map((f: any) => ({ name: f.name, displayName: f.name.replace(/\.(ttf|otf|woff2?)$/i, '') }))
+}
 export const loadFonts = (fonts: FontFileInfo[]) => { const s = document.getElementById('sr-fonts') || Object.assign(document.createElement('style'), { id: 'sr-fonts' }); s.parentNode || document.head.appendChild(s); s.textContent = fonts.map(f => `@font-face{font-family:"${f.displayName}";src:url("/plugins/custom-fonts/${f.name}")}`).join('') };
 export const resetToDefaults = (s: any) => Object.assign(s, { textSettings: DEFAULT_SETTINGS.textSettings, paragraphSettings: DEFAULT_SETTINGS.paragraphSettings, layoutSettings: DEFAULT_SETTINGS.layoutSettings, visualSettings: DEFAULT_SETTINGS.visualSettings });
 
@@ -60,17 +77,21 @@ export const useConfirm = (f: () => void) => { const c = ref(false); return { co
 
 // ===== 设置管理 =====
 const merge = (d: any, s: any): any => { const r = { ...d }; for (const k in s) if (s[k] !== undefined && s[k] !== null) r[k] = typeof s[k] === 'object' && !Array.isArray(s[k]) && d[k] ? merge(d[k], s[k]) : s[k]; return r; };
-let db: any = null;
-const getDB = async () => db || (db = await (await import('@/core/database')).getDatabase());
 export const settingsManager = {
-  get: async (): Promise<ReaderSettings> => { const s = await (await getDB()).getSetting('reader_settings'); return s ? merge(DEFAULT_SETTINGS, s) : { ...DEFAULT_SETTINGS }; },
-  save: async (settings: ReaderSettings) => { await (await getDB()).saveSetting('reader_settings', JSON.parse(JSON.stringify(toRaw(settings)))); window.dispatchEvent(new CustomEvent('sireaderSettingsUpdated', { detail: settings })); }
+  get: async (): Promise<ReaderSettings> => { const s = await bookshelfManager.getSetting('reader_settings'); const v = s ? merge(DEFAULT_SETTINGS, s) : { ...DEFAULT_SETTINGS }; return (window as any).__sireader_settings = v; },
+  save: async (settings: ReaderSettings) => { const v = JSON.parse(JSON.stringify(toRaw(settings))); await bookshelfManager.saveSetting('reader_settings', v); (window as any).__sireader_settings = v; window.dispatchEvent(new CustomEvent('sireaderSettingsUpdated', { detail: v })); }
 };
 
 // ===== useSetting =====
+const settings = ref<ReaderSettings>({ ...DEFAULT_SETTINGS })
+const isLoaded = ref(false)
+const customFonts = ref<FontFileInfo[]>([])
+const isLoadingFonts = ref(false)
+let loadTask: Promise<void> | null = null
+typeof window !== 'undefined' && window.addEventListener('sireaderSettingsUpdated', (e: Event) => { settings.value = (e as CustomEvent).detail || settings.value })
 export function useSetting(plugin: Plugin) { 
-  const settings = ref<ReaderSettings>({ ...DEFAULT_SETTINGS }), i18n = plugin.i18n as any, isLoaded = ref(false), customFonts = ref<FontFileInfo[]>([]), isLoadingFonts = ref(false);
-  const load = async () => { try { settings.value = await settingsManager.get(), isLoaded.value = true } catch { settings.value = { ...DEFAULT_SETTINGS }, isLoaded.value = true } };
+  const i18n = plugin.i18n as any
+  const load = () => loadTask ||= (async () => { try { settings.value = await settingsManager.get() } catch { settings.value = { ...DEFAULT_SETTINGS }; (window as any).__sireader_settings = settings.value } finally { isLoaded.value = true } })()
   const save = async () => { try { await settingsManager.save(settings.value), msg.success(i18n?.saved || '设置已保存') } catch { msg.error(i18n?.saveError || '保存失败') } };
   const loadCustomFonts = async (force = false) => { if (!force && customFonts.value.length) return; isLoadingFonts.value = true; try { customFonts.value = await scanCustomFonts(force); loadFonts(customFonts.value) } finally { isLoadingFonts.value = false } };
   const resetStyles = () => resetToDefaults(settings.value);

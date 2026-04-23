@@ -17,31 +17,20 @@ export default defineConfig(({
   mode,
 }) => {
 
-  console.log('mode=>', mode)
   const env = loadEnv(mode, process.cwd())
   const {
     VITE_SIYUAN_WORKSPACE_PATH,
   } = env
-  console.log('env=>', env)
-
 
   const siyuanWorkspacePath = VITE_SIYUAN_WORKSPACE_PATH
   let devDistDir = './dev'
-  if (!siyuanWorkspacePath) {
-    console.log("\nSiyuan workspace path is not set.")
-  } else {
-    console.log(`\nSiyuan workspace path is set:\n${siyuanWorkspacePath}`)
+  if (siyuanWorkspacePath) {
     devDistDir = `${siyuanWorkspacePath}/data/plugins/${pluginInfo.name}`
   }
-  console.log(`\nPlugin will build to:\n${devDistDir}`)
 
   const args = minimist(process.argv.slice(2))
   const isWatch = args.watch || args.w || false
   const distDir = isWatch ? devDistDir : "./dist"
-
-  console.log()
-  console.log("isWatch=>", isWatch)
-  console.log("distDir=>", distDir)
 
   return {
     resolve: {
@@ -51,7 +40,7 @@ export default defineConfig(({
     },
 
     optimizeDeps: {
-      exclude: ['sql.js'], // 排除 sql.js 的预构建
+      exclude: ['sql.js', 'sql.js/dist/sql-asm.js'],
     },
 
     plugins: [
@@ -75,16 +64,8 @@ export default defineConfig(({
             dest: "./",
           },
           {
-            src: "./src/i18n/**",
+            src: "./src/i18n/*.json",
             dest: "./i18n/",
-          },
-          {
-            src: "./node_modules/sql.js/dist/sql-wasm.wasm",
-            dest: "./sql.js/",
-          },
-          {
-            src: "./node_modules/sql.js/dist/sql-wasm.js",
-            dest: "./sql.js/",
           },
         ],
       }),

@@ -146,6 +146,7 @@ class BookSourceManager {
     if (isHttpSource || (!sourceUrl && includeZLib)) {
       try {
         const { httpSourceManager } = await import('@/utils/HttpSources')
+        await httpSourceManager.init()
         const httpBooks = await httpSourceManager.search(keyword, isHttpSource ? sourceUrl : undefined)
         if (httpBooks.length) yield httpBooks
       } catch (e: any) { console.error('[HTTP书源搜索失败]', e) }

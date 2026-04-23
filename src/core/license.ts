@@ -2,6 +2,8 @@
  * 思阅授权管理 - 极简版
  */
 
+import { loadData, removeData, saveData } from './bookStore'
+
 export interface LicenseInfo {
   userId: string
   userName: string
@@ -70,7 +72,7 @@ export class LicenseManager {
   }
 
   // 激活
-  static async activate(code: string, plugin: any) {
+  static async activate(code: string) {
     const user = await this.getUser()
     if (!user) return { success: false, error: '请先登录思源账号' }
 
@@ -85,7 +87,7 @@ export class LicenseManager {
       if (!res.ok) return { success: false, error: data.error || '激活失败' }
 
       const license: LicenseInfo = { userId: user.userId, userName: user.userName, ...data, lastVerified: Date.now() }
-      await this.save(license, new Date().toDateString(), plugin)
+      await this.save(license, new Date().toDateString())
 
       return { success: true, message: '激活成功', license: this.enrich(license) }
     }
@@ -95,7 +97,7 @@ export class LicenseManager {
   }
 
   // 恢复授权（复用refresh逻辑）
-  static async recover(plugin: any) {
+  static async recover() {
     const user = await this.getUser()
     if (!user) return { success: false, error: '请先登录思源账号' }
 
@@ -110,7 +112,7 @@ export class LicenseManager {
       if (!res.ok) return { success: false, error: data.error || '未找到授权信息' }
 
       const license: LicenseInfo = { userId: user.userId, userName: user.userName, ...data, lastVerified: Date.now() }
-      await this.save(license, new Date().toDateString(), plugin)
+      await this.save(license, new Date().toDateString())
 
       return { success: true, message: '恢复成功', license: this.enrich(license) }
     }
@@ -120,7 +122,7 @@ export class LicenseManager {
   }
 
   // 刷新
-  private static async refresh(license: LicenseInfo, plugin: any): Promise<boolean> {
+  private static async refresh(license: LicenseInfo): Promise<boolean> {
     try {
       const res = await fetch(`${this.API}/verify`, {
         method: 'POST',
@@ -132,27 +134,27 @@ export class LicenseManager {
       if (!res.ok) return false
 
       Object.assign(license, data, { lastVerified: Date.now() })
-      await this.save(license, new Date().toDateString(), plugin)
+      await this.save(license, new Date().toDateString())
       return true
     }
     catch { return false }
   }
 
   // 验证
-  static async verify(plugin: any): Promise<boolean> {
-    const data = await this.load(plugin)
+  static async verify(): Promise<boolean> {
+    const data = await this.load()
     if (!data) return false
 
     const { license, lastReport } = data
-    if (this.needRefresh(license)) return await this.refresh(license, plugin)
+    if (this.needRefresh(license)) return await this.refresh(license)
 
-    this.reportDaily(license, lastReport, plugin).catch(() => {})
+    this.reportDaily(license, lastReport).catch(() => {})
     return true
   }
 
   // 每日上报
-  private static async reportDaily(license: LicenseInfo, lastReport: string, plugin: any) {
-    if (lastReport !== new Date().toDateString()) await this.refresh(license, plugin)
+  private static async reportDaily(license: LicenseInfo, lastReport: string) {
+    if (lastReport !== new Date().toDateString()) await this.refresh(license)
   }
 
   // 需要刷新
@@ -162,7 +164,7 @@ export class LicenseManager {
   }
 
   // 保存（加密）
-  private static async save(license: LicenseInfo, lastReport: string, plugin: any) {
+  private static async save(license: LicenseInfo, lastReport: string) {
     const key = await this.deriveKey(license.userId)
     const iv = crypto.getRandomValues(new Uint8Array(12))
     const encrypted = await crypto.subtle.encrypt(
@@ -175,16 +177,16 @@ export class LicenseManager {
     combined.set(iv)
     combined.set(new Uint8Array(encrypted), iv.length)
 
-    await plugin.saveData(this.KEY, { 
+    await saveData(this.KEY, {
       encrypted: btoa(String.fromCharCode(...combined)),
       lastReport
     })
   }
 
   // 读取（解密）
-  private static async load(plugin: any): Promise<{ license: LicenseInfo, lastReport: string } | null> {
+  private static async load(): Promise<{ license: LicenseInfo, lastReport: string } | null> {
     try {
-      const data = await plugin.loadData(this.KEY)
+      const data = await loadData<{ encrypted?: string, lastReport?: string }>(this.KEY)
       if (!data?.encrypted) return null
 
       const user = await this.getUser()
@@ -269,14 +271,14 @@ export class LicenseManager {
   }
 
   // 清除
-  static async clear(plugin: any) {
-    await plugin.saveData(this.KEY, null)
+  static async clear() {
+    await removeData(this.KEY)
   }
 
   // 获取许可证
-  static async getLicense(plugin: any): Promise<LicenseInfo | null> {
-    await this.verify(plugin)
-    const data = await this.load(plugin)
+  static async getLicense(): Promise<LicenseInfo | null> {
+    await this.verify()
+    const data = await this.load()
     return data ? this.enrich(data.license) : null
   }
 }

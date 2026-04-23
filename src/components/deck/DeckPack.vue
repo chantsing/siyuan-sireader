@@ -115,7 +115,6 @@ import { ref, computed, onMounted, h, watch } from 'vue'
 import { fetchSyncPost, showMessage } from 'siyuan'
 import type { Pack } from './types'
 import { syncAllSiyuanDecks } from './siyuan-card'
-import { usePlugin } from '@/main'
 import { useLicense } from '@/composables/useLicense'
 
 const props = defineProps<{
@@ -126,8 +125,7 @@ const props = defineProps<{
   i18n?: any
 }>()
 
-const plugin = usePlugin()
-const { can, showUpgrade } = useLicense(plugin, props.i18n || {})
+const { can, showUpgrade } = useLicense(props.i18n || {})
 
 const emit = defineEmits<{
   save: [data: any]

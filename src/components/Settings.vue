@@ -3,7 +3,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { showMessage } from 'siyuan'
 import type { ReaderSettings, FontFileInfo } from '@/composables/useSetting'
-import { PRESET_THEMES, UI_CONFIG, useSetting, useConfirm } from '@/composables/useSetting'
+import { PRESET_THEMES, UI_CONFIG, useSetting, useConfirm, useDocSearch, useNotebooks, LINK_FORMAT_PRESETS } from '@/composables/useSetting'
 import BookSearch from './BookSearch.vue'
 import BookShelf from './BookShelf.vue'
 import ReaderToc from './ReaderToc.vue'
@@ -26,7 +26,7 @@ const licenseRef = ref<HTMLElement>()
 const plugin = usePlugin()
 const {canShowToc} = useReaderState()
 const {customFonts,isLoadingFonts,loadCustomFonts,resetStyles:resetStylesRaw} = useSetting(plugin)
-const {interfaceItems,customThemeItems,appearanceGroups,ttsItems,ttsVoiceParams,ttsOptions} = UI_CONFIG
+const {interfaceItems,customThemeItems,appearanceGroups,ttsItems,ttsOptions} = UI_CONFIG
 const {confirming:resetConfirm,handleClick:handleReset} = useConfirm(() => {resetStylesRaw();save()})
 
 // TTS
@@ -40,11 +40,7 @@ const loadTTS = async () => {
     const [local,online] = await Promise.allSettled([loadLocalVoices(),loadOnlineVoices()])
     ttsVoices.value = [...(local.status==='fulfilled'?local.value:[]),...(online.status==='fulfilled'?online.value:[])]
     if (!ttsVoices.value.length) showMessage(props.i18n.loadVoicesFailed||'加载失败',3000,'error')
-  } catch (e:any) {
-    showMessage(e.message||props.i18n.loadVoicesFailed||'加载失败',3000,'error')
-  } finally {
-    loadingTTS.value = false
-  }
+  } catch (e:any) { showMessage(e.message||props.i18n.loadVoicesFailed||'加载失败',3000,'error') } finally { loadingTTS.value = false }
 }
 const selectVoice = (name:string,isLocal:boolean) => {if (!isLocal&&!can.value('tts-online')) return showUpgrade('在线语音'); if (settings.value.tts) {settings.value.tts.voice=name;save()}}
 const toggleFav = (voice:any) => {
@@ -52,16 +48,13 @@ const toggleFav = (voice:any) => {
   const fav = settings.value.tts.favoriteVoices||[]
   const idx = fav.findIndex(v => v.name===voice.name)
   idx>=0?fav.splice(idx,1):fav.push({name:voice.name,displayName:voice.displayName,locale:voice.locale,isLocal:voice.isLocal})
-  settings.value.tts.favoriteVoices = fav
-  showMessage(idx>=0?(props.i18n.deleted||'已删除'):(props.i18n.ttsVoiceFavorited||'已收藏'),1500,'info')
-  save()
+  settings.value.tts.favoriteVoices = fav; showMessage(idx>=0?(props.i18n.deleted||'已删除'):(props.i18n.ttsVoiceFavorited||'已收藏'),1500,'info'); save()
 }
 const isFav = (name:string) => (settings.value.tts?.favoriteVoices||[]).some(v => v.name===name)
 const myVoices = computed(() => [...ttsVoices.value.filter(v => v.isLocal),...(settings.value.tts?.favoriteVoices||[]).filter(v => !v.isLocal)])
 const onlineVoices = computed(() => ttsVoices.value.filter(v => !v.isLocal))
 watch(() => props.modelValue,v => settings.value=v,{immediate:true})
-
-// 词典
+// 词典与笔记插入
 const offlineDicts = ref<any[]>([])
 const onlineDicts = ref<any[]>([])
 const fileInput = ref<HTMLInputElement>()
@@ -69,17 +62,56 @@ const uploading = ref(false)
 const loadingDict = ref(true)
 const fontsLoaded = ref(false)
 const removingDict = ref<string|null>(null)
-const quickDocSearch = ref('')
-const quickDocResults = ref<any[]>([])
-const {license,userAvatar,code:activationCode,loading:loadingLicense,processing,load:loadLicense,activate:activateLicense,recover:recoverLicense,clear:clearLicense,status:getLicenseStatus,can,showUpgrade} = useLicense(plugin,props.i18n)
+const quickDoc = useDocSearch()
+const insertDoc = useDocSearch()
+const {notebooks,load:loadNotebooks} = useNotebooks()
+const {license,userAvatar,code:activationCode,loading:loadingLicense,processing,load:loadLicense,activate:activateLicense,recover:recoverLicense,clear:clearLicense,can,showUpgrade} = useLicense(props.i18n)
+const ttsFields = computed(() => [...ttsItems, ...ttsOptions.map(item => ({ ...item, desc: ttsI18nKey(item.key,'Desc') }))])
+const noteTargetOptions = ['clipboard','current','notebook','document','dailynote'] as const
+const noteModeOptions = ['insertBlock','prependBlock','appendBlock','updateBlock','prependDoc','appendDoc'] as const
+const linkFormatPresetOptions = Object.keys(LINK_FORMAT_PRESETS) as (keyof typeof LINK_FORMAT_PRESETS)[]
+const noteModeLabels = { insertBlock: 'noteInsertModeCursor', prependBlock: 'noteInsertModeBefore', appendBlock: 'noteInsertModeAfter', updateBlock: 'noteInsertModeReplace', prependDoc: 'noteInsertModeDocTop', appendDoc: 'noteInsertModeDocBottom' } as const
+const selectField = (key:string, label:string, value:string, options:any[], set:(value:string)=>void, show=true, empty='') => ({ key, type: 'select', label, value, options, set, show, empty })
+const searchField = (key:string, label:string, docs:any[], input:string, results:any[], search:()=>void, select:(doc:any)=>void, remove:(doc:any,i:number)=>void, show=true, hint='', drag?:'quickDoc') => ({ key, type: 'search', label, docs, input, results, search, select, remove, show, hint, drag })
+const dictSections = computed(() => [
+  {
+    key: 'offlineDict', title: props.i18n.offlineDict||'离线词典', items: offlineDicts.value, empty: props.i18n.noDicts||'暂无离线词典',
+    extra: true, toggle: (id:string) => toggleDict(offlineDictManager,offlineDicts,id), desc: (d:any) => d.type==='stardict'?'StarDict':'dictd', drop: (e:DragEvent,i:number) => dragDrop(e,i,'dict',offlineDicts,offlineDictManager)
+  },
+  {
+    key: 'onlineDict', title: props.i18n.onlineDict||'在线词典', items: onlineDicts.value, empty: '', toggle: (id:string) => toggleDict(onlineDictManager,onlineDicts,id), desc: (d:any) => d.desc, drop: (e:DragEvent,i:number) => dragDrop(e,i,'dict',onlineDicts,onlineDictManager)
+  }
+])
+const voiceSections = computed(() => [
+  {
+    key: 'ttsFavorites', title: props.i18n.ttsFavoriteVoices||'我的语音', hint: `${props.i18n.ttsCurrentVoice||'当前'}: ${settings.value.tts?.voice||''}`,
+    items: myVoices.value, empty: props.i18n.ttsNoFavorites||'暂无，请点击下方加载', pick: (v:any) => selectVoice(v.name,v.isLocal), action: (v:any) => !v.isLocal && toggleFav(v),
+    actionText: (v:any) => v.isLocal ? '' : '×', actionTitle: () => '', meta: (v:any) => v.isLocal ? '🎤 本地' : v.locale, showLoad: false
+  },
+  {
+    key: 'ttsVoices', title: props.i18n.ttsVoiceList||'在线语音', hint: props.i18n.ttsOnlineHint||'点击语音名称选择，点击星号收藏',
+    items: onlineVoices.value, empty: props.i18n.ttsNoVoices||'暂无语音', pick: (v:any) => selectVoice(v.name,false), action: (v:any) => toggleFav(v),
+    actionText: (v:any) => isFav(v.name)?'★':'☆', actionTitle: (v:any) => isFav(v.name)?'取消收藏':'收藏', meta: (v:any) => v.locale, showLoad: true
+  }
+])
+const noteFields = computed(() => [
+  selectField('noteInsertTarget', props.i18n.noteInsertTarget || '插入位置', settings.value.noteInsertTarget, noteTargetOptions.map(value => ({ value, label: props.i18n[`noteInsertTarget${value.charAt(0).toUpperCase()}${value.slice(1)}`] || value })), value => (settings.value.noteInsertTarget = value as any, save())),
+  selectField('noteInsertMode', props.i18n.noteInsertMode || '插入方式', settings.value.noteInsertMode, noteModeOptions.map(value => ({ value, label: props.i18n[noteModeLabels[value]] || value })), value => (settings.value.noteInsertMode = value as any, save()), settings.value.noteInsertTarget === 'current'),
+  selectField('notebookId', props.i18n.notebookId || props.i18n.notebook || '笔记本', settings.value.notebookId || '', notebooks.value.map((nb:any) => ({ value: nb.id, label: nb.name })), value => (settings.value.notebookId = value, save()), ['notebook', 'dailynote'].includes(settings.value.noteInsertTarget), props.i18n.notSelected || '未选择'),
+  selectField('linkFormatPreset', props.i18n.linkFormatPreset || '模板预设', '', linkFormatPresetOptions.map(value => ({ value, label: props.i18n[`linkFormatPreset${value.charAt(0).toUpperCase()}${value.slice(1)}`] || value })), applyLinkFormatPreset, true, props.i18n.selectPreset || '请选择'),
+  { key: 'linkFormat', type: 'textarea', label: props.i18n.linkFormat || '链接格式', value: settings.value.linkFormat, hint: props.i18n.linkFormatDesc || '可用变量：书名 作者 章节 位置 链接 文本 笔记 截图' },
+  searchField('parentDoc', props.i18n.parentDoc || '父文档', settings.value.parentDoc ? [settings.value.parentDoc] : [], insertDoc.state.input, insertDoc.state.results, insertDoc.search, doc => insertDoc.select(doc, selectInsertDoc), () => clearInsertDoc(), settings.value.noteInsertTarget === 'document'),
+  searchField('quickSendDocs', props.i18n.quickSendDocs || '快捷发送文档', settings.value.quickSendDocs || [], quickDoc.state.input, quickDoc.state.results, quickDoc.search, doc => quickDoc.select(doc, addQuickDoc), (_doc:any, i:number) => removeQuickDoc(i), true, props.i18n.quickSendDocsDesc || '用于快速发送标注', 'quickDoc')
+].filter((item:any) => item.show !== false))
 
-// 方法
-const toggleAccordion = (key:string) => activeAccordion.value=activeAccordion.value===key?'':key
+// 交互方法
+const toggleAccordion = (key:string) => activeAccordion.value = activeAccordion.value === key ? '' : key
 const toggleSub = async (key:string) => {
-  activeSub.value = activeSub.value===key?'':key
-  if (key==='customFont'&&!fontsLoaded.value&&activeSub.value===key) {await loadCustomFonts();fontsLoaded.value=true}
-  if ((key==='ttsFavorites'||key==='ttsVoices')&&activeSub.value===key&&!ttsVoices.value.length) await loadTTS()
+  activeSub.value = activeSub.value === key ? '' : key
+  if (key === 'customFont' && !fontsLoaded.value && activeSub.value === key) { await loadCustomFonts(); fontsLoaded.value = true }
+  if ((key === 'ttsFavorites' || key === 'ttsVoices') && activeSub.value === key && !ttsVoices.value.length) await loadTTS()
 }
+watch(activeAccordion, key => key === 'other' && loadNotebooks())
 const handleUpload = async (e:Event) => {
   const files = (e.target as HTMLInputElement).files
   if (!files?.length) return
@@ -87,45 +119,51 @@ const handleUpload = async (e:Event) => {
   try {
     await offlineDictManager.addDict(files)
     offlineDicts.value = offlineDictManager.getDicts()
-    showMessage(`${props.i18n.addedDict||'添加'} ${files.length} ${props.i18n.dictFiles||'个词典文件'}`,2000,'info')
-  } catch (e:any) {
-    showMessage(e.message||props.i18n.addFailed||'添加失败',3000,'error')
-  } finally {
-    uploading.value = false
-    if (fileInput.value) fileInput.value.value = ''
-  }
+    showMessage(`${props.i18n.addedDict || '添加'} ${files.length} ${props.i18n.dictFiles || '个词典文件'}`, 2000, 'info')
+  } catch (e:any) { showMessage(e.message || props.i18n.addFailed || '添加失败', 3000, 'error') } finally { uploading.value = false; if (fileInput.value) fileInput.value.value = '' }
 }
-const removeDict = async (id:string) => {await offlineDictManager.removeDict(id);offlineDicts.value=offlineDictManager.getDicts();removingDict.value=null;showMessage(props.i18n.deleted||'已删除',1500,'info')}
-const toggleDict = async (manager:any,ref:any,id:string) => {await manager.toggleDict(id);ref.value=manager.getDicts()}
-const searchQuickDocs=async()=>{const k=quickDocSearch.value.trim();if(!k){quickDocResults.value=[];return};const{searchDocs}=await import('@/composables/useSetting');quickDocResults.value=(await searchDocs(k)).slice(0,10)}
-const addQuickDoc=(doc:any)=>{const id=doc.path?.split('/').pop()?.replace('.sy','')||doc.id;const name=doc.hPath||doc.content||'无标题';if(!settings.value.quickSendDocs)settings.value.quickSendDocs=[];if(settings.value.quickSendDocs.some(d=>d.id===id))return showMessage('已存在',2000,'error');settings.value.quickSendDocs.push({id,name});quickDocSearch.value='';quickDocResults.value=[];save()}
-const removeQuickDoc=(i:number)=>{settings.value.quickSendDocs.splice(i,1);save()}
-// 拖拽
-let dragFrom=-1
-const dragStart=(e:DragEvent,i:number)=>{dragFrom=i;(e.target as HTMLElement).style.opacity='0.4'}
-const dragEnd=(e:DragEvent)=>{(e.target as HTMLElement).style.opacity='1';dragFrom=-1}
-const dragOver=(e:DragEvent)=>e.preventDefault()
-const dragDrop=async(e:DragEvent,to:number,type:'nav'|'dict'|'quickDoc',ref?:any,mgr?:any)=>{
+const removeDict = async (id:string) => { await offlineDictManager.removeDict(id); offlineDicts.value = offlineDictManager.getDicts(); removingDict.value = null; showMessage(props.i18n.deleted || '已删除', 1500, 'info') }
+const toggleDict = async (manager:any, ref:any, id:string) => { await manager.toggleDict(id); ref.value = manager.getDicts() }
+const addQuickDoc = (doc:any) => {
+  if (!settings.value.quickSendDocs) settings.value.quickSendDocs = []
+  if (settings.value.quickSendDocs.some(d => d.id === doc.id)) return showMessage(props.i18n.alreadyExists || '已存在', 2000, 'error')
+  settings.value.quickSendDocs.push(doc)
+  save()
+}
+const removeQuickDoc = (i:number) => { settings.value.quickSendDocs.splice(i, 1); save() }
+const selectInsertDoc = (doc:any) => { settings.value.parentDoc = doc; settings.value.notebookId = doc.notebook; save() }
+const clearInsertDoc = () => { settings.value.parentDoc = undefined; insertDoc.reset(); save() }
+const applyLinkFormatPreset = (preset:string) => {
+  const format = LINK_FORMAT_PRESETS[preset as keyof typeof LINK_FORMAT_PRESETS]
+// 拖拽排序
+  if (!format) return; settings.value.linkFormat = format; save()
+}
+let dragFrom = -1
+const dragStart = (e:DragEvent, i:number) => { dragFrom = i; (e.target as HTMLElement).style.opacity = '0.4' }
+const dragEnd = (e:DragEvent) => { (e.target as HTMLElement).style.opacity = '1'; dragFrom = -1 }
+const dragOver = (e:DragEvent) => e.preventDefault()
+const dragDrop = async (e:DragEvent, to:number, type:'nav'|'dict'|'quickDoc', ref?:any, mgr?:any) => {
   e.preventDefault()
-  if(dragFrom===-1||dragFrom===to)return
-  if(type==='nav'){const arr=[...navItems.value];arr.splice(to,0,...arr.splice(dragFrom,1));arr.forEach((v,i)=>v.order=i);settings.value.navItems=arr;save()}
-  else if(type==='quickDoc'){const arr=[...settings.value.quickSendDocs];arr.splice(to,0,...arr.splice(dragFrom,1));settings.value.quickSendDocs=arr;save()}
-  else{const arr=[...ref.value];arr.splice(to,0,...arr.splice(dragFrom,1));await mgr.sortDicts(arr.map((d:any)=>d.id));ref.value=arr}
+  if (dragFrom === -1 || dragFrom === to) return
+  if (type === 'nav') { const arr = [...navItems.value]; arr.splice(to, 0, ...arr.splice(dragFrom, 1)); arr.forEach((v, i) => v.order = i); settings.value.navItems = arr; save() }
+  else if (type === 'quickDoc') { const arr = [...settings.value.quickSendDocs]; arr.splice(to, 0, ...arr.splice(dragFrom, 1)); settings.value.quickSendDocs = arr; save() }
+  else { const arr = [...ref.value]; arr.splice(to, 0, ...arr.splice(dragFrom, 1)); await mgr.sortDicts(arr.map((d:any) => d.id)); ref.value = arr }
 }
-const ttsI18nKey = (key:string,suffix='') => `tts${key.charAt(0).toUpperCase()}${key.slice(1)}${suffix}`
+const ttsI18nKey = (key:string, suffix='') => `tts${key.charAt(0).toUpperCase()}${key.slice(1)}${suffix}`
 
 // 计算属性
-const tooltipDir = computed(() => ({'left':'e','right':'w','top':'s','bottom':'n'}[settings.value.navPosition]||'n'))
+const tooltipDir = computed(() => ({ left: 'e', right: 'w', top: 's', bottom: 'n' }[settings.value.navPosition] || 'n'))
 const navItems = computed(() => (settings.value.navItems || [
-  {id:'bookshelf',icon:'lucide-library-big',tip:'bookshelf',enabled:true,order:0},
-  {id:'search',icon:'lucide-book-search',tip:'search',enabled:true,order:1},
-  {id:'deck',icon:'lucide-wallet-cards',tip:'卡包',enabled:true,order:2},
-  {id:'toc',icon:'lucide-scroll-text',tip:'目录',enabled:true,order:3},
-  {id:'bookmark',icon:'lucide-bookmark-check',tip:'书签',enabled:true,order:4},
-  {id:'mark',icon:'lucide-square-pen',tip:'标注',enabled:true,order:5},
-  {id:'appearance',icon:'lucide-settings-2',tip:'设置',enabled:true,order:7}
-]).filter(item => item.id !== 'dictionary').sort((a,b) => a.order - b.order))
+  { id: 'bookshelf', icon: 'lucide-library-big', tip: 'bookshelf', enabled: true, order: 0 },
+  { id: 'search', icon: 'lucide-book-search', tip: 'search', enabled: true, order: 1 },
+  { id: 'deck', icon: 'lucide-wallet-cards', tip: '卡包', enabled: true, order: 2 },
+  { id: 'toc', icon: 'lucide-scroll-text', tip: '目录', enabled: true, order: 3 },
+  { id: 'bookmark', icon: 'lucide-bookmark-check', tip: '书签', enabled: true, order: 4 },
+  { id: 'mark', icon: 'lucide-square-pen', tip: '标注', enabled: true, order: 5 },
+  { id: 'appearance', icon: 'lucide-settings-2', tip: '设置', enabled: true, order: 7 }
+]).filter(item => item.id !== 'dictionary').sort((a, b) => a.order - b.order))
 const tabs = computed(() => navItems.value.filter(item => item.enabled && (item.id === 'appearance' || item.id === 'bookshelf' || item.id === 'search' || item.id === 'deck' || canShowToc.value)).map(item => ({id:item.id as any,icon:item.icon,tip:item.tip})))
+
 // 预览样式
 const previewStyle = computed(() => {
   const theme = settings.value.theme === 'custom' ? settings.value.customTheme : PRESET_THEMES[settings.value.theme]
@@ -150,11 +188,7 @@ const openMembershipInfo = () => window.open('https://sireader.745201.xyz','_bla
 ;(window as any)._openLicense = () => {
   activeTab.value = 'appearance'
   activeAccordion.value = 'license'
-  setTimeout(() => {
-    licenseRef.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    licenseRef.value?.classList.add('license-highlight')
-    setTimeout(() => licenseRef.value?.classList.remove('license-highlight'), 2000)
-  }, 50)
+  setTimeout(() => { licenseRef.value?.scrollIntoView({ behavior: 'smooth', block: 'center' }); licenseRef.value?.classList.add('license-highlight'); setTimeout(() => licenseRef.value?.classList.remove('license-highlight'), 2000) }, 50)
 }
 
 // 生命周期
@@ -177,7 +211,7 @@ watch(canShowToc,(show) => !show&&['toc','bookmark','mark'].includes(activeTab.v
         <div class="sr-preview-hf" @click="togglePreview"><span>{{i18n.livePreview||'实时预览'}}</span><svg class="sr-preview-toggle"><use :xlink:href="previewExpanded?'#iconContract':'#iconExpand'"/></svg></div>
         <Transition name="expand"><div v-show="previewExpanded" class="sr-preview-body"><p>春江潮水连海平，海上明月共潮生。</p><p>滟滟随波千万里，何处春江无月明。</p></div></Transition>
         <div v-if="previewExpanded" class="sr-preview-hf">{{settings.viewMode==='double'?'双页':settings.viewMode==='scroll'?'连续滚动':'单页'}}</div>
-              </div>
+      </div>
       <Transition name="slide" mode="out-in">
         <div v-if="activeTab==='appearance'" :key="activeTab" class="sr-section">
           <div ref="licenseRef" class="ds-card ds-accordion" data-name="license" @click="toggleAccordion('license')">
@@ -199,16 +233,10 @@ watch(canShowToc,(show) => !show&&['toc','bookmark','mark'].includes(activeTab.v
               <div v-if="activeAccordion==='license'" @click.stop>
                 <div v-if="loadingLicense" class="sr-empty">{{i18n.loading||'加载中'}}...</div>
                 <template v-else>
-                  <div v-if="license" class="license-actions">
-                    <button class="b3-button b3-button--text" @click="clearLicense">{{i18n.logout||'退出登录'}}</button>
-                    <button class="b3-button b3-button--text" @click="openPurchasePage">{{i18n.purchase||'购买'}}</button>
-                  </div>
+                  <div v-if="license" class="license-actions"><button class="b3-button b3-button--text" @click="clearLicense">{{i18n.logout||'退出登录'}}</button><button class="b3-button b3-button--text" @click="openPurchasePage">{{i18n.purchase||'购买'}}</button></div>
                   <div v-else class="license-actions">
                     <input v-model="activationCode" type="text" class="b3-text-field" :placeholder="i18n.enterActivationCode||'请输入激活码'" :disabled="processing">
-                    <div class="license-btn-row">
-                      <button class="b3-button b3-button--outline" :disabled="processing||!activationCode.trim()" @click="activateLicense">{{processing?(i18n.processing||'处理中'):(i18n.activate||'激活')}}</button>
-                      <button class="b3-button b3-button--text" :disabled="processing" @click="recoverLicense">{{i18n.recover||'恢复授权'}}</button>
-                    </div>
+                    <div class="license-btn-row"><button class="b3-button b3-button--outline" :disabled="processing||!activationCode.trim()" @click="activateLicense">{{processing?(i18n.processing||'处理中'):(i18n.activate||'激活')}}</button><button class="b3-button b3-button--text" :disabled="processing" @click="recoverLicense">{{i18n.recover||'恢复授权'}}</button></div>
                     <button class="b3-button b3-button--text" @click="openPurchasePage">{{i18n.purchase||'购买'}}</button>
                   </div>
                 </template>
@@ -254,15 +282,7 @@ watch(canShowToc,(show) => !show&&['toc','bookmark','mark'].includes(activeTab.v
                   </select>
                   <small>{{i18n.presetThemeDesc}}</small>
                 </div>
-                <Transition name="expand">
-                  <div v-if="settings.theme==='custom'">
-                    <div class="ds-divider"></div>
-                    <div v-for="item in customThemeItems" :key="item.key" class="ds-field">
-                      <label>{{i18n[item.label]}}</label>
-                      <input v-model="settings.customTheme[item.key]" :type="item.type" :class="item.type==='color'?'ds-color':'b3-text-field'" @change="can('reader-theme')?save():showUpgrade('主题配色')">
-                    </div>
-                  </div>
-                </Transition>
+                <Transition name="expand"><div v-if="settings.theme==='custom'"><div class="ds-divider"></div><div v-for="item in customThemeItems" :key="item.key" class="ds-field"><label>{{i18n[item.label]}}</label><input v-model="settings.customTheme[item.key]" :type="item.type" :class="item.type==='color'?'ds-color':'b3-text-field'" @change="can('reader-theme')?save():showUpgrade('主题配色')"></div></div></Transition>
               </div>
             </Transition>
           </div>
@@ -282,7 +302,7 @@ watch(canShowToc,(show) => !show&&['toc','bookmark','mark'].includes(activeTab.v
                     <div class="ds-sub-title">{{i18n.customFont||'自定义字体'}}<svg class="ds-arrow" :class="{expanded:activeSub==='customFont'}" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></div>
                     <Transition name="expand">
                       <div v-if="activeSub==='customFont'">
-                        <small class="ds-hint"><code>data/plugins/custom-fonts/</code> <button class="ds-link-btn" @click.stop="loadCustomFonts(true)" :disabled="isLoadingFonts">{{i18n.fontTip||'刷新'}}</button></small>
+                        <small class="ds-hint"><code>data/plugins/custom-fonts/</code> <button class="ds-link-btn" @click.stop="loadCustomFonts(true)" :disabled="isLoadingFonts">{{i18n.fontTip||'刷新字体列表'}}</button></small>
                         <div v-if="isLoadingFonts" class="sr-empty">{{i18n.loadingFonts}}</div>
                         <div v-else-if="customFonts.length" class="ds-list ds-list-scroll">
                           <div v-for="f in customFonts" :key="f.name" class="ds-list-item ds-list-item-simple" :class="{active:settings.textSettings.customFont.fontFile===f.name}" @click.stop="setFont(f)">
@@ -307,38 +327,28 @@ watch(canShowToc,(show) => !show&&['toc','bookmark','mark'].includes(activeTab.v
               <div v-if="activeAccordion==='dictionary'" @click.stop>
                 <div v-if="loadingDict" class="sr-empty">{{i18n.loading||'加载中...'}}</div>
                 <template v-else>
-                  <div class="ds-sub-accordion" @click.stop="toggleSub('offlineDict')">
-                    <div class="ds-sub-title">{{i18n.offlineDict||'离线词典'}}<svg class="ds-arrow" :class="{expanded:activeSub==='offlineDict'}" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></div>
+                  <div v-for="section in dictSections" :key="section.key" class="ds-sub-accordion" @click.stop="toggleSub(section.key)">
+                    <div v-if="section.key==='onlineDict'" class="ds-divider"></div>
+                    <div class="ds-sub-title">{{section.title}}<svg class="ds-arrow" :class="{expanded:activeSub===section.key}" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></div>
                     <Transition name="expand">
-                      <div v-if="activeSub==='offlineDict'">
-                        <input ref="fileInput" type="file" multiple accept=".ifo,.idx,.dz,.index,.syn" style="display:none" @change="handleUpload">
-                        <button class="ds-btn-add" :disabled="uploading" @click.stop="can('dict-offline')?fileInput?.click():showUpgrade('离线词典')"><svg><use xlink:href="#iconUpload"/></svg>{{uploading?(i18n.uploading||'上传中...'):(i18n.addDict||'添加词典')}}</button>
-                        <small class="ds-hint">{{i18n.dictFormatHint||'支持 StarDict 和 dictd 格式'}} <a href="https://github.com/mm-o/siyuan-sireader/blob/main/docs/离线词典使用说明.md" target="_blank">{{i18n.downloadDict||'下载词典'}}</a></small>
-                        <div v-if="offlineDicts.length" class="ds-list">
-                          <div v-for="(d,idx) in offlineDicts" :key="d.id" class="ds-list-item" draggable="true" @dragstart="dragStart($event,idx)" @dragend="dragEnd" @dragover="dragOver" @drop="dragDrop($event,idx,'dict',offlineDicts,offlineDictManager)">
+                      <div v-if="activeSub===section.key">
+                        <template v-if="section.extra">
+                          <input ref="fileInput" type="file" multiple accept=".ifo,.idx,.dz,.index,.syn" style="display:none" @change="handleUpload">
+                          <button class="ds-btn-add" :disabled="uploading" @click.stop="can('dict-offline')?fileInput?.click():showUpgrade('离线词典')"><svg><use xlink:href="#iconUpload"/></svg>{{uploading?(i18n.uploading||'上传中...'):(i18n.addDict||'添加词典')}}</button>
+                          <small class="ds-hint">{{i18n.dictFormatHint||'支持 StarDict 和 dictd 格式'}} <a href="https://github.com/mm-o/siyuan-sireader/blob/main/docs/%E7%A6%BB%E7%BA%BF%E8%AF%8D%E5%85%B8%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E.md" target="_blank">{{i18n.downloadDict||'下载词典'}}</a></small>
+                        </template>
+                        <div v-if="section.items.length" class="ds-list">
+                          <div v-for="(d,idx) in section.items" :key="d.id" class="ds-list-item" draggable="true" @dragstart="dragStart($event,idx)" @dragend="dragEnd" @dragover="dragOver" @drop="section.drop($event,idx)">
                             <svg class="ds-list-handle" viewBox="0 0 24 24"><path d="M9 3h2v2H9V3m4 0h2v2h-2V3M9 7h2v2H9V7m4 0h2v2h-2V7m-4 4h2v2H9v-2m4 0h2v2h-2v-2m-4 4h2v2H9v-2m4 0h2v2h-2v-2m-4 4h2v2H9v-2m4 0h2v2h-2v-2Z"/></svg>
-                            <div class="ds-list-label"><div>{{d.name}}</div><small>{{d.type==='stardict'?'StarDict':'dictd'}}</small></div>
-                            <Transition name="fade"><div v-if="removingDict===d.id" class="sr-confirm" @click.stop><button @click="removingDict=null">{{i18n.cancel||'取消'}}</button><button @click="removeDict(d.id)" class="btn-delete">{{i18n.delete||'删除'}}</button></div></Transition>
-                            <div v-if="removingDict!==d.id" class="ds-list-btns">
-                              <input type="checkbox" :checked="d.enabled" class="b3-switch" @change="toggleDict(offlineDictManager,offlineDicts,d.id)">
-                              <button @click.stop="removingDict=d.id" class="ds-list-btn ds-list-btn-del">×</button>
+                            <div class="ds-list-label"><div>{{d.name}}</div><small>{{section.desc(d)}}</small></div>
+                            <Transition v-if="section.extra" name="fade"><div v-if="removingDict===d.id" class="sr-confirm" @click.stop><button @click="removingDict=null">{{i18n.cancel||'取消'}}</button><button @click="removeDict(d.id)" class="btn-delete">{{i18n.delete||'删除'}}</button></div></Transition>
+                            <div :class="section.extra?'ds-list-btns':''">
+                              <input type="checkbox" :checked="d.enabled" class="b3-switch" @change="section.toggle(d.id)">
+                              <button v-if="section.extra&&removingDict!==d.id" @click.stop="removingDict=d.id" class="ds-list-btn ds-list-btn-del">×</button>
                             </div>
                           </div>
                         </div>
-                        <div v-else class="sr-empty">{{i18n.noDicts||'暂无离线词典'}}</div>
-                      </div>
-                    </Transition>
-                  </div>
-                  <div class="ds-divider"></div>
-                  <div class="ds-sub-accordion" @click.stop="toggleSub('onlineDict')">
-                    <div class="ds-sub-title">{{i18n.onlineDict||'在线词典'}}<svg class="ds-arrow" :class="{expanded:activeSub==='onlineDict'}" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></div>
-                    <Transition name="expand">
-                      <div v-if="activeSub==='onlineDict'" class="ds-list">
-                        <div v-for="(d,idx) in onlineDicts" :key="d.id" class="ds-list-item" draggable="true" @dragstart="dragStart($event,idx)" @dragend="dragEnd" @dragover="dragOver" @drop="dragDrop($event,idx,'dict',onlineDicts,onlineDictManager)">
-                          <svg class="ds-list-handle" viewBox="0 0 24 24"><path d="M9 3h2v2H9V3m4 0h2v2h-2V3M9 7h2v2H9V7m4 0h2v2h-2V7m-4 4h2v2H9v-2m4 0h2v2h-2v-2m-4 4h2v2H9v-2m4 0h2v2h-2v-2m-4 4h2v2H9v-2m4 0h2v2h-2v-2Z"/></svg>
-                          <div class="ds-list-label"><div>{{d.name}}</div><small>{{d.desc}}</small></div>
-                          <input type="checkbox" :checked="d.enabled" class="b3-switch" @change="toggleDict(onlineDictManager,onlineDicts,d.id)">
-                        </div>
+                        <div v-else-if="section.empty" class="sr-empty">{{section.empty}}</div>
                       </div>
                     </Transition>
                   </div>
@@ -347,30 +357,29 @@ watch(canShowToc,(show) => !show&&['toc','bookmark','mark'].includes(activeTab.v
             </Transition>
           </div>
           <div class="ds-card ds-accordion" @click="toggleAccordion('other')">
-            <h3>{{i18n.otherSettings||'其他设置'}}<svg class="ds-arrow" :class="{expanded:activeAccordion==='other'}" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></h3>
+            <h3>{{i18n.noteInsert||'笔记插入'}}<svg class="ds-arrow" :class="{expanded:activeAccordion==='other'}" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></h3>
             <Transition name="expand">
               <div v-if="activeAccordion==='other'" @click.stop>
-                <div class="ds-field">
-                  <label>{{i18n.linkFormat||'链接格式'}}</label>
-                  <textarea v-model="settings.linkFormat" class="b3-text-field" rows="4" @input="debouncedSave"/>
-                  <small>{{i18n?.linkFormatDesc||'可用变量：书名 作者 章节 位置 链接 文本 笔记 截图'}}</small>
-                </div>
-                <div class="ds-field">
-                  <label>{{i18n.quickSendDocs||'快捷发送文档'}}</label>
-                  <div v-if="settings.quickSendDocs?.length" class="ds-list">
-                    <div v-for="(doc,i) in settings.quickSendDocs" :key="doc.id" class="ds-list-item" draggable="true" @dragstart="dragStart($event,i)" @dragend="dragEnd" @dragover="dragOver" @drop="dragDrop($event,i,'quickDoc')">
-                      <svg class="ds-list-handle" viewBox="0 0 24 24"><path d="M9 3h2v2H9V3m4 0h2v2h-2V3M9 7h2v2H9V7m4 0h2v2h-2V7m-4 4h2v2H9v-2m4 0h2v2h-2v-2m-4 4h2v2H9v-2m4 0h2v2h-2v-2m-4 4h2v2H9v-2m4 0h2v2h-2v-2Z"/></svg>
-                      <div class="ds-list-label"><div>{{doc.name}}</div></div>
-                      <button @click="removeQuickDoc(i)" class="ds-list-btn ds-list-btn-del">×</button>
+                <div v-for="field in noteFields" :key="field.key" class="ds-field" :class="{select:field.type==='select'}">
+                  <label>{{field.label}}</label>
+                  <select v-if="field.type==='select'" :value="field.value" class="b3-select" @change="field.set(($event.target as HTMLSelectElement).value)">
+                    <option v-if="field.empty" value="">{{field.empty}}</option><option v-for="opt in (field.options||[])" :key="opt.value" :value="opt.value">{{opt.label}}</option>
+                  </select>
+                  <template v-else>
+                    <textarea v-if="field.type==='textarea'" v-model="settings.linkFormat" class="b3-text-field" rows="3" @input="debouncedSave"/>
+                  <template v-else>
+                    <div class="ds-list" v-if="(field.docs||[]).length">
+                      <div v-for="(doc,i) in (field.docs||[])" :key="doc.id" class="ds-list-item" :draggable="!!field.drag" @dragstart="field.drag&&dragStart($event,i)" @dragend="field.drag&&dragEnd($event)" @dragover="field.drag&&dragOver($event)" @drop="field.drag&&dragDrop($event,i,field.drag)"><svg v-if="field.drag" class="ds-list-handle" viewBox="0 0 24 24"><path d="M9 3h2v2H9V3m4 0h2v2h-2V3M9 7h2v2H9V7m4 0h2v2h-2V7m-4 4h2v2H9v-2m4 0h2v2h-2v-2m-4 4h2v2H9v-2m4 0h2v2h-2v-2m-4 4h2v2H9v-2m4 0h2v2h-2v-2Z"/></svg><div class="ds-list-label"><div>{{doc.name}}</div></div><button @click="field.remove(doc,i)" class="ds-list-btn ds-list-btn-del">×</button></div>
                     </div>
-                  </div>
-                  <div style="position:relative;margin-top:8px">
-                    <input v-model="quickDocSearch" @input="searchQuickDocs" :placeholder="i18n?.searchDocPlaceholder||'搜索文档...'" class="b3-text-field"/>
-                    <div v-if="quickDocResults.length" style="position:absolute;top:100%;left:0;right:0;margin-top:4px;max-height:200px;overflow-y:auto;background:var(--b3-theme-surface);border:1px solid var(--b3-border-color);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.1);z-index:10">
-                      <button v-for="doc in quickDocResults" :key="doc.id" @click="addQuickDoc(doc)" style="width:100%;padding:8px;border:none;background:transparent;text-align:left;cursor:pointer;font-size:12px;transition:background .15s;border-bottom:1px solid var(--b3-border-color)" @mouseenter="$event.target.style.background='var(--b3-list-hover)'" @mouseleave="$event.target.style.background='transparent'">{{doc.hPath||doc.content||'无标题'}}</button>
+                    <div style="position:relative;margin-top:8px">
+                      <input v-model="field.input" @input="field.search()" :placeholder="i18n?.searchDocPlaceholder||'搜索文档...'" class="b3-text-field"/>
+                      <div v-if="(field.results||[]).length" style="position:absolute;top:100%;left:0;right:0;margin-top:4px;max-height:200px;overflow-y:auto;background:var(--b3-theme-surface);border:1px solid var(--b3-border-color);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.1);z-index:10">
+                        <button v-for="doc in (field.results||[])" :key="doc.id" @click="field.select(doc)" style="width:100%;padding:8px;border:none;background:transparent;text-align:left;cursor:pointer;font-size:12px;transition:background .15s;border-bottom:1px solid var(--b3-border-color)" @mouseenter="$event.target.style.background='var(--b3-list-hover)'" @mouseleave="$event.target.style.background='transparent'">{{doc.hPath||doc.content||'无标题'}}</button>
+                      </div>
                     </div>
-                  </div>
-                  <small>{{i18n?.quickSendDocsDesc||'用于快速发送标注'}}</small>
+                    </template>
+                    <small v-if="field.hint">{{field.hint}}</small>
+                  </template>
                 </div>
               </div>
             </Transition>
@@ -380,54 +389,23 @@ watch(canShowToc,(show) => !show&&['toc','bookmark','mark'].includes(activeTab.v
             <Transition name="expand">
               <div v-if="activeAccordion==='tts'" @click.stop>
                 <template v-if="settings.tts">
-                  <div v-for="item in ttsItems" :key="item.key" class="ds-field" :class="{switch:item.type==='checkbox'}">
-                    <label>{{i18n[ttsI18nKey(item.key)]||item.key}}</label>
-                    <div v-if="item.type==='range'" class="ds-range"><input v-model.number="settings.tts[item.key]" type="range" class="b3-slider" :min="item.min" :max="item.max" :step="item.step" @input="debouncedSave"><span>{{settings.tts[item.key]}}{{item.unit}}</span></div>
-                    <input v-else-if="item.type==='checkbox'" v-model="settings.tts[item.key]" type="checkbox" class="b3-switch" @change="save">
-                  </div>
+                  <div v-for="item in ttsFields" :key="item.key" class="ds-field" :class="{switch:item.type==='checkbox'}"><label>{{i18n[ttsI18nKey(item.key)]||item.key}}</label><div v-if="item.type==='range'" class="ds-range"><input v-model.number="settings.tts[item.key]" type="range" class="b3-slider" :min="item.min" :max="item.max" :step="item.step" @input="debouncedSave"><span>{{settings.tts[item.key]}}{{item.unit}}</span></div><input v-else-if="item.type==='checkbox'" v-model="settings.tts[item.key]" type="checkbox" class="b3-switch" @change="save"><small v-if="item.desc&&i18n[item.desc]">{{i18n[item.desc]}}</small></div>
                   <div class="ds-divider"></div>
-                  <div v-for="(item,idx) in ttsOptions" :key="item.key" class="ds-field switch">
-                    <label>{{i18n[ttsI18nKey(item.key)]||item.key}}</label>
-                    <input v-model="settings.tts[item.key]" type="checkbox" class="b3-switch" @change="save">
-                    <small v-if="i18n[ttsI18nKey(item.key,'Desc')]">{{i18n[ttsI18nKey(item.key,'Desc')]}}</small>
-                  </div>
-                  <div class="ds-divider"></div>
-                  <div class="ds-sub-accordion" @click.stop="toggleSub('ttsFavorites')">
-                    <div class="ds-sub-title">{{i18n.ttsFavoriteVoices||'我的语音'}}<svg class="ds-arrow" :class="{expanded:activeSub==='ttsFavorites'}" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></div>
+                  <div v-for="section in voiceSections" :key="section.key" class="ds-sub-accordion" @click.stop="toggleSub(section.key)">
+                    <div class="ds-divider"></div>
+                    <div class="ds-sub-title">{{section.title}}<svg class="ds-arrow" :class="{expanded:activeSub===section.key}" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></div>
                     <Transition name="expand">
-                      <div v-if="activeSub==='ttsFavorites'">
-                        <small class="ds-hint">{{i18n.ttsCurrentVoice||'当前'}}: {{settings.tts.voice}}</small>
-                        <div v-if="myVoices.length" class="ds-list ds-list-scroll">
-                          <div v-for="v in myVoices" :key="v.name" class="ds-list-item ds-list-item-simple" :class="{active:settings.tts.voice===v.name}" @click.stop="selectVoice(v.name,v.isLocal)">
-                            <div class="ds-list-label">
-                              <div>{{v.displayName}}</div>
-                              <small>{{v.isLocal?'🎤 本地':v.locale}}</small>
-                            </div>
-                            <button v-if="!v.isLocal" @click.stop="toggleFav(v)" class="ds-list-btn ds-list-btn-del">×</button>
+                      <div v-if="activeSub===section.key">
+                        <button v-if="section.showLoad" class="ds-btn-add" :disabled="loadingTTS" @click.stop="loadTTS"><svg><use xlink:href="#iconRefresh"/></svg>{{loadingTTS?(i18n.loading||'加载中...'):(i18n.ttsLoadVoices||'加载语音列表')}}</button>
+                        <small class="ds-hint">{{section.hint}}</small>
+                        <div v-if="section.showLoad&&loadingTTS" class="sr-empty">{{i18n.loading||'加载中...'}}</div>
+                        <div v-else-if="section.items.length" class="ds-list ds-list-scroll">
+                          <div v-for="v in section.items" :key="v.name" class="ds-list-item ds-list-item-simple" :class="{active:settings.tts.voice===v.name}" @click.stop="section.pick(v)">
+                            <div class="ds-list-label"><div>{{v.displayName}}</div><small>{{section.meta(v)}}</small></div>
+                            <button v-if="section.actionText(v)" @click.stop="section.action(v)" class="ds-list-btn" :class="{ 'ds-list-btn-del': !section.showLoad }" :title="section.actionTitle(v)">{{section.actionText(v)}}</button>
                           </div>
                         </div>
-                        <div v-else class="sr-empty">{{i18n.ttsNoFavorites||'暂无，请点击下方加载'}}</div>
-                      </div>
-                    </Transition>
-                  </div>
-                  <div class="ds-divider"></div>
-                  <div class="ds-sub-accordion" @click.stop="toggleSub('ttsVoices')">
-                    <div class="ds-sub-title">{{i18n.ttsVoiceList||'在线语音'}}<svg class="ds-arrow" :class="{expanded:activeSub==='ttsVoices'}" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></div>
-                    <Transition name="expand">
-                      <div v-if="activeSub==='ttsVoices'">
-                        <button class="ds-btn-add" :disabled="loadingTTS" @click.stop="loadTTS"><svg><use xlink:href="#iconRefresh"/></svg>{{loadingTTS?(i18n.loading||'加载中...'):(i18n.ttsLoadVoices||'加载语音列表')}}</button>
-                        <small class="ds-hint">{{i18n.ttsOnlineHint||'点击语音名称选择，点击星号收藏'}}</small>
-                        <div v-if="loadingTTS" class="sr-empty">{{i18n.loading||'加载中...'}}</div>
-                        <div v-else-if="onlineVoices.length" class="ds-list ds-list-scroll">
-                          <div v-for="v in onlineVoices" :key="v.name" class="ds-list-item ds-list-item-simple" :class="{active:settings.tts.voice===v.name}" @click.stop="selectVoice(v.name,false)">
-                            <div class="ds-list-label">
-                              <div>{{v.displayName}}</div>
-                              <small>{{v.locale}}</small>
-                            </div>
-                            <button @click.stop="toggleFav(v)" class="ds-list-btn" :title="isFav(v.name)?'取消收藏':'收藏'">{{isFav(v.name)?'★':'☆'}}</button>
-                          </div>
-                        </div>
-                        <div v-else class="sr-empty">{{i18n.ttsNoVoices||'暂无语音'}}</div>
+                        <div v-else class="sr-empty">{{section.empty}}</div>
                       </div>
                     </Transition>
                   </div>
@@ -436,13 +414,7 @@ watch(canShowToc,(show) => !show&&['toc','bookmark','mark'].includes(activeTab.v
               </div>
             </Transition>
           </div>
-          <Transition name="fade" mode="out-in">
-            <div v-if="resetConfirm" key="confirm" class="ds-reset-group">
-              <button @click="resetConfirm=false">{{i18n.cancel||'取消'}}</button>
-              <button class="ds-reset-confirm" @click="handleReset">{{i18n.confirm||'确认重置'}}</button>
-            </div>
-            <button v-else key="reset" class="ds-reset" @click="handleReset">{{i18n.resetDefault||'重置为默认'}}</button>
-          </Transition>
+          <Transition name="fade" mode="out-in"><div v-if="resetConfirm" key="confirm" class="ds-reset-group"><button @click="resetConfirm=false">{{i18n.cancel||'取消'}}</button><button class="ds-reset-confirm" @click="handleReset">{{i18n.confirm||'确认重置'}}</button></div><button v-else key="reset" class="ds-reset" @click="handleReset">{{i18n.resetDefault||'重置为默认'}}</button></Transition>
         </div>
         <!-- 外部组件，不使用 Transition -->
       </Transition>
@@ -492,3 +464,4 @@ watch(canShowToc,(show) => !show&&['toc','bookmark','mark'].includes(activeTab.v
 @keyframes license-pulse{0%,100%{transform:scale(1);box-shadow:0 2px 8px rgba(0,0,0,.08)}10%,30%,50%{transform:scale(1.03);box-shadow:0 0 0 4px var(--b3-theme-primary-light),0 8px 24px rgba(33,150,243,.4)}20%,40%{transform:scale(1);box-shadow:0 0 0 2px var(--b3-theme-primary-lighter),0 4px 16px rgba(33,150,243,.2)}}
 @media (max-width:640px){.sr-settings{flex-direction:column !important}.sr-nav{width:100% !important;height:42px !important;flex-direction:row !important;padding:0 4px !important}}
 </style>
+

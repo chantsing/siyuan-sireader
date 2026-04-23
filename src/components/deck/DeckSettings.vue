@@ -242,11 +242,9 @@ import { useConfirm } from '@/composables/useSetting'
 import { getSettingsManager } from './settings'
 import { getDatabase } from './database'
 import type { DeckSettings } from './types'
-import { usePlugin } from '@/main'
 import { useLicense } from '@/composables/useLicense'
 
-const plugin = usePlugin()
-const { can, showUpgrade } = useLicense(plugin, {})
+const { can, showUpgrade } = useLicense({})
 
 const loading = ref(true)
 const form = ref<DeckSettings | null>(null)

@@ -97,8 +97,8 @@ plugin.addTab({
 
 // 链接打开书籍
 const handleEbookLink = async (e: MouseEvent) => {
-  const link = (e.target as HTMLElement).closest('a[href], [data-href], span[data-type="a"]') as HTMLElement
-  const url = link?.getAttribute('data-href') || link?.getAttribute('href')
+  const link = (e.target as HTMLElement).closest('a[href], [data-href], [data-url], span[data-type="a"]') as HTMLElement
+  const url = link?.getAttribute('data-href') || link?.getAttribute('href') || link?.getAttribute('data-url')
   if (!url) return
   
   // 处理自定义协议 sireader://
@@ -108,7 +108,6 @@ const handleEbookLink = async (e: MouseEvent) => {
     if (!parsed.bookUrl) return showMessage('无效的书籍链接', 3000, 'error')
     const { bookshelfManager } = await import('@/core/bookshelf')
     const { getBookWithFallback, openOrActivateBook } = await import('@/utils/bookOpen')
-    await bookshelfManager.init()
     const book = await getBookWithFallback(bookshelfManager, parsed.bookUrl)
     if (!book) return showMessage('书籍不存在', 3000, 'error')
     return openOrActivateBook(plugin, book, settings.value, () => 
@@ -116,7 +115,8 @@ const handleEbookLink = async (e: MouseEvent) => {
     )
   }
   
-  if (!FORMATS.some(ext => url.toLowerCase().endsWith(ext))) return
+  const cleanUrl = url.split('#')[0]
+  if (!FORMATS.some(ext => cleanUrl.toLowerCase().endsWith(ext) || cleanUrl.toLowerCase().split('?')[0].endsWith(ext))) return
   
   // 处理文档内 assets 链接
   if (url.startsWith('assets/') || url.includes('/assets/')) {
@@ -124,8 +124,7 @@ const handleEbookLink = async (e: MouseEvent) => {
     e.preventDefault(), e.stopPropagation()
     const { bookshelfManager } = await import('@/core/bookshelf')
     const { getOrAddAssetBook, openOrActivateBook } = await import('@/utils/bookOpen')
-    await bookshelfManager.init()
-    const file = await fetchFile(url.split('#')[0])
+    const file = await fetchFile(cleanUrl)
     if (!file) return showMessage('文件不存在', 3000, 'error')
     const book = await getOrAddAssetBook(bookshelfManager, url, file)
     if (!book) return showMessage('添加失败', 3000, 'error')
@@ -134,14 +133,14 @@ const handleEbookLink = async (e: MouseEvent) => {
   
   // 普通文件链接
   e.preventDefault(), e.stopPropagation()
-  const file = await fetchFile(url.split('#')[0])
+  const file = await fetchFile(cleanUrl)
   if (!file) return
   openTab({
     app: (plugin as any).app,
     custom: {
       icon: 'siyuan-reader-icon',
       title: file.name.replace(/\.[^.]+$/, ''),
-      data: { file, url: url.split('#')[0], blockId: link.closest('[data-node-id]')?.getAttribute('data-node-id') },
+      data: { file, url: cleanUrl, blockId: link.closest('[data-node-id]')?.getAttribute('data-node-id') },
       id: `${plugin.name}epub_reader`
     },
     position: { rightTab: 'right', bottomTab: 'bottom' }[settings.value.openMode]
@@ -496,7 +495,6 @@ const handleOpenBook = async (book: any) => {
   showStats.value = false
   const { getBookWithFallback, openOrActivateBook } = await import('@/utils/bookOpen')
   const { bookshelfManager } = await import('@/core/bookshelf')
-  await bookshelfManager.init()
   const full = await getBookWithFallback(bookshelfManager, book.url)
   if (!full) return showMessage('加载失败', 3000, 'error')
   openOrActivateBook(plugin, full, settings.value)

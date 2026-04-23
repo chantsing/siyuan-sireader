@@ -1,452 +1,626 @@
-/**
- * 阅读器数据库 - 极简架构
- * SQL.js + 文件持久化
- */
-import initSqlJs from 'sql.js';
+import initSqlJs from 'sql.js/dist/sql-asm.js'
+import { cleanupManagedStorage, getBookFileDataPath, getCoverFileDataPath, getManagedFileExt, loadData, migrateManagedPath, readBookRecord, removeBookRecord, saveData, writeBookRecord, type BookRecord } from './bookStore'
 
-const DB_PATH = '/data/storage/petal/siyuan-sireader/reader.db';
+const BOOK_INDEX_KEY = 'bookshelf.json'
+const SETTINGS_KEY = 'settings.json'
+const DAILY_READING_KEY = 'daily.json'
+const ANNOTATION_COUNT_KEY = 'annotation_record_count_v1'
 
-// ==================== 类型 ====================
+const parseJson = <T>(value: any, fallback: T): T => {
+  try {
+    if (value == null || value === '') return fallback
+    return typeof value === 'string' ? JSON.parse(value) : value
+  } catch {
+    return fallback
+  }
+}
+const same = (a: any, b: any) => JSON.stringify(a) === JSON.stringify(b)
+let sqlJs: any
+export const getSqlJs = async () => sqlJs || (sqlJs = await initSqlJs())
 
 export interface Book {
-  url: string;        // 唯一标识
-  title: string;      // 书名
-  author: string;     // 作者
-  cover: string;      // 封面URL
-  format: string;     // 格式(epub/pdf/mobi/azw3)
-  path: string;       // 文件路径
-  size: number;       // 文件大小(字节)
-  added: number;      // 添加时间戳
-  read: number;       // 最后阅读时间戳
-  finished: number;   // 完成时间戳(0=未完成)
-  status: string;     // 状态(unread/reading/finished)
-  progress: number;   // 进度(0-100)
-  time: number;       // 阅读时长(秒)
-  chapter: number;    // 当前章节
-  total: number;      // 总章节数
-  pos: any;           // 位置(JSON)
-  source: any;        // 书源(JSON)
-  rating: number;     // 评分(0-5)
-  meta: any;          // 元数据(JSON)
-  tags: string[];     // 标签数组
-  groups: string[];   // 分组数组
-  bindDocId?: string; // 绑定文档ID
-  bindDocName?: string; // 绑定文档名
-  autoSync?: boolean; // 添加时同步
-  syncDelete?: boolean; // 删除时同步
+  url: string
+  title: string
+  author: string
+  cover: string
+  format: string
+  path: string
+  size: number
+  added: number
+  read: number
+  finished: number
+  status: string
+  progress: number
+  time: number
+  chapter: number
+  total: number
+  pos: any
+  source: any
+  rating: number
+  meta: any
+  tags: string[]
+  groups: string[]
+  bindDocId?: string
+  bindDocName?: string
+  autoSync?: boolean
+  syncDelete?: boolean
 }
 
-export type AnnotationType = 'highlight' | 'note' | 'bookmark' | 'vocab' | 'shape' | 'ink' | 'daily_reading';
+export type AnnotationType = 'highlight' | 'note' | 'bookmark' | 'vocab' | 'shape' | 'ink' | 'daily_reading'
 
 export interface Annotation {
-  id: string;         // 唯一ID
-  book: string;       // 书籍URL
-  type: AnnotationType; // 类型
-  loc: string;        // 位置
-  text: string;       // 标注文本
-  note: string;       // 笔记内容
-  color: string;      // 颜色
-  data: any;          // 扩展数据(JSON) - 存储格式特定字段
-  created: number;    // 创建时间戳
-  updated: number;    // 更新时间戳
-  chapter: string;    // 章节名
-  block: string;      // 思源块ID
-  
-  // 便捷访问器（从 data 中读取）
-  format?: 'pdf' | 'epub';
-  page?: number;      // PDF 页码
-  cfi?: string;       // EPUB CFI
-  section?: number;   // 章节索引（在线书籍）
-  rects?: any[];      // PDF 矩形区域
-  style?: string;     // 标注样式
-  shapeType?: string; // 形状类型
-  filled?: boolean;   // 是否填充
-  paths?: any[];      // 墨迹路径
-  
-  // 每日阅读统计（type='daily_reading'时使用）
-  date?: string;      // 日期 YYYY-MM-DD
-  duration?: number;  // 阅读时长（秒）
+  id: string
+  book: string
+  type: AnnotationType
+  loc: string
+  text: string
+  note: string
+  color: string
+  data: any
+  created: number
+  updated: number
+  chapter: string
+  block: string
+  format?: 'pdf' | 'epub'
+  page?: number
+  cfi?: string
+  section?: number
+  rects?: any[]
+  style?: string
+  shapeType?: string
+  filled?: boolean
+  paths?: any[]
+  date?: string
+  duration?: number
 }
 
-// ==================== 数据库 ====================
+type StoredIndex = Record<string, Book>
+type StoredSettings = Record<string, any>
+type DailyReadingStore = Record<string, Record<string, number>>
 
-let sqlJs: any;
-const getSql = async () => sqlJs || (sqlJs = await initSqlJs({ locateFile: f => `/plugins/siyuan-sireader/sql.js/${f}` }));
+const emptyBook = (book: Partial<Book> & Pick<Book, 'url' | 'title' | 'format' | 'status'>): Book => ({
+  url: book.url,
+  title: book.title,
+  author: '',
+  cover: '',
+  format: book.format,
+  path: '',
+  size: 0,
+  added: Date.now(),
+  read: Date.now(),
+  finished: 0,
+  status: book.status,
+  progress: 0,
+  time: 0,
+  chapter: 0,
+  total: 0,
+  pos: {},
+  source: {},
+  rating: 0,
+  meta: {},
+  tags: [],
+  groups: [],
+  bindDocId: '',
+  bindDocName: '',
+  autoSync: false,
+  syncDelete: false,
+})
 
 export class ReaderDatabase {
-  private db: any;
-  private ready = false;
-  private saveTimer: any = null;
-  private pendingSave = false;
+  private ready = false
+  private initPromise: Promise<void> | null = null
+  private saveQueue = Promise.resolve()
+  private saveTimer: any = null
+  private books: StoredIndex = {}
+  private settings: StoredSettings = {}
+  private dailyReading: DailyReadingStore = {}
+  private booksDirty = false
+  private settingsDirty = false
+  private dailyDirty = false
 
   async init() {
-    if (this.ready) return;
-    this.db = await this.load(await getSql());
-    this.ready = true;
+    if (this.ready) return
+    if (this.initPromise) return this.initPromise
+    this.initPromise = (async () => {
+      const [booksRaw, settingsRaw, dailyRaw] = await Promise.all([
+        loadData<any>(BOOK_INDEX_KEY),
+        loadData<any>(SETTINGS_KEY),
+        loadData<any>(DAILY_READING_KEY),
+      ])
+      this.books = parseJson(booksRaw, {})
+      this.settings = parseJson(settingsRaw, {})
+      this.dailyReading = parseJson(dailyRaw, {})
+      this.ready = true
+    })()
+    try {
+      await this.initPromise
+    } catch (error) {
+      this.initPromise = null
+      throw error
+    }
   }
 
-  private async load(SQL: any) {
-    try {
-      const res = await fetch('/api/file/getFile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: DB_PATH }) });
-      if (res.ok) {
-        const buf = await res.arrayBuffer();
-        // 验证 SQLite 魔数文件头 "SQLite format 3\0"
-        if (buf.byteLength >= 16) {
-          const header = new Uint8Array(buf, 0, 16);
-          const magic = String.fromCharCode(...header.slice(0, 15));
-          if (magic === 'SQLite format 3' && header[15] === 0) {
-            return new SQL.Database(new Uint8Array(buf));
-          }
-        }
-      }
-    } catch {}
-    // 创建新的空数据库
-    const db = new SQL.Database();
-    db.exec(`CREATE TABLE books (url TEXT PRIMARY KEY, title TEXT, author TEXT, cover TEXT, format TEXT, path TEXT, size INT, added INT, read INT, finished INT, status TEXT, progress INT, time INT, chapter INT, total INT, pos TEXT, source TEXT, rating INT, meta TEXT, bindDocId TEXT, bindDocName TEXT, autoSync INT, syncDelete INT);CREATE INDEX idx_read ON books(read);CREATE TABLE annotations (id TEXT PRIMARY KEY, book TEXT, type TEXT, loc TEXT, text TEXT, note TEXT, color TEXT, data TEXT, created INT, updated INT, chapter TEXT, block TEXT);CREATE INDEX idx_ann_book ON annotations(book);CREATE TABLE tags (book TEXT, tag TEXT, PRIMARY KEY(book,tag));CREATE INDEX idx_tag ON tags(tag);CREATE TABLE groups (book TEXT, gid TEXT, PRIMARY KEY(book,gid));CREATE INDEX idx_group ON groups(gid);CREATE TABLE settings (key TEXT PRIMARY KEY, val TEXT);`);
-    return db;
+  private async persist() {
+    const tasks: Promise<any>[] = []
+    if (this.booksDirty) {
+      this.booksDirty = false
+      tasks.push(saveData(BOOK_INDEX_KEY, this.books))
+    }
+    if (this.settingsDirty) {
+      this.settingsDirty = false
+      tasks.push(saveData(SETTINGS_KEY, this.settings))
+    }
+    if (this.dailyDirty) {
+      this.dailyDirty = false
+      tasks.push(saveData(DAILY_READING_KEY, this.dailyReading))
+    }
+    if (tasks.length) await Promise.all(tasks)
   }
 
   private async save() {
-    clearTimeout(this.saveTimer)
-    this.pendingSave=true
-    this.saveTimer=setTimeout(async()=>{
-      if(!this.pendingSave)return
-      this.pendingSave=false
-      try{
-        const d=this.db.export(),f=new FormData()
-        f.append('path',DB_PATH)
-        f.append('file',new File([d],'reader.db'))
-        f.append('isDir','false')
-        await fetch('/api/file/putFile',{method:'POST',body:f})
-      }catch(e){console.error('[DB] Save failed:',e)}
-    },1000)
+    this.saveQueue = this.saveQueue.catch(() => {}).then(() => this.persist())
+    return this.saveQueue
   }
-  
-  // 立即保存（关键操作）
-  async saveNow(){
-    clearTimeout(this.saveTimer)
-    this.pendingSave=false
-    const d=this.db.export(),f=new FormData()
-    f.append('path',DB_PATH)
-    f.append('file',new File([d],'reader.db'))
-    f.append('isDir','false')
-    await fetch('/api/file/putFile',{method:'POST',body:f})
-  }
-  
-  // 清理资源
-  async cleanup(){this.pendingSave&&await this.saveNow()}
 
-  // ==================== 书籍 ====================
+  async saveNow() {
+    clearTimeout(this.saveTimer)
+    this.saveTimer = null
+    await this.save()
+  }
+
+  async cleanup() {
+    const hadPendingTimer = !!this.saveTimer
+    clearTimeout(this.saveTimer)
+    this.saveTimer = null
+    if (hadPendingTimer) {
+      await this.save()
+      return
+    }
+    await this.saveQueue.catch(() => {})
+  }
+
+  private markDirty(type: 'books' | 'settings' | 'daily', delay = 200) {
+    if (type === 'books') this.booksDirty = true
+    if (type === 'settings') this.settingsDirty = true
+    if (type === 'daily') this.dailyDirty = true
+    clearTimeout(this.saveTimer)
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null
+      void this.save()
+    }, delay)
+  }
+
+  private readRawSetting<T = any>(key: string): T | null {
+    return Object.prototype.hasOwnProperty.call(this.settings, key) ? this.settings[key] as T : null
+  }
+
+  private writeRawSetting(key: string, value: any) {
+    if (same(this.settings[key], value)) return
+    this.settings[key] = value
+    this.markDirty('settings', 0)
+  }
+
+  private getBookAssetPath = (book: Partial<Book> & Pick<Book, 'url' | 'title' | 'format'>) =>
+    getBookFileDataPath(book.title, book.url, getManagedFileExt(book.path || '', book.format || 'epub'))
+
+  private getCoverAssetPath = (book: Partial<Book> & Pick<Book, 'url' | 'title'>) =>
+    getCoverFileDataPath(book.title, book.url, getManagedFileExt(book.cover || '', 'jpg'))
+
+  private stripBookForIndex(book: Partial<Book> & Pick<Book, 'url' | 'title' | 'format' | 'status'>): Book {
+    const source = book.source && typeof book.source === 'object'
+      ? {
+          origin: (book.source as any).origin || '',
+          bookUrl: (book.source as any).bookUrl || '',
+          tocUrl: (book.source as any).tocUrl || '',
+          latestChapter: (book.source as any).latestChapter || '',
+          latestTime: (book.source as any).latestTime || '',
+          lastCheckTime: Number((book.source as any).lastCheckTime || 0),
+          updateCount: Number((book.source as any).updateCount || 0),
+        }
+      : {}
+    return {
+      url: book.url,
+      title: book.title,
+      author: book.author || '',
+      cover: '',
+      format: book.format,
+      path: '',
+      size: Number(book.size || 0),
+      added: Number(book.added || Date.now()),
+      read: Number(book.read || book.added || Date.now()),
+      finished: Number(book.finished || 0),
+      status: book.status,
+      progress: Number(book.progress || 0),
+      time: Number(book.time || 0),
+      chapter: Number(book.chapter || 0),
+      total: Number(book.total || 0),
+      pos: {},
+      source,
+      rating: Number(book.rating || 0),
+      meta: {},
+      tags: Array.from(new Set(book.tags || [])),
+      groups: Array.from(new Set(book.groups || [])),
+      bindDocId: book.bindDocId || '',
+      bindDocName: book.bindDocName || '',
+      autoSync: !!book.autoSync,
+      syncDelete: !!book.syncDelete,
+    }
+  }
+
+  private persistBookIndex(book: Book) {
+    const indexBook = this.stripBookForIndex(book)
+    if (same(this.books[indexBook.url], indexBook)) return indexBook
+    this.books[indexBook.url] = indexBook
+    this.markDirty('books')
+    return indexBook
+  }
+
+  private mergeRecordBook = (book: Book, record?: Partial<Book> | null) =>
+    record ? { ...book, ...record, tags: book.tags, groups: book.groups } : book
+
+  private readBookRecord = async (book: Book) =>
+    await readBookRecord(book.url) || { version: 1, book: { ...book }, annotations: [], updatedAt: Date.now() } as BookRecord
+
+  private writeBookRecord = async (book: Book, annotations: Annotation[]) =>
+    await writeBookRecord(book.url, { version: 1, book: { ...book }, annotations, updatedAt: Date.now() })
+
+  private listBooks = (orderBy = 'read DESC') => {
+    const books = Object.values(this.books)
+    const [field, direction = 'DESC'] = orderBy.split(/\s+/)
+    const getter = (book: Book) => {
+      if (field === 'read') return book.read || 0
+      if (field === 'added') return book.added || 0
+      if (field === 'progress') return book.progress || 0
+      if (field === 'rating') return book.rating || 0
+      if (field === 'time') return book.time || 0
+      if (field === 'title') return (book.title || '').toLowerCase()
+      if (field === 'author') return (book.author || '').toLowerCase()
+      return book.read || 0
+    }
+    return [...books].sort((a, b) => {
+      const av = getter(a)
+      const bv = getter(b)
+      if (av === bv) return 0
+      if (direction.toUpperCase() === 'ASC') return av > bv ? 1 : -1
+      return av < bv ? 1 : -1
+    })
+  }
+
+  private async hydrateBook(book: Book) {
+    return this.mergeRecordBook(book, (await readBookRecord(book.url))?.book)
+  }
+
+  private async hydrateBooks(books: Book[]) {
+    return Promise.all(books.map(book => this.hydrateBook(book)))
+  }
+
+  private async listHydratedBooks(orderBy = 'read DESC') {
+    return this.hydrateBooks(this.listBooks(orderBy))
+  }
+
+  private async countRecordAnnotations(books: Book[]) {
+    return (await Promise.all(books.map(async book => (await readBookRecord(book.url))?.annotations?.length || 0))).reduce((sum, count) => sum + count, 0)
+  }
+
+  private getCachedAnnotationCount = () => Number(this.readRawSetting(ANNOTATION_COUNT_KEY) || 0)
+  private setCachedAnnotationCount = (count: number) => this.writeRawSetting(ANNOTATION_COUNT_KEY, Math.max(0, count))
+  private bumpCachedAnnotationCount = (delta: number) => delta && this.setCachedAnnotationCount(this.getCachedAnnotationCount() + delta)
+
+  private async rebuildAnnotationCount() {
+    const total = await this.countRecordAnnotations(this.listBooks('added DESC'))
+    this.setCachedAnnotationCount(total)
+    return total
+  }
 
   async getBook(url: string) {
-    await this.init();
-    const r = this.db.exec('SELECT * FROM books WHERE url=?', [url]);
-    if (!r[0]?.values[0]) return null;
-    const b = this.toBook(r[0].values[0], r[0].columns);
-    const tags = this.db.exec('SELECT tag FROM tags WHERE book=?', [url]);
-    const groups = this.db.exec('SELECT gid FROM groups WHERE book=?', [url]);
-    b.tags = tags[0] ? tags[0].values.map((v: any) => v[0]) : [];
-    b.groups = groups[0] ? groups[0].values.map((v: any) => v[0]) : [];
-    return b;
+    await this.init()
+    const book = this.books[url]
+    return book ? this.hydrateBook(book) : null
   }
 
   async getBooks() {
-    await this.init();
-    const r = this.db.exec('SELECT * FROM books ORDER BY read DESC');
-    if (!r[0]) return [];
-    return r[0].values.map((v: any) => {
-      const b = this.toBook(v, r[0].columns);
-      const tags = this.db.exec('SELECT tag FROM tags WHERE book=?', [b.url]);
-      const groups = this.db.exec('SELECT gid FROM groups WHERE book=?', [b.url]);
-      b.tags = tags[0] ? tags[0].values.map((v: any) => v[0]) : [];
-      b.groups = groups[0] ? groups[0].values.map((v: any) => v[0]) : [];
-      return b;
-    });
+    await this.init()
+    return this.listHydratedBooks('read DESC')
   }
 
-  async saveBook(b: any) {
-    await this.init();
-    const r = this.db.exec('SELECT 1 FROM books WHERE url=?', [b.url]);
-    const p = [b.title, b.author||'', b.cover||'', b.format, b.path||'', b.size||0, b.added, b.read, b.finished||0, b.status, b.progress||0, b.time||0, b.chapter||0, b.total||0, JSON.stringify(b.pos||{}), JSON.stringify(b.source||{}), b.rating||0, JSON.stringify(b.meta||{}), b.bindDocId||'', b.bindDocName||'', b.autoSync?1:0, b.syncDelete?1:0];
-    r[0]?.values.length ? this.db.run('UPDATE books SET title=?,author=?,cover=?,format=?,path=?,size=?,added=?,read=?,finished=?,status=?,progress=?,time=?,chapter=?,total=?,pos=?,source=?,rating=?,meta=?,bindDocId=?,bindDocName=?,autoSync=?,syncDelete=? WHERE url=?', [...p, b.url]) : this.db.run('INSERT INTO books VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [b.url, ...p]);
-    this.db.run('DELETE FROM tags WHERE book=?', [b.url]);
-    (b.tags||[]).forEach((t: string) => this.db.run('INSERT INTO tags VALUES(?,?)', [b.url, t]));
-    this.db.run('DELETE FROM groups WHERE book=?', [b.url]);
-    (b.groups||[]).forEach((g: string) => this.db.run('INSERT INTO groups VALUES(?,?)', [b.url, g]));
-    await this.save();
+  async compactStorage() {
+    await this.init()
+    const books = await this.listHydratedBooks('added DESC')
+    const recordCount = await this.countRecordAnnotations(books)
+    books.forEach(book => this.persistBookIndex(book))
+    await cleanupManagedStorage(books)
+    Object.entries(this.dailyReading).forEach(([date, items]) => {
+      const next = Object.fromEntries(Object.entries(items || {}).filter(([url, duration]) => !!this.books[url] && Number(duration) > 0))
+      if (Object.keys(next).length) this.dailyReading[date] = next
+      else delete this.dailyReading[date]
+    })
+    this.setCachedAnnotationCount(recordCount)
+    this.markDirty('daily')
+    await this.saveNow()
+    return { books: books.length, recordCount, dailyCount: Object.keys(this.dailyReading).length, legacyAnnotationCount: 0, invalidDailyCount: 0 }
   }
 
-  async deleteBook(url: string) { 
-    await this.init(); 
-    this.db.run('DELETE FROM books WHERE url=?', [url]); 
-    this.db.run('DELETE FROM annotations WHERE book=?', [url]);
-    this.db.run('DELETE FROM tags WHERE book=?', [url]);
-    this.db.run('DELETE FROM groups WHERE book=?', [url]);
-    await this.saveNow(); // 立即保存，避免数据丢失
+  async adoptLegacyAnnotations() {
+    await this.init()
+    return { books: 0, annotations: 0 }
   }
 
-  async searchBooks(q: string) {
-    await this.init();
-    const r = this.db.exec('SELECT * FROM books WHERE title LIKE ? OR author LIKE ? ORDER BY read DESC', [`%${q}%`, `%${q}%`]);
-    if (!r[0]) return [];
-    return r[0].values.map((v: any) => {
-      const b = this.toBook(v, r[0].columns);
-      const tags = this.db.exec('SELECT tag FROM tags WHERE book=?', [b.url]);
-      const groups = this.db.exec('SELECT gid FROM groups WHERE book=?', [b.url]);
-      b.tags = tags[0] ? tags[0].values.map((v: any) => v[0]) : [];
-      b.groups = groups[0] ? groups[0].values.map((v: any) => v[0]) : [];
-      return b;
-    });
+  async saveBook(book: Partial<Book> & Pick<Book, 'url' | 'title' | 'format' | 'status'>) {
+    await this.init()
+    const current = await this.getBook(book.url)
+    const record = await readBookRecord(book.url)
+    const baseBook = { ...(current || {}), ...(record?.book || {}), ...book } as Partial<Book> & Pick<Book, 'url' | 'title' | 'format' | 'status'>
+    const path = await migrateManagedPath(baseBook.path || '', this.getBookAssetPath(baseBook))
+    const cover = await migrateManagedPath(baseBook.cover || '', this.getCoverAssetPath(baseBook))
+    const fullBook = {
+      ...(current || emptyBook(book)),
+      ...(record?.book || {}),
+      ...book,
+      path,
+      cover,
+      tags: book.tags || current?.tags || record?.book?.tags || [],
+      groups: book.groups || current?.groups || record?.book?.groups || [],
+    } as Book
+    const prevBook = current ? { ...current } : null
+    this.persistBookIndex(fullBook)
+    if (!same(prevBook, fullBook)) await this.writeBookRecord(fullBook, record?.annotations || [])
   }
 
-  // ==================== 标注 ====================
+  async deleteBook(url: string) {
+    await this.init()
+    const annotationCount = (await readBookRecord(url))?.annotations?.length || 0
+    delete this.books[url]
+    Object.values(this.dailyReading).forEach(items => delete items[url])
+    this.markDirty('books')
+    this.markDirty('daily')
+    await removeBookRecord(url)
+    this.bumpCachedAnnotationCount(-annotationCount)
+    await this.saveNow()
+  }
+
+  async searchBooks(query: string) {
+    await this.init()
+    const needle = query.toLowerCase()
+    return this.hydrateBooks(this.listBooks('read DESC').filter(book =>
+      book.title.toLowerCase().includes(needle) || book.author.toLowerCase().includes(needle),
+    ))
+  }
 
   async getAnnotations(book: string) {
-    await this.init();
-    const r = this.db.exec('SELECT * FROM annotations WHERE book=? ORDER BY created', [book]);
-    return r[0] ? r[0].values.map((v: any) => this.toAnn(v, r[0].columns)) : [];
+    await this.init()
+    return (await readBookRecord(book))?.annotations || []
   }
 
-  async saveAnnotation(a: any) {
-    await this.init();
-    const book = a.book;
-    if (!book) throw new Error('book required');
-    const r = this.db.exec('SELECT 1 FROM annotations WHERE id=?', [a.id]);
-    const now = Date.now();
-    const p = [book, a.type, a.loc||'', a.text||'', a.note||'', a.color, JSON.stringify(a.data||{}), a.created||now, now, a.chapter||'', a.block||''];
-    r[0]?.values.length ? this.db.run('UPDATE annotations SET book=?,type=?,loc=?,text=?,note=?,color=?,data=?,created=?,updated=?,chapter=?,block=? WHERE id=?', [...p, a.id]) : this.db.run('INSERT INTO annotations VALUES(?,?,?,?,?,?,?,?,?,?,?,?)', [a.id, ...p]);
-    await this.save();
+  async saveAnnotation(annotation: Partial<Annotation> & Pick<Annotation, 'id' | 'book' | 'type'>) {
+    await this.init()
+    if (!annotation.book) throw new Error('book required')
+    if (!annotation.id) throw new Error('id required')
+    if (annotation.type === 'daily_reading') {
+      const data = annotation.data || {}
+      const date = String(data.date || '')
+      const duration = Number(data.duration || 0)
+      if (!date || duration <= 0) return
+      const items = this.dailyReading[date] || {}
+      items[annotation.book] = Math.max(Number(items[annotation.book] || 0), duration)
+      this.dailyReading[date] = items
+      this.markDirty('daily')
+      return
+    }
+    const now = Date.now()
+    const book = await this.getBook(annotation.book)
+    if (!book) throw new Error('book not found')
+    const record = await this.readBookRecord(book)
+    const next = {
+      id: annotation.id,
+      book: annotation.book,
+      type: annotation.type,
+      loc: annotation.loc || '',
+      text: annotation.text || '',
+      note: annotation.note || '',
+      color: annotation.color || '',
+      data: annotation.data || {},
+      created: annotation.created || now,
+      updated: now,
+      chapter: annotation.chapter || '',
+      block: annotation.block || '',
+    } as Annotation
+    const prevCount = record.annotations?.length || 0
+    const annotations = (record.annotations || []).filter(item => item.id !== annotation.id)
+    annotations.push(next)
+    annotations.sort((a, b) => (a.created || 0) - (b.created || 0))
+    const prev = (record.annotations || []).find(item => item.id === annotation.id)
+    if (same(prev, next)) return
+    await this.writeBookRecord(record.book ? { ...book, ...record.book } : book, annotations)
+    this.bumpCachedAnnotationCount(annotations.length - prevCount)
   }
 
-  async deleteAnnotation(id: string) { await this.init(); this.db.run('DELETE FROM annotations WHERE id=?', [id]); await this.save(); }
-
-  // ==================== 设置 ====================
+  async deleteAnnotation(id: string) {
+    await this.init()
+    for (const book of this.listBooks('added DESC')) {
+      const record = await readBookRecord(book.url)
+      if (!record?.annotations?.some(item => item.id === id)) continue
+      await this.writeBookRecord(record.book ? { ...book, ...record.book } : book, record.annotations.filter(item => item.id !== id))
+      this.bumpCachedAnnotationCount(-1)
+      break
+    }
+  }
 
   async getSetting<T = any>(key: string): Promise<T | null> {
-    await this.init();
-    const r = this.db.exec('SELECT val FROM settings WHERE key=?', [key]);
-    if (!r[0]?.values[0]?.[0]) return null;
-    try { return JSON.parse(r[0].values[0][0]); } catch { return r[0].values[0][0]; }
+    await this.init()
+    return this.readRawSetting<T>(key)
   }
 
-  async saveSetting(key: string, val: any) {
-    await this.init();
-    const json = typeof val === 'string' ? val : JSON.stringify(val);
-    const r = this.db.exec('SELECT 1 FROM settings WHERE key=?', [key]);
-    r[0]?.values.length ? this.db.run('UPDATE settings SET val=? WHERE key=?', [json, key]) : this.db.run('INSERT INTO settings VALUES(?,?)', [key, json]);
-    await this.save();
+  async saveSetting(key: string, value: any) {
+    await this.init()
+    if (same(this.settings[key], value)) return
+    this.settings[key] = value
+    this.markDirty('settings')
   }
 
   async batchSaveSettings(updates: Record<string, any>) {
-    await this.init();
-    for (const [key, val] of Object.entries(updates)) {
-      const json = typeof val === 'string' ? val : JSON.stringify(val);
-      const r = this.db.exec('SELECT 1 FROM settings WHERE key=?', [key]);
-      r[0]?.values.length ? this.db.run('UPDATE settings SET val=? WHERE key=?', [json, key]) : this.db.run('INSERT INTO settings VALUES(?,?)', [key, json]);
+    await this.init()
+    if (!Object.keys(updates).length) return
+    let changed = false
+    for (const [key, value] of Object.entries(updates)) {
+      if (same(this.settings[key], value)) continue
+      this.settings[key] = value
+      changed = true
     }
-    await this.save();
+    if (!changed) return
+    this.markDirty('settings')
+  }
+
+  async deleteSettings(keys: string[]) {
+    await this.init()
+    let changed = false
+    Array.from(new Set(keys.filter(Boolean))).forEach(key => {
+      if (!(key in this.settings)) return
+      delete this.settings[key]
+      changed = true
+    })
+    if (!changed) return
+    this.markDirty('settings')
   }
 
   async getAllSettings() {
-    await this.init();
-    const r = this.db.exec('SELECT * FROM settings');
-    if (!r[0]) return {};
-    const s: Record<string, any> = {};
-    r[0].values.forEach((v: any) => { try { s[v[0]] = JSON.parse(v[1]); } catch { s[v[0]] = v[1]; } });
-    return s;
+    await this.init()
+    return { ...this.settings }
   }
 
-  // ==================== 分组/标签 ====================
+  async getGroups() {
+    return this.getSetting('book_groups').then(groups => groups || [])
+  }
 
-  async getGroups() { return await this.getSetting('book_groups') || []; }
-  async saveGroups(g: any[]) { await this.saveSetting('book_groups', g); }
+  async saveGroups(groups: any[]) {
+    await this.saveSetting('book_groups', groups)
+  }
+
   async getBooksByGroup(gid: string) {
-    await this.init();
-    const r = this.db.exec('SELECT b.* FROM books b JOIN groups g ON b.url=g.book WHERE g.gid=?', [gid]);
-    if (!r[0]) return [];
-    return r[0].values.map((v: any) => {
-      const b = this.toBook(v, r[0].columns);
-      const tags = this.db.exec('SELECT tag FROM tags WHERE book=?', [b.url]);
-      const groups = this.db.exec('SELECT gid FROM groups WHERE book=?', [b.url]);
-      b.tags = tags[0] ? tags[0].values.map((v: any) => v[0]) : [];
-      b.groups = groups[0] ? groups[0].values.map((v: any) => v[0]) : [];
-      return b;
-    });
-  }
-  async getAllTags() {
-    await this.init();
-    const r = this.db.exec('SELECT tag, COUNT(*) as cnt FROM tags GROUP BY tag ORDER BY cnt DESC');
-    return r[0] ? r[0].values.map((v: any) => ({ tag: v[0], count: v[1] })) : [];
+    await this.init()
+    return this.hydrateBooks(this.listBooks('read DESC').filter(book => (book.groups || []).includes(gid)))
   }
 
-  // ==================== 高性能查询 ====================
+  async getAllTags() {
+    await this.init()
+    const counts = new Map<string, number>()
+    Object.values(this.books).forEach(book => (book.tags || []).forEach(tag => counts.set(tag, (counts.get(tag) || 0) + 1)))
+    return [...counts.entries()].map(([tag, count]) => ({ tag, count })).sort((a, b) => b.count - a.count)
+  }
 
   async filterBooks(opt: {
-    status?: string[];
-    rating?: number;
-    formats?: string[];
-    tags?: string[];
-    hasUpdate?: boolean;
-    sortBy?: string;
-    reverse?: boolean;
+    status?: string[]
+    rating?: number
+    formats?: string[]
+    tags?: string[]
+    hasUpdate?: boolean
+    sortBy?: string
+    reverse?: boolean
   } = {}) {
-    await this.init();
-    let sql = 'SELECT DISTINCT b.* FROM books b';
-    const params: any[] = [];
-    const where: string[] = [];
-
-    if (opt.tags?.length) {
-      sql += ' JOIN tags t ON b.url = t.book';
-      where.push(`t.tag IN (${opt.tags.map(() => '?').join(',')})`);
-      params.push(...opt.tags);
+    await this.init()
+    const sortMap: Record<string, keyof Book> = {
+      time: 'read',
+      added: 'added',
+      progress: 'progress',
+      rating: 'rating',
+      readTime: 'time',
+      name: 'title',
+      author: 'author',
     }
-    if (opt.status?.length) {
-      where.push(`b.status IN (${opt.status.map(() => '?').join(',')})`);
-      params.push(...opt.status);
-    }
-    if (opt.rating) {
-      where.push('b.rating >= ?');
-      params.push(opt.rating);
-    }
-    if (opt.formats?.length) {
-      where.push(`b.format IN (${opt.formats.map(() => '?').join(',')})`);
-      params.push(...opt.formats);
-    }
-    if (opt.hasUpdate) {
-      where.push("json_extract(b.source, '$.updateCount') > 0");
-    }
-
-    if (where.length) sql += ' WHERE ' + where.join(' AND ');
-
-    const sortMap: Record<string, string> = {
-      time: 'b.read', added: 'b.added', progress: 'b.progress',
-      rating: 'b.rating', readTime: 'b.time', name: 'b.title',
-      author: 'b.author', update: "json_extract(b.source, '$.updateCount')"
-    };
-    const col = sortMap[opt.sortBy || 'time'] || 'b.read';
-    const dir = opt.reverse ? 'ASC' : 'DESC';
-    sql += ` ORDER BY ${col} ${dir}`;
-
-    const r = this.db.exec(sql, params);
-    if (!r[0]) return [];
-    return r[0].values.map((v: any) => {
-      const b = this.toBook(v, r[0].columns);
-      const tags = this.db.exec('SELECT tag FROM tags WHERE book=?', [b.url]);
-      const groups = this.db.exec('SELECT gid FROM groups WHERE book=?', [b.url]);
-      b.tags = tags[0] ? tags[0].values.map((v: any) => v[0]) : [];
-      b.groups = groups[0] ? groups[0].values.map((v: any) => v[0]) : [];
-      return b;
-    });
+    const column = sortMap[opt.sortBy || 'time']
+    let books = Object.values(this.books).filter(book =>
+      (!opt.status?.length || opt.status.includes(book.status)) &&
+      (!opt.rating || (book.rating || 0) >= opt.rating) &&
+      (!opt.formats?.length || opt.formats.includes(book.format)) &&
+      (!opt.tags?.length || opt.tags.some(tag => (book.tags || []).includes(tag))) &&
+      (!opt.hasUpdate || Number(book.source?.updateCount || 0) > 0),
+    )
+    books = books.sort((a, b) => {
+      const av = column === 'title' || column === 'author' ? String(a[column] || '').toLowerCase() : Number(a[column] || 0)
+      const bv = column === 'title' || column === 'author' ? String(b[column] || '').toLowerCase() : Number(b[column] || 0)
+      if (av === bv) return 0
+      return opt.reverse ? (av > bv ? 1 : -1) : (av < bv ? -1 : 1)
+    })
+    return this.hydrateBooks(books)
   }
 
   async getStats() {
-    await this.init();
-    const statusR = this.db.exec('SELECT status, COUNT(*) as cnt FROM books GROUP BY status');
-    const byStatus: Record<string, number> = { unread: 0, reading: 0, finished: 0 };
-    statusR[0]?.values.forEach((v: any) => { byStatus[v[0]] = v[1]; });
-
-    const formatR = this.db.exec('SELECT format, COUNT(*) as cnt FROM books GROUP BY format');
-    const byFormat: Record<string, number> = { epub: 0, pdf: 0, mobi: 0, azw3: 0, online: 0 };
-    formatR[0]?.values.forEach((v: any) => { byFormat[v[0]] = v[1]; });
-
-    const updateR = this.db.exec("SELECT COUNT(*) FROM books WHERE json_extract(source, '$.updateCount') > 0");
-    const withUpdate = updateR[0]?.values[0]?.[0] || 0;
-    
-    const annR = this.db.exec('SELECT COUNT(*) FROM annotations');
-    const annotationCount = annR[0]?.values[0]?.[0] || 0;
-    
-    const ratingR = this.db.exec('SELECT rating, COUNT(*) as cnt FROM books WHERE rating > 0 GROUP BY rating ORDER BY rating DESC');
-    const byRating: Record<number, number> = {};
-    ratingR[0]?.values.forEach((v: any) => { byRating[v[0]] = v[1]; });
-
-    return { byStatus, byFormat, byRating, withUpdate, annotationCount };
+    await this.init()
+    const books = Object.values(this.books)
+    const byStatus: Record<string, number> = { unread: 0, reading: 0, finished: 0 }
+    const byFormat: Record<string, number> = { epub: 0, pdf: 0, mobi: 0, azw3: 0, online: 0 }
+    const byRating: Record<number, number> = {}
+    let withUpdate = 0
+    books.forEach(book => {
+      byStatus[book.status] = (byStatus[book.status] || 0) + 1
+      byFormat[book.format] = (byFormat[book.format] || 0) + 1
+      if ((book.rating || 0) > 0) byRating[book.rating] = (byRating[book.rating] || 0) + 1
+      if (Number(book.source?.updateCount || 0) > 0) withUpdate++
+    })
+    const cached = this.readRawSetting(ANNOTATION_COUNT_KEY)
+    const annotationCount = cached == null ? await this.rebuildAnnotationCount() : Number(cached || 0)
+    return { byStatus, byFormat, byRating, withUpdate, annotationCount }
   }
 
-  // ==================== 每日阅读 ====================
-
   async getTodayReading() {
-    await this.init();
-    const today = new Date().toISOString().split('T')[0];
-    const r = this.db.exec(`SELECT SUM(json_extract(data,'$.duration')) FROM annotations WHERE type='daily_reading' AND json_extract(data,'$.date')=?`, [today]);
-    return r[0]?.values[0]?.[0] || 0;
+    await this.init()
+    const today = new Date().toISOString().split('T')[0]
+    return Object.values(this.dailyReading[today] || {}).reduce((sum, duration) => sum + Number(duration || 0), 0)
   }
 
   async getDailyReading(year: number, month?: number) {
-    await this.init();
-    const prefix = month ? `${year}-${String(month).padStart(2, '0')}` : `${year}`;
-    const r = this.db.exec(`SELECT book,json_extract(data,'$.date') d,json_extract(data,'$.duration') t FROM annotations WHERE type='daily_reading' AND d LIKE ? ORDER BY d,t DESC`, [`${prefix}%`]);
-    const daily: Record<string, { total: number; books: Array<{ url: string; duration: number }> }> = {};
-    r[0]?.values.forEach((v: any) => {
-      const date = v[1];
-      if (!daily[date]) daily[date] = { total: 0, books: [] };
-      daily[date].total += v[2];
-      daily[date].books.push({ url: v[0], duration: v[2] });
-    });
-    return daily;
+    await this.init()
+    const prefix = month ? `${year}-${String(month).padStart(2, '0')}` : `${year}`
+    const daily: Record<string, { total: number, books: Array<{ url: string, duration: number }> }> = {}
+    Object.entries(this.dailyReading)
+      .filter(([date]) => date.startsWith(prefix))
+      .sort(([a], [b]) => a.localeCompare(b))
+      .forEach(([date, items]) => {
+        const books = Object.entries(items)
+          .map(([url, duration]) => ({ url, duration: Number(duration || 0) }))
+          .filter(item => item.duration > 0)
+          .sort((a, b) => b.duration - a.duration)
+        daily[date] = { total: books.reduce((sum, item) => sum + item.duration, 0), books }
+      })
+    return daily
   }
 
   async saveDailyReading(bookUrl: string, duration: number) {
-    if (!bookUrl || duration <= 0) return;
-    await this.init();
-    const date = new Date().toISOString().split('T')[0];
-    const id = `${bookUrl}_${date}`;
-    const r = this.db.exec('SELECT json_extract(data,"$.duration") FROM annotations WHERE id=?', [id]);
-    const now = Date.now();
-    const newDuration = (r[0]?.values[0]?.[0] || 0) + duration;
-    const data = JSON.stringify({ date, duration: newDuration });
-    
-    r[0]?.values[0] 
-      ? this.db.run('UPDATE annotations SET data=?,updated=? WHERE id=?', [data, now, id])
-      : this.db.run('INSERT INTO annotations VALUES(?,?,?,?,?,?,?,?,?,?,?,?)', [id, bookUrl, 'daily_reading', '', '', '', '', data, now, now, '', '']);
-    
-    await this.save();
+    if (!bookUrl || duration <= 0) return
+    await this.init()
+    const date = new Date().toISOString().split('T')[0]
+    const current = this.dailyReading[date] || {}
+    current[bookUrl] = Number(current[bookUrl] || 0) + duration
+    this.dailyReading[date] = current
+    this.markDirty('daily')
   }
 
   async getGroupCount(gid: string) {
-    await this.init();
-    const r = this.db.exec('SELECT COUNT(*) FROM groups WHERE gid = ?', [gid]);
-    return r[0]?.values[0]?.[0] || 0;
+    await this.init()
+    return Object.values(this.books).filter(book => (book.groups || []).includes(gid)).length
   }
 
   async deleteGroup(gid: string) {
-    await this.init();
-    this.db.run('DELETE FROM groups WHERE gid = ?', [gid]);
-    const configs = await this.getGroups();
-    await this.saveGroups(configs.filter(g => g.id !== gid));
-    await this.save();
+    await this.init()
+    Object.values(this.books).forEach(book => { book.groups = (book.groups || []).filter(group => group !== gid) })
+    const configs = await this.getGroups()
+    await this.saveGroups(configs.filter((group: any) => group.id !== gid))
+    this.markDirty('books')
   }
 
   async getGroupPreviewBooks(gid: string, limit = 4) {
-    await this.init();
-    const r = this.db.exec('SELECT b.* FROM books b JOIN groups g ON b.url=g.book WHERE g.gid=? ORDER BY b.read DESC LIMIT ?', [gid, limit]);
-    if (!r[0]) return [];
-    return r[0].values.map((v: any) => {
-      const b = this.toBook(v, r[0].columns);
-      const tags = this.db.exec('SELECT tag FROM tags WHERE book=?', [b.url]);
-      const groups = this.db.exec('SELECT gid FROM groups WHERE book=?', [b.url]);
-      b.tags = tags[0] ? tags[0].values.map((v: any) => v[0]) : [];
-      b.groups = groups[0] ? groups[0].values.map((v: any) => v[0]) : [];
-      return b;
-    });
-  }
-
-  // ==================== 辅助 ====================
-
-  private toBook(row: any, cols: string[]) {
-    const get = (n: string) => row[cols.indexOf(n)];
-    const parse = (v: any) => { try { return JSON.parse(v || '{}'); } catch { return {}; } };
-    return { url: get('url'), title: get('title'), author: get('author'), cover: get('cover'), format: get('format'), path: get('path'), size: get('size'), added: get('added'), read: get('read'), finished: get('finished'), status: get('status'), progress: get('progress'), time: get('time'), chapter: get('chapter'), total: get('total'), pos: parse(get('pos')), source: parse(get('source')), rating: get('rating'), meta: parse(get('meta')), tags: [], groups: [], bindDocId: get('bindDocId')||'', bindDocName: get('bindDocName')||'', autoSync: !!get('autoSync'), syncDelete: !!get('syncDelete') };
-  }
-
-  private toAnn(row: any, cols: string[]) {
-    const get = (n: string) => row[cols.indexOf(n)];
-    const parse = (v: any) => { try { return JSON.parse(v || '{}'); } catch { return {}; } };
-    return { id: get('id'), book: get('book'), type: get('type'), loc: get('loc'), text: get('text'), note: get('note'), color: get('color'), data: parse(get('data')), created: get('created'), updated: get('updated'), chapter: get('chapter'), block: get('block') };
+    await this.init()
+    return this.hydrateBooks(this.listBooks('read DESC').filter(book => (book.groups || []).includes(gid)).slice(0, limit))
   }
 }
 
-// ==================== 单例 ====================
+let instance: ReaderDatabase | null = null
 
-let instance: ReaderDatabase | null = null;
-export const getDatabase = async () => { if (!instance) { instance = new ReaderDatabase(); await instance.init(); } return instance; };
-export const initDatabase = getDatabase;
+export const getDatabase = async () => {
+  if (!instance) {
+    instance = new ReaderDatabase()
+    await instance.init()
+  }
+  return instance
+}
+
+export const initDatabase = getDatabase

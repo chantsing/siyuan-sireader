@@ -138,7 +138,6 @@
 
 <script setup lang="ts">
 import {ref,computed,onMounted,onUnmounted,watch,nextTick,inject} from 'vue'
-import {getDatabase} from '@/core/database'
 import {bookshelfManager} from '@/core/bookshelf'
 import {useLicense} from '@/composables/useLicense'
 
@@ -147,8 +146,7 @@ const emit=defineEmits<{close:[];open:[book:any]}>()
 
 // 注入useStats实例和plugin
 const statsComposable=inject<any>('stats')
-const plugin=inject<any>('plugin')
-const {can,showUpgrade}=useLicense(plugin,{})
+const {can,showUpgrade}=useLicense({})
 
 const popupRef=ref<HTMLElement>(),showDetail=ref(false)
 const totalBooks=ref(0),finishedCount=ref(0),annotationCount=ref(0)
@@ -275,7 +273,7 @@ const navPeriod=(dir:number)=>{
   loadDaily()
 }
 
-const loadDaily=async()=>dailyData.value=await(await getDatabase()).getDailyReading(curYear.value,calView.value==='month'?curMonth.value:undefined)
+const loadDaily=async()=>dailyData.value=await bookshelfManager.getDailyReading(curYear.value,calView.value==='month'?curMonth.value:undefined)
 
 const loadQuote=async()=>{
   const quotes=[
@@ -294,7 +292,7 @@ const loadQuote=async()=>{
   setTimeout(()=>{quote.value=newQuote;quoteVisible.value=true},300)}
 
 const load=async()=>{
-  const db=await getDatabase(),[dbStats,books]=await Promise.all([db.getStats(),db.getBooks()])
+  const [dbStats,books]=await Promise.all([bookshelfManager.getStats(),bookshelfManager.getBooks()])
   totalBooks.value=books.length
   finishedCount.value=dbStats.byStatus.finished||0
   annotationCount.value=dbStats.annotationCount||0
@@ -312,7 +310,7 @@ const load=async()=>{
 }
 
 const loadBase=async()=>{
-  const db=await getDatabase(),[today,total]=await Promise.all([db.getTodayReading(),statsComposable?.stats.value.readingTime||0])
+  const [today,total]=await Promise.all([bookshelfManager.getTodayReading(),statsComposable?.stats.value.readingTime||0])
   todayReading.value=today
   totalReading.value=total
 }

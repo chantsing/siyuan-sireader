@@ -1,20 +1,11 @@
 // 统一数据访问层（DAL - Data Access Layer）
 // 管理思源数据库连接和底层 CRUD 操作
-import initSqlJs from 'sql.js'
+import { getSqlJs } from '@/core/database'
 import type { Pack, DailyStats } from './types'
 
 const DECK_DATA_PATH = '/data/storage/petal/siyuan-sireader/deck-data.db'
 
 // ========== SQL.js 实例管理 ==========
-let sqlJs: any = null
-const getSqlJs = async () => {
-  if (!sqlJs) {
-    sqlJs = await initSqlJs({
-      locateFile: (f) => `/plugins/siyuan-sireader/sql.js/${f}`
-    })
-  }
-  return sqlJs
-}
 
 // ========== 学习进度数据库 ==========
 

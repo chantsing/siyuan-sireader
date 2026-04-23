@@ -197,7 +197,6 @@ import { bookshelfManager, SORTS, STATUS_OPTIONS, STATUS_MAP, RATING_OPTIONS, FO
 import { showMessage, Menu, openTab } from 'siyuan'
 import { isMobile } from '@/utils/mobile'
 import { searchDocs } from '@/composables/useSetting'
-import { getDatabase } from '@/core/database'
 import { usePlugin } from '@/main'
 import { useLicense } from '@/composables/useLicense'
 
@@ -205,8 +204,7 @@ const props = defineProps<{ i18n?: any; coverSize?: number; openDocAssets?: bool
 const emit = defineEmits<{ read: [book: Book] }>()
 
 // 权限检查
-const plugin = usePlugin()
-const { can, showUpgrade } = useLicense(plugin, props.i18n || {})
+const { can, showUpgrade } = useLicense(props.i18n || {})
 
 // 常量
 const MENU_ICONS = {status:{unread:'iconUncheck',reading:'iconEye',finished:'iconCheck'},sort:{time:'iconClock',added:'iconAdd',progress:'iconList',rating:'iconStar',readTime:'iconHistory',name:'iconA',author:'iconAccount',update:'iconRefresh'}}
@@ -224,6 +222,15 @@ const panelMode = ref<'detail'|'edit'|'group'|'filter'|'add'|null>(null), panelB
 const editForm = ref({title:'',author:'',tags:'',rating:0,status:'unread' as BookStatus,cover:'',groups:[] as string[],bindDocId:'',bindDocName:'',autoSync:false,syncDelete:false})
 const bindSearch = ref(''), bindResults = ref<any[]>([]), bookshelfEl = ref<HTMLElement>()
 let settingsLoaded = false
+const settingTimers = new Map<string, number>()
+const saveUiSetting = (key: string, value: any, delay = 180) => {
+  const prev = settingTimers.get(key)
+  if (prev) clearTimeout(prev)
+  settingTimers.set(key, window.setTimeout(() => {
+    settingTimers.delete(key)
+    void bookshelfManager.saveSetting(key, value)
+  }, delay))
+}
 
 // 计算
 const folderGroups = computed(() => groups.value.filter(g => g.type==='folder'))
@@ -295,7 +302,11 @@ const refreshGroups = async () => {
 const loadBooks = async () => {
   if (currentGroup.value) {
     const group = groups.value.find(g=>g.id===currentGroup.value);
-    if (group?.type==='smart') {books.value=await bookshelfManager.getGroupBooks(currentGroup.value); stats.value=await bookshelfManager.getStats(); return}
+    if (group?.type==='smart') {
+      books.value=await bookshelfManager.getGroupBooks(currentGroup.value);
+      stats.value=await bookshelfManager.getStats();
+      return
+    }
   }
   books.value = await bookshelfManager.filterBooks({
     groups:currentGroup.value?[currentGroup.value]:(!keyword.value?[]:undefined), sortBy:sortType.value, reverse:sortReverse.value,
@@ -303,7 +314,6 @@ const loadBooks = async () => {
     formats:filterFormats.value.length?filterFormats.value:undefined, tags:filterTags.value.length?filterTags.value:undefined,
     hasUpdate:filterHasUpdate.value||undefined
   });
-  if (!currentGroup.value&&!keyword.value) books.value=books.value.filter(b=>!b.groups.length);
   stats.value = await bookshelfManager.getStats();
 }
 const refresh = () => Promise.all([loadBooks(),refreshGroups()])
@@ -427,8 +437,7 @@ const unbindDoc = () => {editForm.value.bindDocId = ''; editForm.value.bindDocNa
 const showPanel = async (mode: 'detail'|'edit'|'group', book?: Book, group?: GroupConfig) => {
   panelMode.value = mode; 
   if (book) {
-    const db = await getDatabase();
-    panelBook.value = await db.getBook(book.url) || book;
+    panelBook.value = await bookshelfManager.getBook(book.url) || book;
     if (mode === 'edit') handleEdit(panelBook.value);
   } 
   if (group) startEditGroup(group);
@@ -437,7 +446,7 @@ const closePanel = () => {panelMode.value = null; panelBook.value = null; editin
 const startResize = (e: MouseEvent) => {
   const {clientX, offsetWidth = 800} = {clientX: e.clientX, offsetWidth: bookshelfEl.value?.offsetWidth}, w = panelWidth.value
   const move = (e: MouseEvent) => panelWidth.value = Math.max(280, Math.min(offsetWidth - 20, w + clientX - e.clientX))
-  const up = () => {document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); settingsLoaded && getDatabase().then(db => db.saveSetting('bookshelf_panelWidth', panelWidth.value))}
+  const up = () => {document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); settingsLoaded && saveUiSetting('bookshelf_panelWidth', panelWidth.value, 0)}
   document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
 }
 // 详情
@@ -458,24 +467,29 @@ const detailFields = computed(() => {
 })
 
 // 生命周期
+const handleBookshelfUpdated = () => { void Promise.all([loadBooks(), refreshGroups()]) }
+
 onMounted(async () => {
   await bookshelfManager.init();
   const [_,allTagsData]=await Promise.all([refreshGroups(),bookshelfManager.getAllTags()]);
   allTags.value=allTagsData;
-  const db = await getDatabase();
-  sortType.value = await db.getSetting('bookshelf_sortType') || 'time';
-  sortReverse.value = await db.getSetting('bookshelf_sortReverse') || false;
-  viewMode.value = await db.getSetting('bookshelf_viewMode') || 'grid';
-  panelWidth.value = await db.getSetting('bookshelf_panelWidth') || 320;
+  sortType.value = await bookshelfManager.getSetting('bookshelf_sortType', 'time');
+  sortReverse.value = await bookshelfManager.getSetting('bookshelf_sortReverse', false);
+  viewMode.value = await bookshelfManager.getSetting('bookshelf_viewMode', 'grid');
+  panelWidth.value = await bookshelfManager.getSetting('bookshelf_panelWidth', 320);
   settingsLoaded = true;
   await loadBooks();
-  window.addEventListener('sireader:bookshelf-updated', () => Promise.all([loadBooks(),refreshGroups()]));
+  window.addEventListener('sireader:bookshelf-updated', handleBookshelfUpdated);
 })
-onUnmounted(() => window.removeEventListener('sireader:bookshelf-updated', () => Promise.all([loadBooks(),refreshGroups()])))
+onUnmounted(() => {
+  window.removeEventListener('sireader:bookshelf-updated', handleBookshelfUpdated)
+  settingTimers.forEach(timer => clearTimeout(timer))
+  settingTimers.clear()
+})
 watch([filterStatus,filterRating,filterFormats,filterTags,filterHasUpdate,sortType,sortReverse,currentGroup], loadBooks, {deep:true})
-watch(sortType, async v => settingsLoaded && await (await getDatabase()).saveSetting('bookshelf_sortType', v))
-watch(sortReverse, async v => settingsLoaded && await (await getDatabase()).saveSetting('bookshelf_sortReverse', v))
-watch(viewMode, async v => settingsLoaded && await (await getDatabase()).saveSetting('bookshelf_viewMode', v))
+watch(sortType, v => settingsLoaded && saveUiSetting('bookshelf_sortType', v))
+watch(sortReverse, v => settingsLoaded && saveUiSetting('bookshelf_sortReverse', v))
+watch(viewMode, v => settingsLoaded && saveUiSetting('bookshelf_viewMode', v))
 </script>
 
 <style scoped lang="scss">

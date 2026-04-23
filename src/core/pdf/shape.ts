@@ -2,8 +2,8 @@
  * PDF 形状标注模块
  * 支持矩形、圆形、三角形等形状标注，可添加文字笔记
  */
-import{getDatabase}from'../database'
 import type{Annotation}from'../database'
+import { listAnnotations, removeAnnotation, replaceAnnotationsByType } from '../MarkManager'
 
 // 类型定义
 export type ShapeType='rect'|'circle'|'triangle'
@@ -428,8 +428,7 @@ export class ShapeToolManager{
 
   /** 从数据库加载形状标注 */
   private async loadData(){
-    const db=await getDatabase()
-    const annotations=await db.getAnnotations(this.bookUrl)
+    const annotations=await listAnnotations(this.bookUrl,'shape')
     return annotations.filter(a=>a.type==='shape').map(a=>({
       id:a.id,
       type:'shape',
@@ -446,9 +445,7 @@ export class ShapeToolManager{
   /** 保存形状标注到数据库 */
   private async saveData(shapeAnnotations:any[]){
     if(!this.initialized)return
-    const db=await getDatabase()
-    for(const shape of shapeAnnotations){
-      const ann:Annotation={
+    await replaceAnnotationsByType(this.bookUrl,'shape',shapeAnnotations.map((shape:any)=>({
         id:shape.id,
         book:this.bookUrl,
         type:'shape',
@@ -461,9 +458,7 @@ export class ShapeToolManager{
         updated:Date.now(),
         chapter:'',
         block:''
-      }
-      await db.saveAnnotation(ann)
-    }
+      } as Annotation)))
   }
 
   async init(){
@@ -504,8 +499,7 @@ export class ShapeToolManager{
     const shape=data.find((s:any)=>s.id===id)
     if(!shape)return false
     // 从数据库删除
-    const db=await getDatabase()
-    await db.deleteAnnotation(id)
+    await removeAnnotation(id)
     // 从内存删除
     this.controller.getManager(shape.page).delete(id)
     this.render(shape.page)

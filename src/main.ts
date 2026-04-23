@@ -1,7 +1,6 @@
 import { Plugin } from 'siyuan'
 import { createApp } from 'vue'
 import App from './App.vue'
-import { bookshelfManager } from '@/core/bookshelf'
 import { initDictModule } from '@/utils/dictionary'
 import { initMobile, isMobile } from '@/utils/mobile'
 import { setPlugin } from '@/utils/copy'
@@ -20,11 +19,9 @@ export const setOpenSettingHandler = (handler: () => void) => {
 export function init(p: Plugin) {
   usePlugin(p)
   setPlugin(p)
-  bookshelfManager.init()
   initDictModule(p)
   initMobile(p)
 
-  // 挂载主应用
   const div = document.createElement('div')
   div.id = p.name
   div.className = 'plugin-sample-vite-vue-app'
@@ -32,12 +29,11 @@ export function init(p: Plugin) {
   app.mount(div)
   document.body.appendChild(div)
 
-  // 异步初始化
   import('@/components/deck').then(({ initDatabase, initPack }) => {
     initDatabase()
     initPack(p)
   }).catch(e => console.error('[SiReader] Init failed:', e))
-  
+
   if (isMobile()) addMobileSidebar(p)
 }
 
@@ -55,9 +51,9 @@ async function addMobileSidebar(p: Plugin) {
   if (!sidebar) return setTimeout(() => addMobileSidebar(p), 500)
   if (sidebar.querySelector('[data-type="sidebar-sireader-tab"]')) return
 
-  // 等待图标
-  for (let i = 0; i < 10 && !document.querySelector('#siyuan-reader-icon'); i++) 
+  for (let i = 0; i < 10 && !document.querySelector('#siyuan-reader-icon'); i++) {
     await new Promise(r => setTimeout(r, 200))
+  }
 
   const template = sidebar.querySelector('[data-type="sidebar-file-tab"]')
   if (!template) return
@@ -68,7 +64,8 @@ async function addMobileSidebar(p: Plugin) {
   btn.querySelector('use')?.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', '#siyuan-reader-icon')
 
   const pluginTab = sidebar.querySelector('[data-type="sidebar-plugin-tab"]')
-  pluginTab ? pluginTab.before(btn) : sidebar.appendChild(btn)
+  if (pluginTab) pluginTab.before(btn)
+  else sidebar.appendChild(btn)
 
   const content = document.createElement('div')
   content.className = 'fn__flex-column fn__none'
@@ -83,17 +80,19 @@ async function addMobileSidebar(p: Plugin) {
   createApp(Settings, {
     modelValue: settings.value,
     i18n: p.i18n,
-    onSave: async () => { await new Promise(resolve => setTimeout(resolve, 0)); await save(); },
-    'onUpdate:modelValue': (v: any) => { settings.value = v }
+    onSave: async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+      await save()
+    },
+    'onUpdate:modelValue': (v: any) => { settings.value = v },
   }).mount(content)
 
   sidebar.addEventListener('click', (e: MouseEvent) => {
     const target = (e.target as HTMLElement).closest('[data-type="sidebar-sireader-tab"]')
-    if (target) {
-      sidebar.querySelectorAll('.toolbar__icon').forEach(i => i.classList.remove('toolbar__icon--active'))
-      target.classList.add('toolbar__icon--active')
-      sidebar.parentElement?.querySelectorAll('.b3-list--mobile > div').forEach(d => d.classList.add('fn__none'))
-      content.classList.remove('fn__none')
-    }
+    if (!target) return
+    sidebar.querySelectorAll('.toolbar__icon').forEach(i => i.classList.remove('toolbar__icon--active'))
+    target.classList.add('toolbar__icon--active')
+    sidebar.parentElement?.querySelectorAll('.b3-list--mobile > div').forEach(d => d.classList.add('fn__none'))
+    content.classList.remove('fn__none')
   })
 }

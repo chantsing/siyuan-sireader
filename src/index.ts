@@ -1,20 +1,15 @@
 import { Plugin, getFrontend } from 'siyuan'
 import '@/index.scss'
 import PluginInfoString from '@/../plugin.json'
-import { destroy, init } from '@/main'
- 
+import { destroy, init, usePlugin } from '@/main'
+
 const { version } = PluginInfoString
 
 export default class PluginSample extends Plugin {
-  // Run as mobile
   public isMobile: boolean
-  // Run in browser
   public isBrowser: boolean
-  // Run as local
   public isLocal: boolean
-  // Run in Electron
   public isElectron: boolean
-  // Run in window
   public isInWindow: boolean
   public platform: SyFrontendTypes
   public readonly version = version
@@ -32,26 +27,23 @@ export default class PluginSample extends Plugin {
     } catch {
       this.isElectron = false
     }
+
+    usePlugin(this)
+    const { ensureMigrationCompleted } = await import('@/utils/migration')
+    if (!await ensureMigrationCompleted()) return
+
     init(this)
     this.addHotkeys()
-    
-    // 启用思源闪卡实时同步（仅在有思源卡组时）
+
     const { enableAutoSync } = await import('@/components/deck/siyuan-card')
-    enableAutoSync() // 内部会检查是否有思源卡组
-    
-    // 自动检测并迁移旧版本数据
-    const { autoMigrate } = await import('@/utils/migration')
-    autoMigrate()
+    enableAutoSync()
   }
 
   private addHotkeys() {
     const cmds = {
-      // 通用导航（用户可自定义）
       prevPage: { text: '上一页', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:prevPage')) },
       nextPage: { text: '下一页', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:nextPage')) },
       toggleBookmark: { text: '切换书签', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:toggleBookmark')) },
-      
-      // PDF 专用（用户可自定义）
       pdfZoomIn: { text: 'PDF放大', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfZoomIn')) },
       pdfZoomOut: { text: 'PDF缩小', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfZoomOut')) },
       pdfZoomReset: { text: 'PDF重置缩放', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfZoomReset')) },
@@ -61,25 +53,27 @@ export default class PluginSample extends Plugin {
       pdfFirstPage: { text: 'PDF首页', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfFirstPage')) },
       pdfLastPage: { text: 'PDF末页', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfLastPage')) },
       pdfPageUp: { text: 'PDF上一页', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfPageUp')) },
-      pdfPageDown: { text: 'PDF下一页', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfPageDown')) }
+      pdfPageDown: { text: 'PDF下一页', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfPageDown')) },
     }
-    
-    Object.entries(cmds).forEach(([k, { text, hotkey, callback }]) => 
-      this.addCommand({ langKey: k, langText: text, hotkey, callback })
+
+    Object.entries(cmds).forEach(([k, { text, hotkey, callback }]) =>
+      this.addCommand({ langKey: k, langText: text, hotkey, callback }),
     )
   }
 
   async onunload() {
-    // 新的 foliate 系统会在组件卸载时自动清理
     destroy()
-    console.log('[SiReader] 插件已禁用')
-    location.reload() 
+    console.log('[SiReader] plugin unloaded')
   }
 
   async uninstall() {
+    const { clearStoredPluginData } = await import('@/core/bookStore')
+    const { getDatabase } = await import('@/core/database')
+    const books = await (await getDatabase()).getBooks().catch(() => [])
+    await clearStoredPluginData(books)
     await this.removeData('config.json')
     await this.removeData('stats.json')
-    console.log('[SiReader] 插件数据已删除')
+    console.log('[SiReader] plugin data removed')
   }
 
   openSetting() {

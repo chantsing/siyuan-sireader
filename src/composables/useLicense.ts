@@ -2,7 +2,7 @@ import { ref, computed } from 'vue'
 import { showMessage } from 'siyuan'
 import { LicenseManager, type LicenseInfo } from '@/core/license'
 
-export function useLicense(plugin: any, i18n: any) {
+export function useLicense(i18n: any) {
   const license = ref<LicenseInfo | null>(null)
   const userAvatar = ref<string | null>(null)
   const code = ref('')
@@ -13,7 +13,7 @@ export function useLicense(plugin: any, i18n: any) {
   const load = async () => {
     loading.value = true
     try {
-      license.value = await LicenseManager.getLicense(plugin)
+      license.value = await LicenseManager.getLicense()
       if (license.value) userAvatar.value = await LicenseManager.getUserAvatar()
     }
     finally {
@@ -34,8 +34,8 @@ export function useLicense(plugin: any, i18n: any) {
     processing.value = true
     try {
       const result = action === 'activate' 
-        ? await LicenseManager.activate(param!, plugin)
-        : await LicenseManager.recover(plugin)
+        ? await LicenseManager.activate(param!)
+        : await LicenseManager.recover()
 
       if (result.success) {
         license.value = result.license || null
@@ -57,7 +57,7 @@ export function useLicense(plugin: any, i18n: any) {
   const recover = () => handleAction('recover')
 
   const clear = async () => {
-    await LicenseManager.clear(plugin)
+    await LicenseManager.clear()
     license.value = null
     userAvatar.value = null
     showMessage(i18n.licenseCleared || '授权已清除', 2000, 'info')

@@ -3,8 +3,7 @@
  */
 import type{Plugin}from'siyuan'
 import{Overlayer}from'foliate-js/overlayer.js'
-import{getDatabase}from'./database'
-import type{Annotation}from'./database'
+import { getDatabase, type Annotation, type AnnotationType } from './database'
 import{getPdfSelectionRects}from'./pdf/annotation'
 
 type Format='pdf'|'epub'
@@ -18,6 +17,23 @@ export const COLORS=[{name:'黄色',color:'yellow'as const,bg:'#ffeb3b'},{name:'
 export const STYLES=[{type:'highlight'as const,name:'高亮',text:'A'},{type:'underline'as const,name:'下划线',text:'A'},{type:'outline'as const,name:'边框',text:'A'},{type:'dotted'as const,name:'点线',text:'A',pdfOnly:true},{type:'dashed'as const,name:'虚线',text:'A',pdfOnly:true},{type:'double'as const,name:'双线',text:'A',pdfOnly:true},{type:'squiggly'as const,name:'波浪线',text:'A',epubOnly:true}]
 export const getColorMap=()=>Object.fromEntries(COLORS.map(c=>[c.color,c.bg]))
 export const formatTime=(ts:number)=>{const d=new Date(ts);return`${d.getFullYear()}-${(d.getMonth()+1).toString().padStart(2,'0')}-${d.getDate().toString().padStart(2,'0')}`}
+
+const db=async()=>getDatabase()
+
+export const listAnnotations=async(book:string,type?:AnnotationType)=>{
+  const items=await(await db()).getAnnotations(book)
+  return type?items.filter(item=>item.type===type):items
+}
+export const removeAnnotation=async(id:string)=>await(await db()).deleteAnnotation(id)
+export const syncAnnotations=async(book:string,types:AnnotationType[],annotations:Annotation[])=>{
+  const database=await db()
+  const allow=new Set(types)
+  const current=(await database.getAnnotations(book)).filter(item=>allow.has(item.type))
+  const nextIds=new Set(annotations.map(item=>item.id))
+  await Promise.all(current.filter(item=>!nextIds.has(item.id)).map(item=>database.deleteAnnotation(item.id)))
+  await Promise.all(annotations.map(annotation=>database.saveAnnotation(annotation)))
+}
+export const replaceAnnotationsByType=async(book:string,type:AnnotationType,annotations:Annotation[])=>syncAnnotations(book,[type],annotations)
 
 const getNoteIcon=(color?:string)=>color==='purple'?'🌐':'📒'
 const getNoteColor=(color?:string)=>color==='purple'?'#ab47bc':'#2196f3'
@@ -90,8 +106,7 @@ export class MarkManager{
   /** 从数据库加载标注 */
   private async load(){
     try{
-      const db=await getDatabase()
-      const annotations=await db.getAnnotations(this.bookUrl)
+      const annotations=await listAnnotations(this.bookUrl)
       this.marks=[]
       annotations.forEach(a=>{
         const data=a.data||{}
@@ -124,35 +139,32 @@ export class MarkManager{
   private async saveNow(){
     if(!this.initialized)return
     try{
-      const db=await getDatabase()
-      const annotations=this.marks.filter(m=>m.type==='highlight'||m.type==='note'||m.type==='vocab'||m.type==='bookmark')
-      for(const m of annotations){
-        const ann:Annotation={
-          id:m.id,
-          book:this.bookUrl,
-          type:m.type,
-          loc:m.cfi||`${m.page||m.section||0}`,
-          text:m.text||'',
-          note:m.note||'',
-          color:m.color||'yellow',
-          data:{
-            format:m.format,
-            cfi:m.cfi,
-            section:m.section,
-            page:m.page,
-            rects:m.rects,
-            style:m.style,
-            title:m.title,
-            progress:m.progress,
-            textOffset:m.textOffset
-          },
-          created:m.timestamp,
-          updated:Date.now(),
-          chapter:m.chapter||'',
-          block:m.blockId||''
-        }
-        await db.saveAnnotation(ann)
-      }
+      const toAnnotation=(m:Mark):Annotation=>({
+        id:m.id,
+        book:this.bookUrl,
+        type:m.type,
+        loc:m.cfi||`${m.page||m.section||0}`,
+        text:m.text||'',
+        note:m.note||'',
+        color:m.color||'yellow',
+        data:{
+          format:m.format,
+          cfi:m.cfi,
+          section:m.section,
+          page:m.page,
+          rects:m.rects,
+          style:m.style,
+          title:m.title,
+          progress:m.progress,
+          textOffset:m.textOffset
+        },
+        created:m.timestamp,
+        updated:Date.now(),
+        chapter:m.chapter||'',
+        block:m.blockId||''
+      })
+      const types=['highlight','note','vocab','bookmark'] as const
+      await syncAnnotations(this.bookUrl,[...types],this.marks.filter(m=>types.includes(m.type)).map(toAnnotation))
       window.dispatchEvent(new Event('sireader:marks-updated'))
     }catch(e){console.error('[Mark]',e)}
   }
@@ -184,8 +196,7 @@ export class MarkManager{
     this.marksMap.delete(id)
     // 从数据库删除
     try{
-      const db=await getDatabase()
-      await db.deleteAnnotation(id)
+      await removeAnnotation(id)
     }catch(e){console.error('[Mark] del:',e)}
     return true
   }

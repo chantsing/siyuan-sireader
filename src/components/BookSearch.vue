@@ -149,14 +149,12 @@ import { bookSourceManager } from '@/utils/BookSearch'
 import { bookshelfManager } from '@/core/bookshelf'
 import { showMessage } from 'siyuan'
 import SourceMgr from './SourceMgr.vue'
-import { usePlugin } from '@/main'
 import { useLicense } from '@/composables/useLicense'
 
 const props = defineProps<{ i18n: any }>()
 const emit = defineEmits(['read'])
 
-const plugin = usePlugin()
-const { can, showUpgrade } = useLicense(plugin, props.i18n)
+const { can, showUpgrade } = useLicense(props.i18n)
 
 const shelfBooks = ref(new Set<string>())
 const checkInShelf = async (book: any) => { if (await bookshelfManager.hasBook(book.bookUrl)) shelfBooks.value.add(book.bookUrl) }
@@ -190,6 +188,7 @@ const search = async () => {
   searching.value = true; results.value = []; hasMore.value = true
   try {
     const { httpSourceManager } = await import('@/utils/HttpSources')
+    await httpSourceManager.init()
     const isHttp = httpSourceManager.getEnabledSources().some(s => s.id === selectedSource.value)
     const enableAnna = httpSourceManager.getEnabledSources().some(s => s.id === 'anna' && s.enabled) && !selectedSource.value
     searchIterator.value = bookSourceManager.searchBooksStream(keyword.value, isHttp ? selectedSource.value : (selectedSource.value || undefined), 1, enableAnna)
@@ -237,6 +236,7 @@ const addUrlBook = async (book: any) => {
   if (!can.value('book-search')) return showUpgrade('在线搜书')
   try {
     const { httpSourceManager } = await import('@/utils/HttpSources')
+    await httpSourceManager.init()
     await httpSourceManager.addToBookshelf(book, bookshelfManager)
     shelfBooks.value.add(book.bookUrl)
     showMessage(`《${book.name}》已添加到书架`, 2000, 'info')
@@ -251,6 +251,7 @@ const onScroll = () => {
 
 const loadHttpSources = async () => {
   const { httpSourceManager } = await import('@/utils/HttpSources')
+  await httpSourceManager.init()
   httpSources.value = httpSourceManager.getEnabledSources()
 }
 

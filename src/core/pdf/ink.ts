@@ -1,8 +1,8 @@
 /**
  * PDF 墨迹标注核心模块
  */
-import{getDatabase}from'../database'
 import type{Annotation}from'../database'
+import { listAnnotations, removeAnnotation, replaceAnnotationsByType } from '../MarkManager'
 
 export interface InkPoint{x:number;y:number;pressure?:number}
 export interface InkPath{points:InkPoint[];color:string;width:number;opacity:number}
@@ -272,7 +272,7 @@ export class InkToolManager{
   constructor(private container:HTMLElement,private plugin:any,private bookUrl:string,private bookName:string,private viewer:any){}
 
   private async loadData(){
-    const db=await getDatabase(),annotations=await db.getAnnotations(this.bookUrl)
+    const annotations=await listAnnotations(this.bookUrl,'ink')
     return annotations.filter(a=>a.type==='ink').map(a=>{
       const ink:any={id:a.id,type:'ink',page:a.data?.page||0,paths:a.data?.paths||[],timestamp:a.created}
       ink.rect=isValidRect(a.data?.rect)?a.data.rect:isValidPaths(ink.paths)?InkDrawer.calculateRect(ink.paths):undefined
@@ -282,14 +282,11 @@ export class InkToolManager{
 
   private async saveData(inkAnnotations:any[]){
     if(!this.initialized)return
-    const db=await getDatabase()
-    for(const ink of inkAnnotations){
-      await db.saveAnnotation({
+    await replaceAnnotationsByType(this.bookUrl,'ink',inkAnnotations.map((ink:any)=>({
         id:ink.id,book:this.bookUrl,type:'ink',loc:`page-${ink.page}`,text:'',note:'',color:'black',
         data:{format:'pdf',page:ink.page,paths:ink.paths,rect:ink.rect},
         created:ink.timestamp||Date.now(),updated:Date.now(),chapter:'',block:''
-      })
-    }
+      } as Annotation)))
   }
 
   async init(){
@@ -316,8 +313,7 @@ export class InkToolManager{
     if(!this.controller)return false
     const data=await this.loadData(),ink=data.find((i:any)=>i.id===id)
     if(!ink)return false
-    const db=await getDatabase()
-    await db.deleteAnnotation(id)
+    await removeAnnotation(id)
     this.controller.getManager(ink.page).deleteAnnotation(id)
     this.render(ink.page)
     return true

@@ -161,7 +161,8 @@ const [checking, keyword, selected, stopCheck, showMenu, removingSource, confirm
 const [annaExts, annaDomain, annaDomains, newDomain] = [ref<string[]>([]), ref(''), ref<string[]>([]), ref('')]
 const [showAddCustom, customName, customUrl, customSearchUrl] = [ref(false), ref(''), ref(''), ref('')]
 
-const loadHttpSources = () => {
+const loadHttpSources = async () => {
+  await httpSourceManager.init()
   httpSources.value = httpSourceManager.getSources()
   const anna = httpSources.value.find(s => s.id === 'anna')
   if (anna) { annaExts.value = anna.filters?.extensions || []; annaDomain.value = anna.currentDomain || ''; annaDomains.value = anna.domains || [] }
@@ -175,8 +176,9 @@ const reload = () => sources.value = bookSourceManager.getSources()
 const toggleSelect = (url: string) => selected.value.has(url) ? selected.value.delete(url) : selected.value.add(url)
 
 const toggleHttpSource = async (id: string) => {
+  await httpSourceManager.init()
   await httpSourceManager.toggleSource(id)
-  loadHttpSources()
+  await loadHttpSources()
   const s = httpSources.value.find(x => x.id === id)
   showMessage(s?.enabled ? `已启用 ${s.name}` : `已禁用 ${s?.name}`, 1500)
 }
@@ -184,14 +186,14 @@ const toggleHttpSource = async (id: string) => {
 const toggleExt = async (e: string) => {
   annaExts.value.includes(e) ? annaExts.value.splice(annaExts.value.indexOf(e), 1) : annaExts.value.push(e)
   await httpSourceManager.setAnnaExtensions(annaExts.value)
-  loadHttpSources()
+  await loadHttpSources()
 }
 
-const switchDomain = async () => { await httpSourceManager.switchAnnaDomain(annaDomain.value); loadHttpSources(); showMessage('域名已切换', 1500) }
+const switchDomain = async () => { await httpSourceManager.switchAnnaDomain(annaDomain.value); await loadHttpSources(); showMessage('域名已切换', 1500) }
 const addDomain = async () => {
   if (!newDomain.value.startsWith('http')) return showMessage('请输入完整URL', 2000, 'error')
   await httpSourceManager.addAnnaDomain(newDomain.value)
-  loadHttpSources()
+  await loadHttpSources()
   newDomain.value = ''
   showMessage('域名已添加', 1500)
 }
@@ -199,13 +201,13 @@ const addDomain = async () => {
 const addCustomSource = async () => {
   if (!customName.value.trim() || !customUrl.value.trim()) return showMessage('请填写名称和URL', 2000, 'error')
   await httpSourceManager.addCustomSource({ name: customName.value, url: customUrl.value, searchUrl: customSearchUrl.value, enabled: true })
-  loadHttpSources()
+  await loadHttpSources()
   customName.value = customUrl.value = customSearchUrl.value = ''
   showAddCustom.value = false
   showMessage('已添加', 1500)
 }
 
-const removeCustomSource = async (id: string) => { await httpSourceManager.removeSource(id); loadHttpSources(); showMessage('已删除', 1500) }
+const removeCustomSource = async (id: string) => { await httpSourceManager.removeSource(id); await loadHttpSources(); showMessage('已删除', 1500) }
 
 const batchEnable = (enable: boolean) => {
   let count = 0
@@ -253,7 +255,7 @@ const checkAll = async () => {
   showMessage(stopCheck.value ? `检测停止: ${validCount} 有效` : `检测完成: ${validCount}/${enabled.length} 有效`)
 }
 
-onMounted(async () => { await bookSourceManager.loadSources(); reload(); loadHttpSources() })
+onMounted(async () => { await bookSourceManager.loadSources(); reload(); await loadHttpSources() })
 onBeforeUnmount(() => (stopCheck.value = true, checking.value = false))
 </script>
 

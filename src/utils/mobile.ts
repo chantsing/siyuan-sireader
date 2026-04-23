@@ -3,6 +3,7 @@
  */
 import type { Plugin } from 'siyuan'
 import { getFrontend } from 'siyuan'
+import { bookshelfManager } from '@/core/bookshelf'
 
 export const isMobile = () => getFrontend().endsWith('mobile')
 
@@ -12,12 +13,10 @@ export const initMobile = (_p: Plugin) => {
 
 export const saveMobilePosition = async (bookUrl: string, position: any) => {
   if (!isMobile()) return
-  const db = await (await import('@/core/database')).getDatabase()
-  await db.saveSetting(`mobile_pos_${bookUrl}`, position)
+  await bookshelfManager.saveSetting(`mobile_pos_${bookUrl}`, position)
 }
 
 export const getMobilePosition = async (bookUrl: string) => {
   if (!isMobile()) return null
-  const db = await (await import('@/core/database')).getDatabase()
-  return await db.getSetting(`mobile_pos_${bookUrl}`)
+  return await bookshelfManager.getSetting(`mobile_pos_${bookUrl}`)
 }

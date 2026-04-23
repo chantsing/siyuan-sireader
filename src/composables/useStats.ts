@@ -1,98 +1,96 @@
 import { ref } from 'vue'
-import { showMessage } from 'siyuan'
 import type { Plugin } from 'siyuan'
+import { bookshelfManager } from '@/core/bookshelf'
+
+const emptyStats = () => ({ readingTime: 0, sessionStart: 0, currentBook: '', lastSaved: 0, focused: false })
+const getEventBookUrl = (e: CustomEvent) => e.detail?.bookUrl || e.detail?.book?.url || ''
 
 export function useStats(plugin: Plugin) {
-  const stats = ref({ readingTime: 0, sessionStart: 0, currentBook: '', lastSaved: 0 })
+  const stats = ref(emptyStats())
 
-  const fmt = (s: number) => {
-    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60)
-    return h > 0 ? `${h}h ${m}m` : `${m}m ${s % 60}s`
+  const fmt = (seconds: number) => {
+    const hours = Math.floor(seconds / 3600)
+    const minutes = Math.floor((seconds % 3600) / 60)
+    return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m ${seconds % 60}s`
   }
 
-  const fmtShort = (s: number) => {
-    const h = Math.floor(s / 3600)
-    return h >= 24 ? `${Math.floor(h / 24)}天` : h > 0 ? `${h}时` : `${Math.floor(s / 60)}分`
+  const fmtShort = (seconds: number) => {
+    const hours = Math.floor(seconds / 3600)
+    if (hours >= 24) return `${Math.floor(hours / 24)}d`
+    if (hours > 0) return `${hours}h`
+    return `${Math.floor(seconds / 60)}m`
   }
 
-  const load = async () => {
-    const db = await (await import('@/core/database')).getDatabase()
-    const data = await db.getSetting('reader_stats')
-    if (data) stats.value.readingTime = data.readingTime || 0
-    stats.value.sessionStart = 0
-  }
-
-  const save = async (duration: number) => {
-    const db = await (await import('@/core/database')).getDatabase()
+  const persist = async (duration: number) => {
     stats.value.readingTime += duration
-    
-    const tasks = [db.saveSetting('reader_stats', { readingTime: stats.value.readingTime })]
-    
-    if (stats.value.currentBook) {
-      tasks.push(
-        db.saveDailyReading(stats.value.currentBook, duration),
-        (async () => {
-          const book = await db.getBook(stats.value.currentBook)
-          if (book) {
-            book.time = (book.time || 0) + duration
-            book.read = Date.now()
-            await db.saveBook(book)
-          }
-        })()
-      )
-    }
-    
-    await Promise.all(tasks)
+    await Promise.all([
+      bookshelfManager.saveSetting('reader_stats', { readingTime: stats.value.readingTime }),
+      stats.value.currentBook ? bookshelfManager.recordReading(stats.value.currentBook, duration) : Promise.resolve(),
+    ])
   }
 
   const saveIncrement = async () => {
-    if (!stats.value.lastSaved) return
+    if (!stats.value.focused || !stats.value.lastSaved) return
     const now = Date.now()
     const duration = Math.floor((now - stats.value.lastSaved) / 1000)
     if (duration < 1) return
-    await save(duration)
+    await persist(duration)
     stats.value.lastSaved = now
   }
 
-  const startReading = (bookUrl: string) => {
+  const resetSession = (bookUrl = stats.value.currentBook) => Object.assign(stats.value, { currentBook: bookUrl, sessionStart: 0, lastSaved: 0, focused: false })
+
+  const setFocused = (focused: boolean, bookUrl = stats.value.currentBook) => {
+    if (bookUrl && stats.value.currentBook !== bookUrl) resetSession(bookUrl)
+    if (!stats.value.currentBook || stats.value.focused === focused) return
+    if (!focused) return void resetSession()
     const now = Date.now()
-    stats.value.sessionStart = now
-    stats.value.lastSaved = now
-    stats.value.currentBook = bookUrl
+    Object.assign(stats.value, { sessionStart: now, lastSaved: now, focused })
   }
 
   const stopReading = async () => {
-    if (!stats.value.sessionStart) return
     await saveIncrement()
-    stats.value.sessionStart = 0
-    stats.value.lastSaved = 0
-    stats.value.currentBook = ''
+    resetSession('')
+  }
+
+  const load = async () => {
+    const data = await bookshelfManager.getSetting('reader_stats', { readingTime: 0 })
+    Object.assign(stats.value, emptyStats(), { readingTime: Number(data?.readingTime || 0) })
   }
 
   const init = () => {
-    load()
-    
+    void load()
+
     const bar = document.createElement('div')
     bar.className = 'toolbar__item b3-tooltips b3-tooltips__n'
     bar.id = 'stats-btn'
     bar.innerHTML = '<svg class="toolbar__icon"><use xlink:href="#iconClock"></use></svg>'
-    bar.setAttribute('aria-label', '点击查看阅读统计')
+    bar.setAttribute('aria-label', 'Reading stats')
     bar.style.cursor = 'pointer'
     bar.addEventListener('click', () => window.dispatchEvent(new CustomEvent('stats:toggle')))
     plugin.addStatusBar({ element: bar, position: 'right' })
 
-    const timer = setInterval(saveIncrement, 60000)
-    const beforeUnload = () => stopReading()
+    const timer = window.setInterval(() => void saveIncrement(), 60000)
+    const beforeUnload = () => { void stopReading() }
+    const onReaderOpen = ((e: CustomEvent) => resetSession(getEventBookUrl(e))) as EventListener
+    const onReaderFocus = ((e: CustomEvent) => setFocused(true, getEventBookUrl(e))) as EventListener
+    const onReaderBlur = (() => { void saveIncrement().finally(() => resetSession()) }) as EventListener
+    const onReaderClose = (() => { void stopReading() }) as EventListener
+
     window.addEventListener('beforeunload', beforeUnload)
-    window.addEventListener('reader:open', ((e: CustomEvent) => startReading(e.detail?.bookUrl || '')) as any)
-    window.addEventListener('reader:close', stopReading as any)
+    window.addEventListener('reader:open', onReaderOpen)
+    window.addEventListener('reader:focus', onReaderFocus)
+    window.addEventListener('reader:blur', onReaderBlur)
+    window.addEventListener('reader:close', onReaderClose)
 
     return () => {
       clearInterval(timer)
       window.removeEventListener('beforeunload', beforeUnload)
-      window.removeEventListener('reader:open', () => {})
-      window.removeEventListener('reader:close', stopReading as any)
-      stopReading()
+      window.removeEventListener('reader:open', onReaderOpen)
+      window.removeEventListener('reader:focus', onReaderFocus)
+      window.removeEventListener('reader:blur', onReaderBlur)
+      window.removeEventListener('reader:close', onReaderClose)
+      void stopReading()
     }
   }
 

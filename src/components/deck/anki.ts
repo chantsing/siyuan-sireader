@@ -1,14 +1,13 @@
 // Anki 数据库访问层
-import initSqlJs from 'sql.js'
 import JSZip from 'jszip'
 import { decompress } from 'fzstd'
 import { putFile } from '@/api'
+import { getSqlJs } from '@/core/database'
 
 const ANKI_BASE = '/data/storage/petal/siyuan-sireader/anki'
 const MIME_TYPES: Record<string, string> = { svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg' }
 
 // ========== 数据库管理 ==========
-let sqlJs: any = null
 const ankiDbCache = new Map<string, any>()
 const mediaCache = new Map<string, Blob>()
 const zipCache = new Map<string, { zip: any; mediaMap: Record<string, string>; lastUsed: number }>()
@@ -19,7 +18,6 @@ const MAX_ZIP_CACHE = 2 // 最多 2 个 zip（降低内存占用）
 const ZIP_CACHE_TTL = 5 * 60 * 1000 // 5 分钟过期
 let mediaCacheSize = 0
 
-export const getSqlJs = async () => { if (!sqlJs) sqlJs = await initSqlJs({ locateFile: (f) => `/plugins/siyuan-sireader/sql.js/${f}` }); return sqlJs }
 export const getAnkiDbPath = (cid: string) => `${ANKI_BASE}/${cid}/collection.anki21`
 export const clearAnkiDbCache = () => { 
   ankiDbCache.clear()

@@ -89,8 +89,9 @@ import { useLicense } from '@/composables/useLicense'
 const props = defineProps<{ file?: File; plugin: Plugin; settings?: ReaderSettings; url?: string; blockId?: string; bookInfo?: any; onReaderReady?: (r: FoliateReader) => void; i18n?: any }>()
 
 const i18n = computed(() => props.i18n || {})
-const { can, showUpgrade } = useLicense(props.plugin, i18n.value)
+const { can, showUpgrade } = useLicense(i18n.value)
 const currentSettings = ref(props.settings)
+const getSettings = () => currentSettings.value || props.settings
 const pdfToolbarFixed = computed(() => currentSettings.value?.pdfToolbarStyle === 'fixed')
 
 // 标注面板引用
@@ -106,6 +107,7 @@ const loading = ref(true)
 const error = ref('')
 const hasBookmark = ref(false)
 const currentBookUrl = ref('')
+let readerFocused = false
 
 // 触摸滑动翻页
 let touchStartX=0,touchStartY=0
@@ -180,7 +182,7 @@ const init=async()=>{
       // 暴露 PDF 查看器实例给 TTS
       ;(window as any).__pdfViewer = viewer
       ;(viewerContainerRef.value as any).__pdfViewer = viewer
-      props.settings&&viewer.applyTheme(props.settings)
+      getSettings()&&viewer.applyTheme(getSettings()!)
       const searcher=new PDFSearch()
       const file=await loadFile()
       pdfSource=file?await file.arrayBuffer():null as any
@@ -209,7 +211,7 @@ const init=async()=>{
       ;(markManager.value as any).inkManager=inkToolManager
       ;(markManager.value as any).shapeManager=shapeToolManager
       updatePageInfo()
-      setActiveReader(currentView.value,null,props.settings)
+      setActiveReader(currentView.value,null,getSettings())
       
       // 初始化PDF标注（事件+渲染）
       const cleanupEvents = initPdfAnnotationEvents(viewerContainerRef.value!,viewer,markManager.value,(data,x,y)=>markPanelRef.value?.showMenu(data,x,y))
@@ -222,7 +224,7 @@ const init=async()=>{
         viewerContainerRef.value?.removeEventListener('keydown',handleKeydown)
       }
     }else{
-      reader=createReader({container:viewerContainerRef.value!,settings:props.settings!,plugin:props.plugin})
+      reader=createReader({container:viewerContainerRef.value!,settings:getSettings()!,plugin:props.plugin})
       
       if(props.bookInfo?.format==='online'){
         const{loadOnlineBook}=await import('@/core/online')
@@ -238,7 +240,7 @@ const init=async()=>{
       reader.on('relocate',onProgress)
       setupEpubKeyboard(reader,handleKeydown,(doc,e)=>markPanelRef.value?.checkSelection(doc,e))
       currentView.value=view
-      setActiveReader(view,reader,props.settings)
+      setActiveReader(view,reader,getSettings())
       props.onReaderReady?.(reader)
     }
 
@@ -258,7 +260,7 @@ const init=async()=>{
 // 统一复制处理
 const handleCopy=(item:any)=>{
   if(typeof item==='string'||!item.id&&item.text){const loc=isPdfMode.value?null:reader?.getLocation();item={text:item.text||item,cfi:item.cfi,page:item.page,chapter:loc?.tocItem?.label||loc?.tocItem?.title,id:''}}
-  copyMarkUtil(item,{bookUrl:getBookUrl(),bookInfo:props.bookInfo,settings:props.settings,reader,pdfViewer:pdfViewer.value,showMsg:(msg:string)=>showMessage(msg,1000)})
+  copyMarkUtil(item,{bookUrl:getBookUrl(),bookInfo:props.bookInfo,settings:getSettings(),reader,pdfViewer:pdfViewer.value,showMsg:(msg:string)=>showMessage(msg,1000)})
 }
 
 // 词典查询处理
@@ -319,6 +321,13 @@ const toggleBookmark=async()=>{try{hasBookmark.value=await marks.value?.toggleBo
 // 位置管理
 const getBookUrl=()=>currentBookUrl.value||props.bookInfo?.url||props.url||''
 const savePosition=()=>isMobile()&&getBookUrl()&&saveMobilePosition(getBookUrl(),isPdfMode.value?{page:pdfViewer.value?.getCurrentPage()}:{cfi:reader?.getLocation()?.cfi})
+const syncReaderFocus=(focused:boolean)=>{const bookUrl=getBookUrl();if(!bookUrl||readerFocused===focused)return;readerFocused=focused;window.dispatchEvent(new CustomEvent(focused?'reader:focus':'reader:blur',{detail:{bookUrl}}))}
+const hasReaderFocus=()=>!!containerRef.value&&containerRef.value.contains(document.activeElement)
+const handleFocusIn=()=>syncReaderFocus(true)
+const handleFocusOut=()=>setTimeout(()=>syncReaderFocus(hasReaderFocus()),0)
+const handleWindowBlur=()=>syncReaderFocus(false)
+const handleWindowFocus=()=>syncReaderFocus(hasReaderFocus())
+const handleVisibilityChange=()=>syncReaderFocus(!document.hidden&&hasReaderFocus())
 
 // 打开目录/关闭
 const openToc=()=>showToc.value=!showToc.value
@@ -355,19 +364,19 @@ const events=[['sireaderSettingsUpdated',handleSettingsUpdate],['sireader:goto',
 
 const suppressError=(e:PromiseRejectionEvent)=>/createTreeWalker|destroy/.test(e.reason?.message||'')&&e.preventDefault()
 
-const setupTabObserver=()=>{if(isMobile())return;let el=containerRef.value?.parentElement;while(el){if(el.hasAttribute('data-id')){const h=document.querySelector(`li[data-type="tab-header"][data-id="${el.getAttribute('data-id')}"]`);if(h){const obs=new MutationObserver(ms=>ms.forEach(m=>m.type==='attributes'&&m.attributeName==='class'&&(m.target as HTMLElement).classList.contains('item--focus')&&(setActiveReader(currentView.value,reader,props.settings),window.dispatchEvent(new CustomEvent('sireader:tab-switched')))));obs.observe(h,{attributes:true,attributeFilter:['class']});(containerRef.value as any).__observer=obs;break}}el=el.parentElement}}
+const setupTabObserver=()=>{if(isMobile())return;let el=containerRef.value?.parentElement;while(el){if(el.hasAttribute('data-id')){const h=document.querySelector(`li[data-type="tab-header"][data-id="${el.getAttribute('data-id')}"]`);if(h){const obs=new MutationObserver(ms=>ms.forEach(m=>{if(m.type!=='attributes'||m.attributeName!=='class')return;const focused=(m.target as HTMLElement).classList.contains('item--focus');focused&&setActiveReader(currentView.value,reader,getSettings());focused&&window.dispatchEvent(new CustomEvent('sireader:tab-switched'));syncReaderFocus(focused&&hasReaderFocus())}));obs.observe(h,{attributes:true,attributeFilter:['class']});(containerRef.value as any).__observer=obs;break}}el=el.parentElement}}
 
 // 形状创建后自动显示编辑窗口
 const handleShapeCreated=(e:CustomEvent)=>{const{shape,x,y,edit}=e.detail;edit&&markPanelRef.value?.showCard(shape,x,y,true)}
 
-onMounted(()=>{init();containerRef.value?.focus();events.forEach(([e,h])=>window.addEventListener(e,h as any));window.addEventListener('keydown',handleKeydown);window.addEventListener('unhandledrejection',suppressError);window.addEventListener('shape-created',handleShapeCreated as any);setupTabObserver();const c=containerRef.value;isMobile()&&c&&(c.addEventListener('touchstart',handleTouchStart),c.addEventListener('touchend',handleTouchEnd));window.dispatchEvent(new CustomEvent('reader:open',{detail:{bookUrl:getBookUrl()}}))})
+onMounted(()=>{init();containerRef.value?.focus();events.forEach(([e,h])=>window.addEventListener(e,h as any));window.addEventListener('keydown',handleKeydown);window.addEventListener('unhandledrejection',suppressError);window.addEventListener('shape-created',handleShapeCreated as any);window.addEventListener('blur',handleWindowBlur);window.addEventListener('focus',handleWindowFocus);document.addEventListener('visibilitychange',handleVisibilityChange);setupTabObserver();const c=containerRef.value;c&&(c.addEventListener('focusin',handleFocusIn),c.addEventListener('focusout',handleFocusOut));isMobile()&&c&&(c.addEventListener('touchstart',handleTouchStart),c.addEventListener('touchend',handleTouchEnd));window.dispatchEvent(new CustomEvent('reader:open',{detail:{bookUrl:getBookUrl()}}));syncReaderFocus(true)})
 
-onUnmounted(async()=>{window.dispatchEvent(new CustomEvent('reader:close'));savePosition();clearActiveReader();await markManager.value?.destroy();try{reader?.destroy();currentView.value?.cleanup?.();currentView.value?.viewer?.destroy?.()}catch{};inkToolManager?.destroy?.();shapeToolManager?.destroy?.();ttsController.destroy();setTimeout(()=>viewerContainerRef.value&&(viewerContainerRef.value.innerHTML=''),50);events.forEach(([e,h])=>window.removeEventListener(e,h as any));window.removeEventListener('keydown',handleKeydown);window.removeEventListener('unhandledrejection',suppressError);window.removeEventListener('shape-created',handleShapeCreated as any);(containerRef.value as any)?.__observer?.disconnect();const c=containerRef.value;isMobile()&&c&&(c.removeEventListener('touchstart',handleTouchStart),c.removeEventListener('touchend',handleTouchEnd));(await import('@/core/database')).getDatabase().then(db=>db.cleanup());(await import('@/core/bookshelf')).bookshelfManager.cleanup()})
+onUnmounted(async()=>{syncReaderFocus(false);window.dispatchEvent(new CustomEvent('reader:close'));savePosition();clearActiveReader();await markManager.value?.destroy();try{reader?.destroy();currentView.value?.cleanup?.();currentView.value?.viewer?.destroy?.()}catch{};inkToolManager?.destroy?.();shapeToolManager?.destroy?.();ttsController.destroy();setTimeout(()=>viewerContainerRef.value&&(viewerContainerRef.value.innerHTML=''),50);events.forEach(([e,h])=>window.removeEventListener(e,h as any));window.removeEventListener('keydown',handleKeydown);window.removeEventListener('unhandledrejection',suppressError);window.removeEventListener('shape-created',handleShapeCreated as any);window.removeEventListener('blur',handleWindowBlur);window.removeEventListener('focus',handleWindowFocus);document.removeEventListener('visibilitychange',handleVisibilityChange);(containerRef.value as any)?.__observer?.disconnect();const c=containerRef.value;c&&(c.removeEventListener('focusin',handleFocusIn),c.removeEventListener('focusout',handleFocusOut));isMobile()&&c&&(c.removeEventListener('touchstart',handleTouchStart),c.removeEventListener('touchend',handleTouchEnd));const{bookshelfManager}=await import('@/core/bookshelf');await bookshelfManager.flush();bookshelfManager.cleanup()})
 </script>
 
 <style scoped lang="scss">
 .reader-container{position:relative;width:100%;height:100%;outline:none;user-select:text;-webkit-user-select:text;isolation:isolate;display:flex;flex-direction:column;background:var(--b3-theme-background)}
-.reader-overlay{position:fixed;inset:0;z-index:999;background:transparent}
+.reader-overlay{position:absolute;inset:0;z-index:999;background:transparent}
 .viewer-container{flex:1;position:relative;overflow:auto;background:var(--b3-theme-background);
   &.has-fixed-toolbar{padding-top:40px}
 }
