@@ -1,4 +1,106 @@
-// 查找包含指定class的最近父元素
+// 查找包含指定 class 的最近父元素
+export const compactNumber = (value: number, digits = 1) => {
+  const factor = 10 ** digits
+  return Math.round(value * factor) / factor
+}
+
+export const compactRect = (rect: [number, number, number, number]) =>
+  rect.map(value => compactNumber(value)) as [number, number, number, number]
+
+export const normalizePdfRect = (rect: [number, number, number, number]) => {
+  const [x1, y1, x2, y2] = rect
+  return compactRect([
+    Math.min(x1, x2),
+    Math.min(y1, y2),
+    Math.max(x1, x2),
+    Math.max(y1, y2),
+  ])
+}
+
+export const getRectBox = (rect: [number, number, number, number]) => {
+  const [x1, y1, x2, y2] = rect
+  const left = Math.min(x1, x2)
+  const top = Math.min(y1, y2)
+  const right = Math.max(x1, x2)
+  const bottom = Math.max(y1, y2)
+  return { x: compactNumber(left), y: compactNumber(top), w: compactNumber(right - left), h: compactNumber(bottom - top) }
+}
+
+export const getPdfViewport = (viewer: any, page: number, rotation = viewer?.getRotation?.() ?? 0) =>
+  viewer?.getPages?.().get(page)?.getViewport({ scale: viewer.getScale(), rotation }) || null
+
+export const getPdfPageCanvas = (page: number) => {
+  const pageEl = document.querySelector(`[data-page="${page}"]`)
+  return pageEl && (Array.from(pageEl.querySelectorAll('canvas')).find(canvas => !canvas.className) || pageEl.querySelector('canvas')) as HTMLCanvasElement | null
+}
+
+export const getPdfLayerCanvas = (layerClass: string, page: number) =>
+  document.querySelector(`.${layerClass}[data-page="${page}"]`) as HTMLCanvasElement | null
+
+export const redrawPdfLayerPage = (
+  page: number,
+  getCanvas: (page: number) => HTMLCanvasElement | null,
+  render: (page: number, canvas: HTMLCanvasElement) => void,
+) => {
+  const canvas = getCanvas(page)
+  if (canvas) render(page, canvas)
+  return canvas
+}
+
+export const setPdfLayerInteractivity = (layerClass: string, active: boolean) => {
+  document.querySelectorAll(`.${layerClass}`).forEach(el => {
+    const canvas = el as HTMLCanvasElement
+    canvas.style.pointerEvents = active ? 'auto' : 'none'
+    canvas.style.cursor = active ? 'crosshair' : 'default'
+    canvas.style.touchAction = active ? 'none' : 'auto'
+  })
+}
+
+export const getCanvasPoint = (e: MouseEvent | TouchEvent, rect: DOMRect) => ({
+  x: (e instanceof MouseEvent ? e.clientX : e.touches[0].clientX) - rect.left,
+  y: (e instanceof MouseEvent ? e.clientY : e.touches[0].clientY) - rect.top,
+})
+
+export const screenPointToPdfPoint = (viewport: any, x: number, y: number) => {
+  const [px, py] = viewport.convertToPdfPoint(x, y)
+  return { x: compactNumber(px), y: compactNumber(py) }
+}
+
+export const pdfPointToScreenPoint = (viewport: any, x: number, y: number) => {
+  const [sx, sy] = viewport.convertToViewportPoint(x, y)
+  return { x: compactNumber(sx), y: compactNumber(sy) }
+}
+
+export const pdfRectToScreenRect = (viewport: any, rect: [number, number, number, number]) => {
+  const [x1, y1, x2, y2] = viewport.convertToViewportRectangle(normalizePdfRect(rect))
+  return [
+    compactNumber(Math.min(x1, x2)),
+    compactNumber(Math.min(y1, y2)),
+    compactNumber(Math.max(x1, x2)),
+    compactNumber(Math.max(y1, y2)),
+  ] as [number, number, number, number]
+}
+
+export const pdfRectToScreenBox = (viewport: any, rect: [number, number, number, number]) =>
+  getRectBox(pdfRectToScreenRect(viewport, rect))
+
+export const screenRectToPdfRect = (viewport: any, rect: [number, number, number, number]) => {
+  const p1 = screenPointToPdfPoint(viewport, rect[0], rect[1])
+  const p2 = screenPointToPdfPoint(viewport, rect[2], rect[3])
+  return normalizePdfRect([p1.x, p1.y, p2.x, p2.y] as [number, number, number, number])
+}
+
+export const screenRectToPdfBox = (viewport: any, rect: [number, number, number, number]) => {
+  const [x1, y1, x2, y2] = screenRectToPdfRect(viewport, rect)
+  return { x: x1, y: y1, w: compactNumber(Math.max(0, x2 - x1)), h: compactNumber(Math.max(0, y2 - y1)) }
+}
+
+export const screenDeltaToPdfDelta = (viewport: any, dx: number, dy: number) => {
+  const p1 = screenPointToPdfPoint(viewport, 0, 0)
+  const p2 = screenPointToPdfPoint(viewport, dx, dy)
+  return { dx: compactNumber(p2.x - p1.x), dy: compactNumber(p2.y - p1.y) }
+}
+
 const closest = (el: Node | null, cls: string): HTMLElement | null => {
   let cur = el?.nodeType === 1 ? el as HTMLElement : (el as any)?.parentElement
   while (cur?.classList) {
@@ -8,7 +110,7 @@ const closest = (el: Node | null, cls: string): HTMLElement | null => {
   return null
 }
 
-// 获取textLayer首/尾有内容的文本节点（跨页选择用）
+// 获取 textLayer 首/尾有内容的文本节点（跨页选择用）
 const getTextNode = (el: HTMLElement, first: boolean) => {
   const spans = el.querySelectorAll('span[role="presentation"]')
   let i = first ? 0 : spans.length - 1
@@ -16,7 +118,7 @@ const getTextNode = (el: HTMLElement, first: boolean) => {
   return spans[i]
 }
 
-// 合并同行矩形（过滤空矩形，合并相邻矩形）
+// 合并同一行矩形（过滤空矩形，合并相邻矩形）
 const mergeRects = (range: Range) => {
   const merged: { left: number; top: number; right: number; bottom: number }[] = []
   let lastTop: number | undefined
@@ -30,7 +132,7 @@ const mergeRects = (range: Range) => {
   return merged
 }
 
-// TextLayer选择优化器：动态插入endOfContent元素作为"墙"限制选择范围，防止空白区域扩选
+// TextLayer 选择优化：动态插入 endOfContent 元素作为"墙"限制选择范围，防止空白区域扩选
 class TextLayerOptimizer {
   private static layers = new Map<HTMLElement, HTMLElement>()
   private static ctrl: AbortController | null = null
@@ -75,7 +177,6 @@ class TextLayerOptimizer {
       const sel = document.getSelection()
       if (!sel?.rangeCount) return resetAll()
 
-      // 收集活动的textLayer
       const active = new Set<HTMLElement>()
       for (let i = 0; i < sel.rangeCount; i++) {
         const r = sel.getRangeAt(i)
@@ -84,55 +185,48 @@ class TextLayerOptimizer {
         }
       }
 
-      // 更新textLayer状态
       for (const [l, e] of this.layers) {
         active.has(l) ? l.classList.add('selecting') : this.reset(e, l)
       }
 
-      // Firefox不需要此优化
       if (this.layers.size && getComputedStyle(this.layers.keys().next().value).getPropertyValue('-moz-user-select') === 'none') return
 
       const range = sel.getRangeAt(0)
-      // 判断选择方向：END_TO_END或START_TO_END相等→向上选择，否则→向下选择
       const modStart = this.prev && (
         range.compareBoundaryPoints(Range.END_TO_END, this.prev) === 0 ||
         range.compareBoundaryPoints(Range.START_TO_END, this.prev) === 0
       )
 
-      // 提取公共逻辑：插入墙的位置计算
       const insertWall = (layer: HTMLElement, anchor: Node, offset: number, before: boolean) => {
         const end = this.layers.get(layer)
         if (!end) return
         end.style.width = layer.style.width
         end.style.height = layer.style.height
         if (anchor.nodeType === Node.TEXT_NODE) anchor = anchor.parentNode as Node
-        const pos = before ? anchor : 
-          (offset === 0 && anchor.previousSibling) ? anchor.previousSibling.nextSibling : anchor.nextSibling
+        const pos = before ? anchor
+          : (offset === 0 && anchor.previousSibling) ? anchor.previousSibling.nextSibling : anchor.nextSibling
         ;(anchor as HTMLElement).parentElement?.insertBefore(end, pos)
       }
 
       if (active.size === 1) {
-        // 单页选择
         const anchor = modStart ? range.startContainer : range.endContainer
         const offset = modStart ? range.startOffset : range.endOffset
         const layer = ((anchor.nodeType === Node.TEXT_NODE ? anchor.parentNode : anchor) as HTMLElement)?.closest('.textLayer') as HTMLElement
         if (layer) insertWall(layer, anchor, offset, !!modStart)
       } else {
-        // 跨页选择
         const getTextLayer = (node: Node) => ((node.nodeType === Node.TEXT_NODE ? node.parentNode : node) as HTMLElement)?.closest('.textLayer') as HTMLElement
         const startTextLayer = getTextLayer(range.startContainer)
         const endTextLayer = getTextLayer(range.endContainer)
-        
+
         for (const layer of active) {
           const end = this.layers.get(layer)
           if (!end) continue
-          
+
           if (layer === startTextLayer && modStart) {
             insertWall(layer, range.startContainer, range.startOffset, true)
           } else if (layer === endTextLayer && !modStart) {
             insertWall(layer, range.endContainer, range.endOffset, false)
           } else {
-            // 中间页：墙插到页面末尾
             end.style.width = layer.style.width
             end.style.height = layer.style.height
             const spans = layer.querySelectorAll('span[role="presentation"]')
@@ -145,95 +239,87 @@ class TextLayerOptimizer {
   }
 }
 
-// 获取PDF选择坐标（转换为PDF坐标系统）
+const buildPageRange = (source: Range, layer: HTMLElement, pageNum: number, startPageNum: number, endPageNum: number) => {
+  const pageRange = source.cloneRange()
+  const first = getTextNode(layer, true)
+  const last = getTextNode(layer, false)
+  if (!first || !last) return null
+  if (pageNum !== startPageNum) pageRange.setStartBefore(first)
+  if (pageNum !== endPageNum) pageRange.setEndAfter(last)
+  return pageRange
+}
+
+// 获取 PDF 选择坐标（转换为 PDF 坐标系统）
 export const getPdfSelectionRects = (viewer: any): any[] | null => {
   const range = window.getSelection()?.getRangeAt(0)
   if (!range?.toString().trim()) return null
-  
+
   const startEl = closest(range.startContainer, 'pdf-page')
   const endEl = closest(range.endContainer, 'pdf-page')
   if (!startEl || !endEl) return null
-  
-  const startIdx = parseInt(startEl.getAttribute('data-page') || '1') - 1
-  const endIdx = parseInt(endEl.getAttribute('data-page') || '1') - 1
+
+  const startPageNum = parseInt(startEl.getAttribute('data-page') || '1')
+  const endPageNum = parseInt(endEl.getAttribute('data-page') || '1')
+  const pageFrom = Math.min(startPageNum, endPageNum)
+  const pageTo = Math.max(startPageNum, endPageNum)
   const pages = viewer.getPages()
-  const startPage = pages?.get(startIdx + 1)
-  if (!startPage) return null
-  
-  const startCanvas = startEl.querySelector('canvas')
-  if (!startCanvas) return null
-  const startRect = startCanvas.getBoundingClientRect()
-  const startVp = startPage.getViewport({ scale: viewer.getScale(), rotation: viewer.getRotation() })
-  const clone = range.cloneRange()
-  
-  // 跨页选择：调整起始页range到最后一个文本节点
-  if (startIdx !== endIdx) {
-    const layer = startEl.querySelector('.textLayer') as HTMLElement
-    const last = layer && getTextNode(layer, false)
-    if (last) range.setEndAfter(last)
+  const coords: any[] = []
+
+  for (let pageNum = pageFrom; pageNum <= pageTo; pageNum++) {
+    const pageEl = document.querySelector(`[data-page="${pageNum}"]`) as HTMLElement | null
+    const page = pages?.get(pageNum)
+    const canvas = getPdfPageCanvas(pageNum)
+    const layer = pageEl?.querySelector('.textLayer') as HTMLElement | null
+    if (!pageEl || !page || !canvas || !layer) continue
+
+    const pageRange = buildPageRange(range, layer, pageNum, startPageNum, endPageNum)
+    if (!pageRange?.toString().trim()) continue
+
+    const canvasRect = canvas.getBoundingClientRect()
+    const viewport = getPdfViewport(viewer, pageNum)
+    if (!viewport) continue
+    mergeRects(pageRange).forEach(r => {
+      coords.push({ page: pageNum, ...screenRectToPdfBox(viewport, [r.left - canvasRect.x, r.top - canvasRect.y, r.right - canvasRect.x, r.bottom - canvasRect.y]) })
+    })
   }
 
-  // 收集起始页坐标
-  const coords: number[][] = []
-  mergeRects(range).forEach(r => coords.push(
-    startVp.convertToPdfPoint(r.left - startRect.x, r.top - startRect.y)
-      .concat(startVp.convertToPdfPoint(r.right - startRect.x, r.bottom - startRect.y))
-  ))
-
-  // 跨页选择：收集结束页坐标
-  if (startIdx !== endIdx) {
-    const endPage = pages?.get(endIdx + 1)
-    const endCanvas = endPage && endEl.querySelector('canvas')
-    if (endCanvas) {
-      const endRect = endCanvas.getBoundingClientRect()
-      const endVp = endPage.getViewport({ scale: viewer.getScale(), rotation: viewer.getRotation() })
-      const layer = endEl.querySelector('.textLayer') as HTMLElement
-      const first = layer && getTextNode(layer, true)
-      if (first) clone.setStart(first, 0)
-      mergeRects(clone).forEach(r => coords.push(
-        endVp.convertToPdfPoint(r.left - endRect.x, r.top - endRect.y)
-          .concat(endVp.convertToPdfPoint(r.right - endRect.x, r.bottom - endRect.y))
-      ))
-    }
-  }
-
-  return coords.length ? coords.map(c => ({ x: c[0], y: c[1], w: c[2] - c[0], h: c[3] - c[1] })) : null
+  return coords.length ? coords : null
 }
 
 let isTextDown = false
+const PDF_DRAG_KEY = 'pdfDragAnnotation'
+type DragState = { type: 'mark' | 'shape' | 'ink'; id: string; item: any; page: number; x: number; y: number; moved: boolean }
 
-// 处理PDF文本选择，显示标注菜单
+// 处理 PDF 文本选择，显示标注菜单
 export const handlePdfSelection = (viewer: any, mgr: any, show: (d: any, x: number, y: number) => void) => {
   const sel = window.getSelection()
   if (!sel?.toString().trim()) return
-  
+
   try {
     const range = sel.getRangeAt(0)
-    if (!closest(range.commonAncestorContainer, 'viewer-container') && 
+    if (!closest(range.commonAncestorContainer, 'viewer-container') &&
         !closest(range.commonAncestorContainer, 'pdf-page')) return
-    
+
     const rects = Array.from(range.getClientRects())
     if (!rects.length) return
-    
+
     const el = closest(range.startContainer, 'pdf-page')
     if (!el) return
-    
+
     const pg = parseInt(el.getAttribute('data-page') || '1')
     const page = viewer.getPages().get(pg)
     if (!page) return
-    
-    // 优先使用markManager的坐标计算（更准确）
+
     let data = mgr?.getPdfSelectionRects()
     if (!data) {
       const pr = el.getBoundingClientRect()
-      const vp = page.getViewport({ scale: viewer.getScale(), rotation: viewer.getRotation() })
+      const vp = getPdfViewport(viewer, pg)
+      if (!vp) return
       data = rects.map(r => {
-        const [x1, y1] = vp.convertToPdfPoint(r.left - pr.left, r.top - pr.top)
-        const [x2, y2] = vp.convertToPdfPoint(r.right - pr.left, r.bottom - pr.top)
-        return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 }
+        return { page: pg, ...screenRectToPdfBox(vp, [r.left - pr.left, r.top - pr.top, r.right - pr.left, r.bottom - pr.top]) }
       })
     }
-    
+
     show(
       { text: sel.toString().trim(), location: { format: 'pdf', page: pg, rects: data } },
       rects[0].left + rects[0].width / 2,
@@ -244,66 +330,167 @@ export const handlePdfSelection = (viewer: any, mgr: any, show: (d: any, x: numb
   }
 }
 
-// 初始化PDF标注事件监听（鼠标按下/抬起）
+// 初始化 PDF 标注事件监听（鼠标按下/抬起）
 export const initPdfAnnotationEvents = (
   container: HTMLElement,
   viewer: any,
   mgr: any,
   showMenu: (d: any, x: number, y: number) => void
 ) => {
+  let dragState: DragState | null = null
+  let pendingDx = 0
+  let pendingDy = 0
+  let dragFrame = 0
+
+  const getPageInfo = (e: MouseEvent) => {
+    const pageEl = (e.target as HTMLElement)?.closest('[data-page]') as HTMLElement | null
+    if (!pageEl) return null
+    const page = parseInt(pageEl.dataset.page || '0')
+    if (!page) return null
+    const canvas = getPdfPageCanvas(page)
+    if (!canvas) return null
+    const rect = canvas.getBoundingClientRect()
+    return { page, x: e.clientX - rect.left, y: e.clientY - rect.top }
+  }
+
+  const setDragging = (active: boolean) => active ? (container.dataset[PDF_DRAG_KEY] = 'true') : delete container.dataset[PDF_DRAG_KEY]
+  const getEditorPos = (e: MouseEvent) => ({ x: e.clientX, y: e.clientY + 10 })
+  const moveDrag = (state: DragState, dx: number, dy: number) => state.type === 'mark'
+    ? mgr?.movePdfMarkPreview?.(state.id, state.page, dx, dy)
+    : state.type === 'shape'
+      ? mgr?.shapeManager?.moveShapePreview?.(state.id, dx, dy)
+      : mgr?.inkManager?.moveInkPreview?.(state.id, dx, dy)
+  const commitDrag = (state: DragState | null) => state?.moved && (state.type === 'mark'
+    ? mgr?.commitPdfMarkMove?.()
+    : state.type === 'shape'
+      ? mgr?.shapeManager?.commitMove?.()
+      : mgr?.inkManager?.commitMove?.())
+  const startDrag = (type: DragState['type'], id: string, item: any, page: number, e: MouseEvent) => {
+    dragState = { type, id, item, page, x: e.clientX, y: e.clientY, moved: false }
+    pendingDx = 0
+    pendingDy = 0
+    setDragging(true)
+    e.preventDefault()
+  }
+  const flushDrag = () => {
+    dragFrame = 0
+    if (!dragState) return
+    const dx = pendingDx
+    const dy = pendingDy
+    pendingDx = 0
+    pendingDy = 0
+    if (!dx && !dy) return
+    moveDrag(dragState, dx, dy)
+  }
+  const queueDrag = (dx: number, dy: number) => {
+    pendingDx += dx
+    pendingDy += dy
+    if (!dragFrame) dragFrame = requestAnimationFrame(flushDrag)
+  }
+  const findTarget = (pageInfo: ReturnType<typeof getPageInfo>, target?: EventTarget | null) => {
+    if (!pageInfo) return null
+    const highlight = (target as HTMLElement | null)?.closest?.('.pdf-highlight') as HTMLElement | null
+    if (highlight?.dataset.id) return { type: 'mark' as const, id: highlight.dataset.id, item: mgr?.getAll?.().find?.((mark: any) => mark.id === highlight.dataset.id) }
+    const shape = mgr?.shapeManager?.findShapeAt?.(pageInfo.page, pageInfo.x, pageInfo.y)
+    if (shape?.id) return { type: 'shape' as const, id: shape.id, item: shape }
+    const ink = mgr?.inkManager?.findInkAt?.(pageInfo.page, pageInfo.x, pageInfo.y)
+    if (ink?.id) return { type: 'ink' as const, id: ink.id, item: ink }
+    return null
+  }
+  const openEditor = (item: any, x: number, y: number) => {
+    if (!item) return false
+    window.dispatchEvent(new CustomEvent('sireader:edit-mark', { detail: { item, position: { x, y } } }))
+    return true
+  }
+  const tryOpenTargetEditor = (e: MouseEvent) => openEditor(findTarget(getPageInfo(e), e.target)?.item, getEditorPos(e).x, getEditorPos(e).y)
+  const handleDragStart = (e: MouseEvent) => {
+    if (e.button !== 0) return
+    const pageInfo = getPageInfo(e)
+    const target = findTarget(pageInfo, e.target)
+    if (target) startDrag(target.type, target.id, target.item, pageInfo!.page, e)
+  }
+
+  const handleDragMove = (e: MouseEvent) => {
+    if (!dragState) return
+    const dx = e.clientX - dragState.x
+    const dy = e.clientY - dragState.y
+    if (!dx && !dy) return
+    dragState.moved = dragState.moved || Math.abs(dx) > 1 || Math.abs(dy) > 1
+    dragState.x = e.clientX
+    dragState.y = e.clientY
+    queueDrag(dx, dy)
+    e.preventDefault()
+  }
+
+  const handleDragEnd = (e: MouseEvent) => {
+    if (!dragState) return
+    const finalState = dragState
+    if (dragFrame) {
+      cancelAnimationFrame(dragFrame)
+      flushDrag()
+    }
+    commitDrag(finalState)
+    if (finalState.moved) {
+      e.preventDefault()
+      e.stopPropagation()
+    } else openEditor(finalState.item, getEditorPos(e).x, getEditorPos(e).y)
+    dragState = null
+    pendingDx = 0
+    pendingDy = 0
+    setDragging(false)
+  }
+
   const handleMouseDown = (e: MouseEvent) => {
+    handleDragStart(e)
+    if (dragState) return
     const target = document.elementFromPoint(e.clientX, e.clientY)
     isTextDown = !!target?.closest('span[role="presentation"]')
     if (isTextDown) container.classList.add('pdf-selecting')
   }
-  
-  const handleMouseUp = () => {
+
+  const handleMouseUp = (e?: MouseEvent) => {
+    if (dragState) {
+      handleDragEnd(e as MouseEvent)
+      return
+    }
     container.classList.remove('pdf-selecting')
     setTimeout(() => {
       const sel = window.getSelection()
       if (sel?.rangeCount && !sel.isCollapsed && !isTextDown) sel.removeAllRanges()
-      else handlePdfSelection(viewer, mgr, showMenu)
+      else if (!(e && tryOpenTargetEditor(e))) handlePdfSelection(viewer, mgr, showMenu)
     }, 100)
   }
-  
+
+  container.addEventListener('mousemove', handleDragMove)
   container.addEventListener('mousedown', handleMouseDown)
   container.addEventListener('mouseup', handleMouseUp)
-  
+
   return () => {
+    container.removeEventListener('mousemove', handleDragMove)
     container.removeEventListener('mousedown', handleMouseDown)
     container.removeEventListener('mouseup', handleMouseUp)
   }
 }
 
-// 初始化PDF标注渲染（统一管理layer-ready事件和页面切换）
+// 初始化 PDF 标注渲染（统一管理 layer-ready 事件和页面切换）
 export const initPdfAnnotationRender = (
   viewer: any,
   mgr: any,
   inkMgr?: any,
   shapeMgr?: any
 ) => {
-  const handleLayerReady = (e: CustomEvent) => {
-    const page = e.detail.page
+  const renderPage = (page: number) => {
     mgr?.renderPdf(page)
     shapeMgr?.render(page)
     inkMgr?.render(page)
   }
-  
-  window.addEventListener('pdf:layer-ready', handleLayerReady as any)
-  
-  // 监听页面切换，延迟渲染确保DOM准备好
-  const origOnChange = viewer.onChange
-  viewer.onChange = (page: number) => {
-    origOnChange?.(page)
-    setTimeout(() => handleLayerReady({ detail: { page } } as any), 50)
-  }
-  
+  const stop = viewer?.onPageReady?.(renderPage)
+  viewer?.refreshRenderedPages?.()
+
   return () => {
-    window.removeEventListener('pdf:layer-ready', handleLayerReady as any)
-    viewer.onChange = origOnChange
+    stop?.()
   }
 }
 
-// 导出接口
 export const initTextLayerOptimization = (layer: HTMLElement) => TextLayerOptimizer.add(layer)
 export const cleanupTextLayerOptimization = (layer: HTMLElement) => TextLayerOptimizer.remove(layer)

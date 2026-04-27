@@ -4,14 +4,14 @@
 import type{Plugin}from'siyuan'
 import{Overlayer}from'foliate-js/overlayer.js'
 import { getDatabase, type Annotation, type AnnotationType } from './database'
-import{getPdfSelectionRects}from'./pdf/annotation'
+import{compactNumber,getPdfSelectionRects,getPdfViewport,pdfRectToScreenBox,screenDeltaToPdfDelta}from'./pdf/annotation'
 
 type Format='pdf'|'epub'
 type HighlightColor='yellow'|'red'|'green'|'blue'|'purple'|'orange'|'pink'
 type MarkStyle='highlight'|'underline'|'outline'|'dotted'|'dashed'|'double'|'squiggly'
 type MarkType='bookmark'|'highlight'|'note'|'vocab'
 
-interface Mark{id:string;type:MarkType;format:Format;cfi?:string;section?:number;page?:number;rects?:any[];text?:string;color?:HighlightColor;style?:MarkStyle;note?:string;title?:string;timestamp:number;progress?:number;textOffset?:number;blockId?:string;chapter?:string}
+interface Mark{id:string;type:MarkType;format:Format;cfi?:string;section?:number;page?:number;rects?:Array<{page?:number;x:number;y:number;w:number;h:number}>;text?:string;color?:HighlightColor;style?:MarkStyle;note?:string;title?:string;timestamp:number;progress?:number;textOffset?:number;blockId?:string;chapter?:string;customOrder?:number}
 
 export const COLORS=[{name:'黄色',color:'yellow'as const,bg:'#ffeb3b'},{name:'红色',color:'red'as const,bg:'#ef5350'},{name:'绿色',color:'green'as const,bg:'#66bb6a'},{name:'蓝色',color:'blue'as const,bg:'#42a5f5'},{name:'紫色',color:'purple'as const,bg:'#ab47bc'},{name:'橙色',color:'orange'as const,bg:'#ff9800'},{name:'粉色',color:'pink'as const,bg:'#ec407a'}]
 export const STYLES=[{type:'highlight'as const,name:'高亮',text:'A'},{type:'underline'as const,name:'下划线',text:'A'},{type:'outline'as const,name:'边框',text:'A'},{type:'dotted'as const,name:'点线',text:'A',pdfOnly:true},{type:'dashed'as const,name:'虚线',text:'A',pdfOnly:true},{type:'double'as const,name:'双线',text:'A',pdfOnly:true},{type:'squiggly'as const,name:'波浪线',text:'A',epubOnly:true}]
@@ -39,6 +39,7 @@ const getNoteIcon=(color?:string)=>color==='purple'?'🌐':'📒'
 const getNoteColor=(color?:string)=>color==='purple'?'#ab47bc':'#2196f3'
 const getColorBg=(color?:HighlightColor)=>COLORS.find(c=>c.color===color)?.bg||'#ffeb3b'
 const cleanTooltips=(markId:string)=>document.querySelectorAll(`[data-note-tooltip][data-mark-id="${markId}"]`).forEach(el=>el.remove())
+const compactMarkRects=(rects?:Array<{page?:number;x:number;y:number;w:number;h:number}>)=>rects?.map(r=>({ ...r,x:compactNumber(r.x),y:compactNumber(r.y),w:compactNumber(r.w),h:compactNumber(r.h) }))
 
 export const createTooltip=(config:{icon:string;iconColor:string;title:string;content:string;id?:string})=>{
   const{icon,iconColor,title,content,id}=config
@@ -117,7 +118,7 @@ export class MarkManager{
           cfi:data.cfi||a.loc,
           section:data.section,
           page:data.page,
-          rects:data.rects,
+          rects:compactMarkRects(data.rects),
           text:a.text,
           color:a.color as HighlightColor,
           style:data.style,
@@ -127,7 +128,8 @@ export class MarkManager{
           chapter:a.chapter,
           title:data.title,
           progress:data.progress,
-          textOffset:data.textOffset
+          textOffset:data.textOffset,
+          customOrder:data.customOrder
         })
       })
     }catch(e){console.error('[Mark]',e)}
@@ -152,11 +154,12 @@ export class MarkManager{
           cfi:m.cfi,
           section:m.section,
           page:m.page,
-          rects:m.rects,
+          rects:compactMarkRects(m.rects),
           style:m.style,
           title:m.title,
           progress:m.progress,
-          textOffset:m.textOffset
+          textOffset:m.textOffset,
+          customOrder:m.customOrder
         },
         created:m.timestamp,
         updated:Date.now(),
@@ -187,6 +190,18 @@ export class MarkManager{
   }
 
   private findTocPath(toc:any[],href:string,path=''):string{for(const item of toc){const cur=path?`${path} - ${item.label}`:item.label;if(item.href===href)return cur;if(item.subitems?.length){const found=this.findTocPath(item.subitems,href,cur);if(found)return found}}return''}
+
+  private getMarkPages(mark:Mark):number[]{
+    const pages=new Set<number>()
+    mark.rects?.forEach(r=>r?.page&&pages.add(r.page))
+    if(mark.page)pages.add(mark.page)
+    return [...pages]
+  }
+
+  private renderPdfMark(mark?:Mark){
+    if(this.format!=='pdf'||!mark)return
+    this.getMarkPages(mark).forEach(page=>this.renderPdf(page))
+  }
 
   /** 删除标注（内存+数据库） */
   private async del(id:string):Promise<boolean>{
@@ -316,28 +331,69 @@ export class MarkManager{
     const layer=document.querySelector(`[data-page="${page}"] .pdf-annotation-layer`)as HTMLElement
     if(!layer)return
     layer.querySelectorAll('[data-note-marker],.pdf-highlight').forEach(el=>el.remove())
-    this.marks.filter(m=>m.page===page).forEach(m=>cleanTooltips(m.id))
-    const pdfPage=this.pdfViewer.getPages().get(page)
-    if(!pdfPage)return
+    this.marks.filter(m=>this.getMarkPages(m).includes(page)).forEach(m=>cleanTooltips(m.id))
     // 固定rotation为0，避免旋转影响坐标计算（思源优化）
-    const viewport=pdfPage.getViewport({scale:this.pdfViewer.getScale(),rotation:0})
-    this.marks.filter(m=>m.page===page&&(m.type==='highlight'||m.type==='note'||m.type==='vocab')).forEach(m=>{
+    this.marks.filter(m=>this.getMarkPages(m).includes(page)&&(m.type==='highlight'||m.type==='note'||m.type==='vocab')).forEach(m=>{
       const bg=getColorBg(m.color),style=m.style||'highlight'
-      m.rects?.forEach((r,idx)=>{
-        const bounds=viewport.convertToViewportRectangle([r.x,r.y,r.x+r.w,r.y+r.h])
-        const vw=Math.abs(bounds[0]-bounds[2]),vh=Math.abs(bounds[1]-bounds[3])
-        if(vw<=0||vh<=0)return
-        const vx=Math.min(bounds[0],bounds[2]),vy=Math.min(bounds[1],bounds[3])
-        const div=document.createElement('div'),base=`position:absolute;left:${vx}px;top:${vy}px;width:${vw}px;height:${vh}px;pointer-events:auto;cursor:pointer`
+      const pageRects=this.getPdfMarkRects(m,page)
+      const markPages=this.getMarkPages(m)
+      const lastPage=markPages[markPages.length-1]
+      pageRects.forEach((r,idx)=>{
+        const div=document.createElement('div'),base=`position:absolute;left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px;pointer-events:auto;cursor:pointer`
         div.className=`pdf-highlight pdf-${style}`
         div.dataset.id=m.id
         const w=style==='double'?'4px':'2px'
         div.style.cssText=style==='highlight'?`${base};background:${bg};opacity:0.3`:style==='underline'?`${base};border-bottom:2px solid ${bg};opacity:0.8`:style==='outline'?`${base};border:2px solid ${bg};opacity:0.8`:`${base};border-bottom:${w} ${style} ${bg};opacity:0.8`
         div.onclick=()=>this.onAnnotationClick?.(m)
         layer.appendChild(div)
-        if(m.note&&idx===m.rects!.length-1)this.createNoteMarker(m,{x:vx,y:vy,w:vw,h:vh},layer)
+        if(m.note&&page===lastPage&&idx===pageRects.length-1)this.createNoteMarker(m,r,layer)
       })
     })
+  }
+
+  private getPdfMarkRects(mark:Mark,page:number){
+    if(this.format!=='pdf'||!this.pdfViewer)return[]
+    const viewport=getPdfViewport(this.pdfViewer,page)
+    if(!viewport)return[]
+    return (mark.rects||[])
+      .filter(r=>(r.page||mark.page)===page)
+      .map(r=>{
+        return pdfRectToScreenBox(viewport,[r.x,r.y,r.x+r.w,r.y+r.h])
+      })
+      .filter(r=>r.w>0&&r.h>0)
+  }
+
+  findPdfMarkAt(page:number,x:number,y:number):Mark|null{
+    if(this.format!=='pdf'||!this.pdfViewer)return null
+    const marks=this.marks.filter(m=>this.getMarkPages(m).includes(page)&&(m.type==='highlight'||m.type==='note'||m.type==='vocab'))
+    for(let i=marks.length-1;i>=0;i--){
+      const mark=marks[i]
+      if(this.getPdfMarkRects(mark,page).some(r=>x>=r.x&&x<=r.x+r.w&&y>=r.y&&y<=r.y+r.h))return mark
+    }
+    return null
+  }
+
+  async movePdfMark(id:string,page:number,dx:number,dy:number):Promise<boolean>{
+    if(!this.movePdfMarkPreview(id,page,dx,dy))return false
+    this.commitPdfMarkMove()
+    return true
+  }
+
+  movePdfMarkPreview(id:string,page:number,dx:number,dy:number):boolean{
+    if(this.format!=='pdf'||!this.pdfViewer)return false
+    const mark=this.marksMap.get(id)
+    if(!mark?.rects?.length)return false
+    const viewport=getPdfViewport(this.pdfViewer,page)
+    if(!viewport)return false
+    const{dx:deltaX,dy:deltaY}=screenDeltaToPdfDelta(viewport,dx,dy)
+    mark.rects=compactMarkRects(mark.rects.map(r=>({ ...r,x:r.x+deltaX,y:r.y+deltaY })))
+    this.renderPdfMark(mark)
+    return true
+  }
+
+  commitPdfMarkMove(){
+    this.save()
+    window.dispatchEvent(new Event('sireader:marks-updated'))
   }
 
   /** PDF选择优化 - 使用思源笔记实现 */
@@ -353,7 +409,7 @@ export class MarkManager{
     const m=this.add({type:'highlight',[typeof loc==='string'?'cfi':this.format==='pdf'?'page':'section']:loc,text,color,style,rects,textOffset})
     this.undoStack.push({...m})
     if(this.undoStack.length>10)this.undoStack.shift()
-    if(this.format==='pdf')this.renderPdf(m.page!)
+    if(this.format==='pdf')this.renderPdfMark(m)
     else if(m.cfi)await this.view?.addAnnotation?.({value:m.cfi,color:m.color,note:m.note}).catch(()=>{})
     this.save()
     window.dispatchEvent(new Event('sireader:marks-updated'))
@@ -365,7 +421,7 @@ export class MarkManager{
     const m=this.add({type:'note',[typeof loc==='string'?'cfi':this.format==='pdf'?'page':'section']:loc,text,note,color,style,rects,textOffset})
     this.undoStack.push({...m})
     if(this.undoStack.length>10)this.undoStack.shift()
-    if(this.format==='pdf')this.renderPdf(m.page!)
+    if(this.format==='pdf')this.renderPdfMark(m)
     else if(m.cfi)await this.view?.addAnnotation?.({value:m.cfi,color:m.color,note:m.note}).catch(()=>{})
     this.save()
     window.dispatchEvent(new Event('sireader:marks-updated'))
@@ -389,13 +445,17 @@ export class MarkManager{
         if(result)window.dispatchEvent(new Event('sireader:marks-updated'))
         return result||false
       }
-      if(type==='ink')return false
+      if(type==='ink'){
+        const result=await this.getManager('ink')?.updateInk?.(id,updates)
+        if(result)window.dispatchEvent(new Event('sireader:marks-updated'))
+        return result||false
+      }
       keyOrMark=id
     }
     const m=this.marksMap.get(keyOrMark)
     if(!m)return false
     Object.assign(m,updates)
-    if(this.format==='pdf')this.renderPdf(m.page!)
+    if(this.format==='pdf')this.renderPdfMark(m)
     else if(m.cfi){
       await this.view?.deleteAnnotation?.({value:m.cfi}).catch(()=>{})
       await this.view?.addAnnotation?.({value:m.cfi,color:m.color,note:m.note}).catch(()=>{})
@@ -445,7 +505,7 @@ export class MarkManager{
     }
     
     // 清理渲染
-    if(this.format==='pdf')this.renderPdf(m.page!)
+    if(this.format==='pdf')this.renderPdfMark(m)
     else{
       if(m.cfi)await this.view?.deleteAnnotation?.({value:m.cfi}).catch(()=>{})
       cleanTooltips(m.id)

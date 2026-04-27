@@ -257,3 +257,12 @@ declare module '*.vue' {
   const component: DefineComponent<{}, {}, any>
   export default component
 }
+
+declare module 'pdfjs-dist' {
+  export type PDFDocumentProxy = any
+}
+
+declare module '/stage/protyle/js/pdf/pdf.min.mjs' {
+  const pdfjsLib: any
+  export default pdfjsLib
+}

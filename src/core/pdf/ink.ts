@@ -3,15 +3,32 @@
  */
 import type{Annotation}from'../database'
 import { listAnnotations, removeAnnotation, replaceAnnotationsByType } from '../MarkManager'
+import { compactNumber, compactRect, getCanvasPoint, getPdfLayerCanvas, getPdfViewport, pdfPointToScreenPoint, pdfRectToScreenRect, redrawPdfLayerPage, screenDeltaToPdfDelta, screenPointToPdfPoint, setPdfLayerInteractivity } from './annotation'
 
 export interface InkPoint{x:number;y:number;pressure?:number}
 export interface InkPath{points:InkPoint[];color:string;width:number;opacity:number}
-export interface InkAnnotation{id:string;type:'ink';page:number;paths:InkPath[];timestamp:number;rect?:[number,number,number,number]}
+export interface InkAnnotation{id:string;type:'ink';page:number;paths:InkPath[];timestamp:number;rect?:[number,number,number,number];text?:string;note?:string;color?:string;chapter?:string;blockId?:string;customOrder?:number}
 export interface InkConfig{color:string;width:number;opacity:number;smoothing:boolean}
 
-const getCoord=(e:MouseEvent|TouchEvent,r:DOMRect)=>({x:(e instanceof MouseEvent?e.clientX:e.touches[0].clientX)-r.left,y:(e instanceof MouseEvent?e.clientY:e.touches[0].clientY)-r.top})
 const isValidRect=(r:any):r is[number,number,number,number]=>Array.isArray(r)&&r.length===4
 const isValidPaths=(p:any):p is InkPath[]=>Array.isArray(p)&&p.length>0
+const compactPoint=(pt:InkPoint):InkPoint=>({x:compactNumber(pt.x),y:compactNumber(pt.y)})
+const compactPath=(path:InkPath):InkPath=>({
+  ...path,
+  points:(path.points||[]).reduce<InkPoint[]>((list,point)=>{
+    const next=compactPoint(point)
+    const last=list[list.length-1]
+    if(!last||last.x!==next.x||last.y!==next.y)list.push(next)
+    return list
+  },[])
+})
+const getScreenPath=(path:InkPath,viewport:any):InkPath=>({
+  ...path,
+  points:(path.points||[]).map(point=>{
+    const next=pdfPointToScreenPoint(viewport,point.x,point.y)
+    return point.pressure===undefined?next:{...next,pressure:point.pressure}
+  })
+})
 
 /** 绘制墨迹到Canvas */
 export const drawInk=(canvas:HTMLCanvasElement,paths:InkPath[],rect:[number,number,number,number])=>{
@@ -65,8 +82,10 @@ export class InkDrawer{
   private isDrawing=false
   private currentPath:InkPoint[]=[]
   private config:InkConfig
+  public canvas:HTMLCanvasElement
 
-  constructor(private canvas:HTMLCanvasElement,config:InkConfig){
+  constructor(canvas:HTMLCanvasElement,config:InkConfig){
+    this.canvas=canvas
     this.ctx=canvas.getContext('2d')!
     this.config=config
     this.ctx.lineCap=this.ctx.lineJoin='round'
@@ -159,6 +178,7 @@ export class InkManager{
   }
   undo():boolean{const id=this.history.pop();return id?this.annotations.delete(id):false}
   getAnnotations():InkAnnotation[]{return Array.from(this.annotations.values())}
+  setAnnotation(annotation:InkAnnotation){this.annotations.set(annotation.id,annotation)}
   deleteAnnotation(id:string):boolean{return this.annotations.delete(id)}
   clear(){this.annotations.clear();this.history=[]}
   toJSON():InkAnnotation[]{return this.getAnnotations()}
@@ -172,17 +192,53 @@ export class InkController{
   private config:InkConfig={color:'#ff0000',width:2,opacity:1,smoothing:true}
   private currentPage=0
   private container?:HTMLElement
+  private pdfViewer:any=null
   private listeners:Array<{el:HTMLElement;type:string;handler:any}>=[]
 
   constructor(private onSave?:()=>Promise<void>){}
 
   init(container:HTMLElement){this.container=container}
+  setPdfViewer(viewer:any){this.pdfViewer=viewer}
   setConfig(c:Partial<InkConfig>){this.config={...this.config,...c};this.drawers.forEach(d=>d.setConfig(this.config))}
+  private getLayerCanvas(page:number){
+    return getPdfLayerCanvas('pdf-ink-layer',page)
+  }
+  private resetDrawing(){this.currentPage=0}
+  private redrawPage(page:number,viewer=this.pdfViewer){
+    return redrawPdfLayerPage(page,this.getLayerCanvas.bind(this),(targetPage,canvas)=>this.render(targetPage,canvas,viewer))
+  }
+  private bindPointerEvents(start:any,move:any,end:any){
+    if(!this.container)return
+    const c=this.container
+    ;[
+      ['mousedown',start],['mousemove',move],['mouseup',end],
+      ['touchstart',start],['touchmove',move],['touchend',end]
+    ].forEach(([type,handler])=>c.addEventListener(type as string,handler as EventListener,{passive:type.toString().startsWith('touch')}))
+    this.listeners=[
+      {el:c,type:'mousedown',handler:start},{el:c,type:'mousemove',handler:move},{el:c,type:'mouseup',handler:end},
+      {el:c,type:'touchstart',handler:start},{el:c,type:'touchmove',handler:move},{el:c,type:'touchend',handler:end}
+    ]
+  }
 
   private getDrawer(page:number,canvas:HTMLCanvasElement):InkDrawer{
     let d=this.drawers.get(page)
-    if(!d){d=new InkDrawer(canvas,this.config);this.drawers.set(page,d)}else{d.setConfig(this.config)}
+    if(!d||d.canvas!==canvas){
+      d=new InkDrawer(canvas,this.config)
+      this.drawers.set(page,d)
+    }else{
+      d.setConfig(this.config)
+    }
     return d
+  }
+
+  private getActiveDrawer(page:number){
+    const canvas=this.getLayerCanvas(page)
+    if(!canvas)return null
+    return{canvas,drawer:this.getDrawer(page,canvas)}
+  }
+
+  private getCurrentViewport(viewer=this.pdfViewer){
+    return this.currentPage?getPdfViewport(viewer,this.currentPage):null
   }
 
   getManager(page:number):InkManager{
@@ -193,48 +249,84 @@ export class InkController{
 
   async startDrawing(e:MouseEvent|TouchEvent,canvas:HTMLCanvasElement,page:number){
     this.currentPage=page
-    const{x,y}=getCoord(e,canvas.getBoundingClientRect())
+    const{x,y}=getCanvasPoint(e,canvas.getBoundingClientRect())
     this.getDrawer(page,canvas).startDrawing(x,y)
   }
 
   draw(e:MouseEvent|TouchEvent){
     if(!this.currentPage)return
-    const d=this.drawers.get(this.currentPage),cv=document.querySelector(`.pdf-ink-layer[data-page="${this.currentPage}"]`)as HTMLCanvasElement
-    if(!d||!cv)return
-    const{x,y}=getCoord(e,cv.getBoundingClientRect())
+    const active=this.getActiveDrawer(this.currentPage)
+    if(!active)return
+    const{canvas:cv,drawer:d}=active
+    const{x,y}=getCanvasPoint(e,cv.getBoundingClientRect())
     d.draw(x,y)
   }
 
-  async endDrawing(){
+  async endDrawing(viewer?:any){
     if(!this.currentPage)return
-    const path=this.drawers.get(this.currentPage)?.endDrawing()
-    if(path){
-      const m=this.getManager(this.currentPage)
-      if(!m.currentAnnotation)m.startAnnotation()
-      m.addPath(path)
-      m.endAnnotation()
-      await this.onSave?.()
+    const page=this.currentPage
+    const active=this.getActiveDrawer(page)
+    const path=active?.drawer.endDrawing()
+    if(!path){this.resetDrawing();return}
+    const viewport=this.getCurrentViewport(viewer)
+    if(!viewport){this.resetDrawing();return}
+    const pdfPath=compactPath({
+      ...path,
+      points:path.points.map(point=>{
+        const next=screenPointToPdfPoint(viewport,point.x,point.y)
+        return point.pressure===undefined?next:{...next,pressure:point.pressure}
+      })
+    })
+    if(pdfPath.points.length<2){this.resetDrawing();return}
+    const m=this.getManager(page)
+    if(!m.currentAnnotation)m.startAnnotation()
+    m.addPath(pdfPath)
+    const annotation=m.endAnnotation()
+    await this.onSave?.()
+    const canvas=this.redrawPage(page,viewer)
+    this.resetDrawing()
+    if(annotation&&canvas&&isValidRect(annotation.rect)){
+      const[x1,y1,x2,y2]=pdfRectToScreenRect(viewport,annotation.rect)
+      const rectBox=canvas.getBoundingClientRect()
+      const x=rectBox.left+(x1+x2)/2
+      const y=rectBox.top+Math.max(y1,y2)+10
+      setTimeout(()=>window.dispatchEvent(new CustomEvent('ink-created',{detail:{ink:annotation,x,y,edit:true}})),50)
     }
-    this.currentPage=0
   }
 
-  render(page:number,canvas:HTMLCanvasElement){
-    const m=this.managers.get(page)
-    if(!m)return
+  render(page:number,canvas:HTMLCanvasElement,viewer?:any){
     const d=this.getDrawer(page,canvas)
     d.clear()
-    m.getAnnotations().forEach(a=>d.renderAnnotation(a))
+    const m=this.managers.get(page)
+    if(!m)return
+    const viewport=getPdfViewport(viewer,page)
+    if(!viewport)return
+    m.getAnnotations().forEach(a=>d.renderAnnotation({
+      ...a,
+      rect:isValidRect(a.rect)?pdfRectToScreenRect(viewport,a.rect):a.rect,
+      paths:(a.paths||[]).map(path=>getScreenPath(path,viewport))
+    }))
+  }
+
+  findAnnotationAt(page:number,x:number,y:number,viewer?:any):InkAnnotation|null{
+    const viewport=getPdfViewport(viewer,page)
+    if(!viewport)return null
+    const anns=this.managers.get(page)?.getAnnotations()||[]
+    const pad=8
+    for(let i=anns.length-1;i>=0;i--){
+      const ann=anns[i],rect=ann.rect
+      if(!rect)continue
+      const[x1,y1,x2,y2]=pdfRectToScreenRect(viewport,rect)
+      if(x>=x1-pad&&x<=x2+pad&&y>=y1-pad&&y<=y2+pad)return ann
+    }
+    return null
   }
 
   undo(page:number):boolean{
     const m=this.managers.get(page)
-    if(!m)return false
-    const success=m.undo()
-    if(success){
-      const cv=document.querySelector(`.pdf-ink-layer[data-page="${page}"]`)as HTMLCanvasElement
-      if(cv)this.render(page,cv)
-    }
-    return success
+    if(!m||!m.undo())return false
+    this.redrawPage(page,this.pdfViewer)
+    return true
   }
 
   clear(page:number){this.managers.get(page)?.clear();this.drawers.get(page)?.clear()}
@@ -245,19 +337,16 @@ export class InkController{
     if(!this.container)return
     this.container.style.userSelect=active?'none':'text'
     this.container.style.cursor=active?'crosshair':'default'
-    document.querySelectorAll('.pdf-ink-layer').forEach(el=>{const c=el as HTMLCanvasElement;c.style.pointerEvents=active?'auto':'none';c.style.cursor=active?'crosshair':'default'})
+    setPdfLayerInteractivity('pdf-ink-layer',active)
     active?this.bindEvents():this.unbindEvents()
   }
 
   private bindEvents(){
     if(!this.container)return
-    const start=async(e:MouseEvent|TouchEvent)=>{const t=e.target as HTMLElement;if(!t.classList.contains('pdf-ink-layer'))return;const cv=t as HTMLCanvasElement,p=+(cv.dataset.page||0);if(!p)return;await this.startDrawing(e,cv,p);e.preventDefault()}
-    const move=(e:MouseEvent|TouchEvent)=>{this.draw(e);e.preventDefault()}
-    const end=async()=>await this.endDrawing()
-    const c=this.container
-    c.addEventListener('mousedown',start);c.addEventListener('mousemove',move);c.addEventListener('mouseup',end)
-    c.addEventListener('touchstart',start);c.addEventListener('touchmove',move);c.addEventListener('touchend',end)
-    this.listeners=[{el:c,type:'mousedown',handler:start},{el:c,type:'mousemove',handler:move},{el:c,type:'mouseup',handler:end},{el:c,type:'touchstart',handler:start},{el:c,type:'touchmove',handler:move},{el:c,type:'touchend',handler:end}]
+    const start=async(e:MouseEvent|TouchEvent)=>{if(this.container?.dataset.pdfDragAnnotation==='true')return;const t=e.target as HTMLElement;if(!t.classList.contains('pdf-ink-layer'))return;const cv=t as HTMLCanvasElement,p=+(cv.dataset.page||0);if(!p)return;await this.startDrawing(e,cv,p);e instanceof MouseEvent&&e.preventDefault()}
+    const move=(e:MouseEvent|TouchEvent)=>{if(this.container?.dataset.pdfDragAnnotation==='true')return;this.draw(e);e instanceof MouseEvent&&e.preventDefault()}
+    const end=async()=>{if(this.container?.dataset.pdfDragAnnotation==='true')return;await this.endDrawing(this.pdfViewer)}
+    this.bindPointerEvents(start,move,end)
   }
 
   private unbindEvents(){this.listeners.forEach(({el,type,handler})=>el.removeEventListener(type,handler));this.listeners=[]}
@@ -269,12 +358,41 @@ export class InkToolManager{
   private controller?:InkController
   private initialized=false
 
-  constructor(private container:HTMLElement,private plugin:any,private bookUrl:string,private bookName:string,private viewer:any){}
+  constructor(private container:HTMLElement,_plugin:any,private bookUrl:string,_bookName:string,private viewer:any){}
+
+  private get currentPage(){return this.viewer?.getCurrentPage?.()||0}
+  private get controllerData(){return this.controller?.toJSON()||[]}
+  private getLocalInk(id:string){return this.controllerData.find(ink=>ink.id===id)}
+  private getPageCanvas(page:number){
+    return getPdfLayerCanvas('pdf-ink-layer',page)
+  }
+  private renderPage(page:number){
+    const canvas=this.getPageCanvas(page)
+    if(canvas&&this.controller)this.controller.render(page,canvas,this.viewer)
+  }
+  private async getController(){
+    return await this.init()
+  }
+  private async persistController(){if(this.controller)await this.saveData(this.controllerData)}
+  private async updateInkState(ink:InkAnnotation,mutate:()=>void|Promise<void>){
+    await mutate()
+    this.renderPage(ink.page)
+    await this.persistController()
+    return true
+  }
+  private removeInk(id:string,page:number){
+    this.controller?.getManager(page).deleteAnnotation(id)
+    this.renderPage(page)
+  }
 
   private async loadData(){
     const annotations=await listAnnotations(this.bookUrl,'ink')
-    return annotations.filter(a=>a.type==='ink').map(a=>{
-      const ink:any={id:a.id,type:'ink',page:a.data?.page||0,paths:a.data?.paths||[],timestamp:a.created}
+    return annotations.map(a=>{
+      const ink:any={
+        id:a.id,type:'ink',page:a.data?.page||0,
+        paths:(a.data?.paths||[]).map((path:InkPath)=>compactPath(path)),
+        timestamp:a.created,text:a.text,note:a.note,color:a.color,chapter:a.chapter,blockId:a.block,customOrder:a.data?.customOrder
+      }
       ink.rect=isValidRect(a.data?.rect)?a.data.rect:isValidPaths(ink.paths)?InkDrawer.calculateRect(ink.paths):undefined
       return ink
     })
@@ -282,58 +400,106 @@ export class InkToolManager{
 
   private async saveData(inkAnnotations:any[]){
     if(!this.initialized)return
-    await replaceAnnotationsByType(this.bookUrl,'ink',inkAnnotations.map((ink:any)=>({
-        id:ink.id,book:this.bookUrl,type:'ink',loc:`page-${ink.page}`,text:'',note:'',color:'black',
-        data:{format:'pdf',page:ink.page,paths:ink.paths,rect:ink.rect},
-        created:ink.timestamp||Date.now(),updated:Date.now(),chapter:'',block:''
-      } as Annotation)))
+    await replaceAnnotationsByType(this.bookUrl,'ink',inkAnnotations.map((ink:any)=>{
+      const paths=(ink.paths||[]).map((path:InkPath)=>{
+        const next=compactPath(path)
+        return { ...next,points:next.points.map(({x,y}:InkPoint)=>({x,y})) }
+      })
+      const rect=isValidRect(ink.rect)?compactRect(ink.rect):ink.rect
+      const data:any={format:'pdf',page:ink.page,paths}
+      rect&&(data.rect=rect)
+      ink.customOrder!==undefined&&(data.customOrder=ink.customOrder)
+      return{
+        id:ink.id,book:this.bookUrl,type:'ink',loc:`page-${ink.page}`,text:ink.text||'',note:ink.note||'',color:ink.color||ink.paths?.[0]?.color||'',
+        data,created:ink.timestamp||Date.now(),updated:Date.now(),chapter:ink.chapter||'',block:ink.blockId||''
+      } as Annotation
+    }))
   }
 
   async init(){
     if(this.controller)return this.controller
-    this.controller=new InkController(async()=>await this.saveData(this.controller!.toJSON()))
+    this.controller=new InkController(async()=>await this.persistController())
     this.controller.init(this.container)
+    this.controller.setPdfViewer(this.viewer)
     const data=await this.loadData()
     if(data.length)this.controller.fromJSON(data)
     this.initialized=true
     return this.controller
   }
 
-  render(page:number){
-    const canvas=document.querySelector(`.pdf-ink-layer[data-page="${page}"]`)as HTMLCanvasElement
-    if(canvas&&this.controller)this.controller.render(page,canvas)
-  }
+  render(page:number){this.renderPage(page)}
 
-  async toggle(active:boolean){await(await this.init()).toggle(active)}
-  async setConfig(config:any){(await this.init()).setConfig(config)}
-  async save(){if(this.controller)await this.saveData(this.controller.toJSON())}
-  toJSON(){return this.controller?.toJSON()||[]}
+  async toggle(active:boolean){await(await this.getController()).toggle(active)}
+  async setConfig(config:any){(await this.getController()).setConfig(config)}
+  async save(){await this.persistController()}
+  toJSON(){return this.controllerData}
   
   async deleteInk(id:string):Promise<boolean>{
     if(!this.controller)return false
-    const data=await this.loadData(),ink=data.find((i:any)=>i.id===id)
+    const ink = this.getLocalInk(id)
     if(!ink)return false
     await removeAnnotation(id)
-    this.controller.getManager(ink.page).deleteAnnotation(id)
-    this.render(ink.page)
+    this.removeInk(id,ink.page)
+    return true
+  }
+
+  async updateInk(id:string,updates:any):Promise<boolean>{
+    const ink=this.getLocalInk(id)
+    if(!ink)return false
+    return this.updateInkState(ink,()=>{
+      Object.assign(ink,updates)
+      if(updates?.color){
+        ink.paths=(ink.paths||[]).map((path:InkPath)=>({ ...path,color:updates.color }))
+        ink.color=updates.color
+      }
+    })
+  }
+
+  findInkAt(page:number,x:number,y:number):InkAnnotation|null{
+    return this.controller?.findAnnotationAt(page,x,y,this.viewer)||null
+  }
+
+  moveInkPreview(id:string,dx:number,dy:number):boolean{
+    const ink=this.getLocalInk(id)
+    if(!ink)return false
+    const viewport=getPdfViewport(this.viewer,ink.page)
+    if(!viewport)return false
+    const delta=screenDeltaToPdfDelta(viewport,dx,dy)
+    ink.paths=(ink.paths||[]).map((path:InkPath)=>compactPath({
+      ...path,
+      points:(path.points||[]).map(pt=>({ ...pt,x:pt.x+delta.dx,y:pt.y+delta.dy }))
+    }))
+    if(ink.rect){
+      const[x1,y1,x2,y2]=ink.rect
+      ink.rect=compactRect([x1+delta.dx,y1+delta.dy,x2+delta.dx,y2+delta.dy])
+    }else if(isValidPaths(ink.paths))ink.rect=InkDrawer.calculateRect(ink.paths)
+    this.renderPage(ink.page)
+    return true
+  }
+
+  async commitMove(){await this.persistController()}
+
+  async moveInk(id:string,dx:number,dy:number):Promise<boolean>{
+    if(!this.moveInkPreview(id,dx,dy))return false
+    await this.commitMove()
     return true
   }
   
   async undo(){
     if(!this.controller)return false
-    const page=this.viewer?.getCurrentPage()
+    const page=this.currentPage
     if(!page)return false
     const success=this.controller.undo(page)
-    if(success)await this.saveData(this.controller.toJSON())
+    if(success)await this.persistController()
     return success
   }
   
   async clear(){
     if(!this.controller)return
-    const page=this.viewer?.getCurrentPage()
+    const page=this.currentPage
     if(!page)return
     this.controller.clear(page)
-    await this.saveData(this.controller.toJSON())
+    await this.persistController()
   }
   
   destroy(){this.controller?.destroy()}

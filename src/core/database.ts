@@ -67,6 +67,7 @@ export interface Annotation {
   section?: number
   rects?: any[]
   style?: string
+  customOrder?: number
   shapeType?: string
   filled?: boolean
   paths?: any[]

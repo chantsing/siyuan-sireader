@@ -7,7 +7,7 @@
 让思源笔记变身专业阅读器，支持 EPUB/PDF/TXT/在线小说  
 提供智能标注、TTS 朗读、词典查询、AI 翻译、Anki 闪卡等功能
 
-[![Version](https://img.shields.io/badge/version-0.9.2-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,44 @@
 ---
 
 ## 📝 最新更新
+
+### v1.1.0 (2026.4.28)
+
+**重点更新**
+
+- 重构数据读写与存储链路，降低读写开销，提升整体流畅度。
+- 完成数据迁移：书籍与封面统一迁移到 `public` 目录，结构更清晰，访问更稳定。
+- 书架中的 PDF 现已支持直接使用思源内置 PDF 打开，并与相关设置保持一致。
+
+**新增**
+
+- 支持点击数据库资源字段直接打开对应书籍。
+- 新增目录一键展开/折叠。
+- 新增目录快速导出到笔记。
+- 新增导出目录到文档并直接打开文档。
+- 增强笔记插入方式，可选择插入到打开的文档、笔记本、指定文档下或 `Daily Note`。
+- 标注搜索扩展为全文搜索，支持搜索章节、标题、正文与笔记内容。
+- 标注支持按页码分组。
+- 标注分组支持一键展开/折叠。
+- 标注支持自定义排序，并可通过拖拽调整顺序。
+- PDF 新增文本标注。
+- PDF 标注新增类型过滤，支持区分墨迹标注与形状标注。
+- PDF 标注支持拖拽移动。
+
+**优化**
+
+- 优化目录面板展开状态，切换后不再意外关闭。
+- 优化跨页标注逻辑，提升跨页批注稳定性。
+- PDF 工具栏设置支持持久化保存。
+- 优化 PDF 页面变化时的标注重渲染逻辑。
+- 优化 PDF 页面渲染闪烁问题。
+- 优化窗口缩放、页面缩放后的标注位置绑定，减少错位问题。
+
+**调整**
+
+- 移除导入书籍时自动评分的逻辑。
+
+---
 
 ### v0.9.2 (2026.3.12)
 

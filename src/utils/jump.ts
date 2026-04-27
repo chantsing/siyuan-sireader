@@ -1,6 +1,8 @@
 // 跳转和闪烁工具函数
 
 // 获取跳转所需的上下文参数
+import { getPdfViewport, getRectBox, pdfRectToScreenRect } from '@/core/pdf/annotation'
+
 const getJumpContext=(activeView:any,activeReader:any,marks:any)=>{
   const isPdf=(activeView as any)?.isPdf
   return{
@@ -65,13 +67,13 @@ export const gotoPDF=(page:number,id:string|undefined,pdfViewer:any,markManager:
       const shape=shapeToolManager?.controller?.getManager(page)?.getAll()?.find((s:any)=>s.id===id)
       if(shape){
         const cv=document.querySelector(`[data-page="${page}"] .pdf-shape-layer`)as HTMLCanvasElement
-        const vp=pdfViewer.getPages().get(page)?.getViewport({scale:pdfViewer.getScale(),rotation:pdfViewer.getRotation()})
+        const vp=getPdfViewport(pdfViewer,page)
         if(cv&&vp){
-          const[x1,y1,x2,y2]=shape.rect,[,b1y]=vp.convertToViewportRectangle([x1,y1,x1,y1]),[,b2y]=vp.convertToViewportRectangle([x2,y2,x2,y2])
+          const box=getRectBox(pdfRectToScreenRect(vp,shape.rect))
           const c=document.querySelector('.viewer-container')
           if(c){
             const pr=cv.getBoundingClientRect(),cr=c.getBoundingClientRect()
-            c.scrollTop+=pr.top+(b1y+b2y)/2-cr.top-cr.height/2
+            c.scrollTop+=pr.top+box.y+box.h/2-cr.top-cr.height/2
           }
           flashElement(cv,'pdf-shape--flash')
         }

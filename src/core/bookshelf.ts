@@ -79,7 +79,7 @@ class BookshelfManager {
     total: info.total || 0,
     pos: info.location || info.pos || {},
     source: info.source || {},
-    rating: info.rating || 5,
+    rating: info.rating || 0,
     meta: info.metadata || info.meta || {},
     tags: info.tags || [],
     groups: info.groups || [],

@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI translation, Anki flashcards
 
-[![Version](https://img.shields.io/badge/version-0.9.2-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,44 @@ Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI tr
 ---
 
 ## 📝 Latest Updates
+
+### v1.1.0 (2026.4.28)
+
+**Highlights**
+
+- Reworked the data read/write and storage pipeline to reduce overhead and improve overall responsiveness.
+- Migrated books and covers into the `public` directory for a cleaner structure and more stable asset access.
+- Bookshelf PDFs can now be opened directly with SiYuan's built-in PDF viewer, consistent with the related setting.
+
+**Added**
+
+- Open books directly from database resource fields.
+- One-click expand/collapse for the table of contents.
+- Quick export from table of contents to notes.
+- Export the table of contents to a document and open it directly.
+- More flexible note insertion targets: current document, notebook, child document, or `Daily Note`.
+- Full-text search for annotations, including chapters, titles, body text, and note content.
+- Annotation grouping by page number.
+- One-click expand/collapse for annotation groups.
+- Custom annotation sorting with drag-and-drop reordering.
+- Text annotations for PDF.
+- Annotation type filters for PDF, including ink and shape annotations.
+- Drag-and-drop repositioning for PDF annotations.
+
+**Improved**
+
+- Preserved table-of-contents expansion state more reliably when switching views.
+- Improved cross-page annotation behavior.
+- Persisted PDF toolbar settings.
+- Improved PDF annotation rerendering when pages change.
+- Reduced PDF rendering flicker.
+- Improved annotation position binding after window resize and page zoom changes.
+
+**Changed**
+
+- Removed automatic rating when importing books.
+
+---
 
 ### v0.9.2 (2026.3.12)
 

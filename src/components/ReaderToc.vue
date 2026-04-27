@@ -22,6 +22,12 @@
       <button v-if="mode==='toc'&&isPdfMode" class="b3-tooltips b3-tooltips__sw" @click="showThumbnail=!showThumbnail" :aria-label="showThumbnail?'目录':'缩略图'">
         <svg><use :xlink:href="showThumbnail?'#lucide-scroll-text':'#lucide-panels-top-left'"/></svg>
       </button>
+      <button v-if="mode==='toc'&&!showThumbnail" class="b3-tooltips b3-tooltips__sw" @click="toggleTocTree()" :aria-label="tocAllExpanded?'折叠':'展开'">
+        <svg><use :xlink:href="tocAllExpanded?'#lucide-panel-top-close':'#lucide-panel-top-open'"/></svg>
+      </button>
+      <button v-if="mode==='mark'&&isGroupedMarkMode" class="b3-tooltips b3-tooltips__sw" @click="toggleMarkGroups()" :aria-label="markAllExpanded?'折叠':'展开'">
+        <svg><use :xlink:href="markAllExpanded?'#lucide-panel-top-close':'#lucide-panel-top-open'"/></svg>
+      </button>
       <button v-if="mode==='deck'" class="b3-tooltips b3-tooltips__sw" @click="deckTab='cards'" :class="{active:deckTab==='cards'}" aria-label="卡片">
         <svg><use xlink:href="#lucide-square-star"/></svg>
       </button>
@@ -74,16 +80,16 @@
           <div v-if="!list.length" class="sr-empty">{{ emptyText }}</div>
           <template v-else v-for="(item,i) in list" :key="item.key||item.groupId||item.id||item.page||i">
             <!-- 分组头 -->
-            <div v-if="item.isGroup" class="sr-card sr-group" @click="collapsed.has(item.key)?collapsed.delete(item.key):collapsed.add(item.key)">
-              <span class="sr-bar" :class="{collapsed:collapsed.has(item.key)}"></span>
+            <div v-if="item.isGroup" class="sr-card sr-group" @click="toggleMarkGroup(item.key)">
+              <span class="sr-bar" :class="{collapsed:isCollapsed(item.key)}"></span>
               <div class="sr-group-content">
-                <span class="sr-group-title">{{ item.key }}</span>
-                <span class="sr-group-count">{{ item.items.length }}</span>
+                <span class="sr-group-title" style="font-size:15px;line-height:1.35">{{ item.key }}</span>
+                <span class="sr-group-count" style="font-size:15px;line-height:1">{{ item.items.length }}</span>
               </div>
             </div>
             <!-- 分组内容或单项 -->
-            <template v-for="(m,j) in (item.isGroup&&!collapsed.has(item.key)?item.items:[item.isGroup?null:item])" :key="m?.id||j">
-              <div v-if="m" class="sr-card" :class="{'sr-card-edit':isEditing(m)}">
+            <template v-for="(m,j) in getMarkItems(item)" :key="m?.id||j">
+              <div class="sr-card" :class="{'sr-card-edit':isEditing(m),'sr-card-drag':canDragMarks,'is-dragging':dragState.from===getDragKey(m),'is-drag-over':dragState.over===getDragKey(m)}" :draggable="canDragMarks" @dragstart="startMarkDrag($event,m)" @dragenter.prevent="dragState.over=getDragKey(m)" @dragover.prevent @drop.prevent="dropMark(m)" @dragend="endMarkDrag()">
                 <span class="sr-bar" :style="{background:m.type==='ink-group'?'#ff9800':m.type==='shape-group'?'#2196f3':(colors[isEditing(m)?editColor:m.color]||'var(--b3-theme-primary)')}"></span>
                 <div class="sr-main">
                   <div class="sr-head">
@@ -101,10 +107,10 @@
                   <template v-if="isEditing(m)&&showEditOptions(m)">
                     <div class="sr-options">
                       <div class="sr-colors">
-                        <button v-for="c in COLORS" :key="c.color" class="sr-color-btn" :class="{active:editColor===c.color}" :style="{background:c.bg}" @click.stop="editColor=c.color"/>
+                        <button v-for="c in getEditColorOptions(m.type==='shape')" :key="c.key" class="sr-color-btn" :class="{active:editColor===c.value}" :style="{background:c.bg}" @click.stop="editColor=c.value"/>
                       </div>
                       <div v-if="m.type==='shape'" class="sr-styles">
-                        <button v-for="s in shapes" :key="s.type" class="sr-style-btn" :class="{active:editShapeType===s.type}" @click.stop="editShapeType=s.type" :title="s.label">
+                        <button v-for="s in shapeOptions" :key="s.type" class="sr-style-btn" :class="{active:editShapeType===s.type}" @click.stop="editShapeType=s.type" :title="s.label">
                           <svg style="width:16px;height:16px"><use :xlink:href="s.icon"/></svg>
                         </button>
                       </div>
@@ -129,10 +135,10 @@
                         <template v-if="isEditing(sub)">
                           <div class="sr-options">
                             <div class="sr-colors">
-                              <button v-for="c in COLORS" :key="c.color" class="sr-color-btn" :class="{active:editColor===c.color}" :style="{background:c.bg}" @click.stop="editColor=c.color"/>
+                              <button v-for="c in getEditColorOptions(sub.type==='shape')" :key="c.key" class="sr-color-btn" :class="{active:editColor===c.value}" :style="{background:c.bg}" @click.stop="editColor=c.value"/>
                             </div>
                             <div v-if="sub.type==='shape'" class="sr-styles">
-                              <button v-for="s in shapes" :key="s.type" class="sr-style-btn" :class="{active:editShapeType===s.type}" @click.stop="editShapeType=s.type" :title="s.label">
+                              <button v-for="s in shapeOptions" :key="s.type" class="sr-style-btn" :class="{active:editShapeType===s.type}" @click.stop="editShapeType=s.type" :title="s.label">
                                 <svg style="width:16px;height:16px"><use :xlink:href="s.icon"/></svg>
                               </button>
                             </div>
@@ -179,9 +185,9 @@ import DeckHub from './deck/DeckHub.vue'
 import { COLORS, STYLES, getColorMap, formatTime } from '@/core/MarkManager'
 import { useReaderState } from '@/core/epub'
 import { jump } from '@/utils/jump'
-import { copyMark as copyMarkUtil, openBlock, showFloat, hideFloat } from '@/utils/copy'
+import { copyMark as copyMarkUtil, exportBookLink, openBlock, showFloat, hideFloat } from '@/utils/copy'
 import { drawInk, renderInkCanvas as renderInkUtil } from '@/core/pdf/ink'
-import { renderShapeCanvas as renderShapeUtil } from '@/core/pdf/shape'
+import { PDF_SHAPE_COLORS, PDF_SHAPE_OPTIONS, renderShapeCanvas as renderShapeUtil } from '@/core/pdf/shape'
 import { bookshelfManager } from '@/core/bookshelf'
 
 const props = withDefaults(defineProps<{ mode: 'toc'|'bookmark'|'mark'|'deck'; i18n?: any }>(), { i18n: () => ({}) })
@@ -193,16 +199,19 @@ const goToLocation = async (location: string | number) => activeView.value?.goTo
 // ===== 状态 =====
 const tocRef=ref<HTMLElement>(),contentRef=ref<HTMLElement>(),editNoteRef=ref<HTMLTextAreaElement>(),thumbContainer=ref<HTMLElement>()
 const keyword=ref(''),showFilterMenu=ref(false),showThumbnail=ref(false)
-const isReverse=ref(false),refreshKey=ref(0)
+const isReverse=ref(false),refreshKey=ref(0),tocAllExpanded=ref(false)
 const deckTab=ref<'cards'|'packs'|'stats'|'review'|'settings'>('cards')
-const filter=ref({color:'',sort:'time'}),collapsed=ref(new Set<string>())
+const filter=ref({color:'',sort:'time'}),collapsed=ref<Record<string,true>>({})
+const dragState=ref({from:'',over:''})
 const expandedGroup=ref<number|null>(null)
 const editingId=ref<string|null>(null),editText=ref(''),editNote=ref(''),editColor=ref('yellow')
 const editStyle=ref<'highlight'|'underline'|'outline'|'dotted'|'dashed'|'double'|'squiggly'>('highlight')
-const editShapeType=ref<'rect'|'circle'|'triangle'>('rect')
-const shapes=[{type:'rect',label:'矩形',icon:'#iconSquareDashed'},{type:'circle',label:'圆形',icon:'#iconCircleDashed'},{type:'triangle',label:'三角形',icon:'#iconTriangleDashed'}]
+const editShapeType=ref<'rect'|'circle'|'triangle'|'textbox'>('rect')
 const loadedThumbs=ref<Record<number,string>>({})
+const shapeOptions=PDF_SHAPE_OPTIONS
+const shapeColors=PDF_SHAPE_COLORS
 const shapePreviewCache=new Map<string,string>()
+const getEditColorOptions=(isShape:boolean)=>isShape?shapeColors.map(color=>({key:color,value:color,bg:color})):COLORS.map(color=>({key:color.color,value:color.color,bg:color.bg}))
 
 // ===== 常量 =====
 const colors=getColorMap()
@@ -211,7 +220,7 @@ const placeholders={toc:'搜索目录...',bookmark:'搜索书签...',mark:'搜�
 // ===== Computed =====
 const filterOpts=computed(()=>({
   colors:[{label:props.i18n?.all||'全部',value:''},...COLORS.map(c=>({label:c.name,value:c.color,bg:c.bg}))],
-  sorts:[{label:props.i18n?.sortTime||'时间',value:'time'},{label:props.i18n?.sortDate||'日期',value:'date'},{label:props.i18n?.sortChapter||'章节',value:'chapter'}]
+  sorts:[{label:props.i18n?.sortTime||'时间',value:'time'},{label:props.i18n?.sortDate||'日期',value:'date'},{label:props.i18n?.sortChapter||'章节',value:'chapter'},{label:props.i18n?.sortPage||'页码',value:'page'},{label:props.i18n?.sortCustom||'自定义',value:'custom'}]
 }))
 const filterLabel=computed(()=>{
   const p=[]
@@ -222,6 +231,8 @@ const filterLabel=computed(()=>{
 const marks=computed(()=>activeReader.value?.marks||(activeView.value as any)?.marks)
 const isPdfMode=computed(()=>(activeView.value as any)?.isPdf||false)
 const pageCount=computed(()=>(activeView.value as any)?.pageCount||0)
+const ORDER_MAX=Number.MAX_SAFE_INTEGER
+const getCustomOrder=(items:any[])=>Math.min(...items.map((item:any)=>item.customOrder??ORDER_MAX))
 const data=computed(()=>{
   refreshKey.value
   if(!marks.value)return{bookmarks:[],marks:[],notes:[]}
@@ -232,7 +243,7 @@ const data=computed(()=>{
     acc[ink.page].timestamp=Math.max(acc[ink.page].timestamp,ink.timestamp)
     return acc
   },{})
-  const inkGroups=Object.values(inksByPage).map((g:any)=>({...g,groupId:`ink-${g.page}`}))
+  const inkGroups=Object.values(inksByPage).map((g:any)=>({...g,groupId:`ink-${g.page}`,customOrder:getCustomOrder(g.inks)}))
   const shapes=marks.value.getShapeAnnotations?.()||[]
   const shapesByPage=shapes.reduce((acc:any,shape:any)=>{
     if(!acc[shape.page])acc[shape.page]={page:shape.page,type:'shape-group',shapes:[],timestamp:shape.timestamp,text:`形状标注 - 第${shape.page}页`}
@@ -240,31 +251,42 @@ const data=computed(()=>{
     acc[shape.page].timestamp=Math.max(acc[shape.page].timestamp,shape.timestamp)
     return acc
   },{})
-  const shapeGroups=Object.values(shapesByPage).map((g:any)=>({...g,groupId:`shape-${g.page}`,shapes:[...g.shapes]}))
+  const shapeGroups=Object.values(shapesByPage).map((g:any)=>({...g,groupId:`shape-${g.page}`,shapes:[...g.shapes],customOrder:getCustomOrder(g.shapes)}))
   return{bookmarks:marks.value.getBookmarks(),marks:[...marks.value.getAnnotations(filter.value.color as any),...inkGroups,...shapeGroups],notes:marks.value.getNotes()}
 })
+const getSearchText=(m:any)=>[m.title,m.text,m.note,m.chapter,m.key,m.page&&`page ${m.page}`].filter(Boolean).join(' ').toLowerCase()
+const isCustomSort=computed(()=>props.mode==='mark'&&filter.value.sort==='custom')
+const canDragMarks=computed(()=>isCustomSort.value&&!keyword.value)
+const isGroupedMarkMode=computed(()=>props.mode==='mark'&&!['time','custom'].includes(filter.value.sort))
+const isPageGroup=(sort:string)=>sort==='page'||(sort==='chapter'&&isPdfMode.value)
+const reverseIf=<T>(items:T[])=>isReverse.value?[...items].reverse():items
+const getGroupKey=(m:any,sort:string)=>sort==='page'||(sort==='chapter'&&isPdfMode.value)?(m.page?`第${m.page}页`:'未分类'):sort==='chapter'?(m.chapter||'未分类'):formatTime(m.timestamp||0)
 const list=computed(()=>{
   const kw=keyword.value.toLowerCase(),key={bookmark:'bookmarks',mark:'marks'}[props.mode]
-  let items=(data.value[key]||[]).filter((m:any)=>!kw||(m.title||m.text||m.note||'').toLowerCase().includes(kw))
-  if(props.mode==='mark'&&filter.value.sort!=='time'){
-    const sortKey=filter.value.sort==='chapter'?'chapter':'date'
-    items.sort((a:any,b:any)=>{
-      const ka=sortKey==='chapter'?(a.chapter||'未分类'):formatTime(a.timestamp||0)
-      const kb=sortKey==='chapter'?(b.chapter||'未分类'):formatTime(b.timestamp||0)
-      return ka===kb?b.timestamp-a.timestamp:ka.localeCompare(kb)
-    })
-    const groups:any[]=[]
-    items.forEach((m:any)=>{
-      const key=sortKey==='chapter'?(m.chapter||'未分类'):formatTime(m.timestamp||0)
-      let g=groups.find(g=>g.key===key)
-      if(!g){g={key,items:[],isGroup:true};groups.push(g)}
-      g.items.push(m)
-    })
-    return isReverse.value?[...groups].reverse():groups
+  let items=(data.value[key]||[]).filter((m:any)=>!kw||getSearchText(m).includes(kw))
+  if(isCustomSort.value){
+    items.sort((a:any,b:any)=>(a.customOrder??ORDER_MAX)-(b.customOrder??ORDER_MAX)||b.timestamp-a.timestamp)
+    return reverseIf(items)
   }
-  return isReverse.value?[...items].reverse():items
+  if(!isGroupedMarkMode.value)return reverseIf(items)
+  const sortKey=filter.value.sort
+  items.sort((a:any,b:any)=>{
+    if(isPageGroup(sortKey))return (a.page||0)-(b.page||0)||b.timestamp-a.timestamp
+    const ka=getGroupKey(a,sortKey),kb=getGroupKey(b,sortKey)
+    return ka===kb?b.timestamp-a.timestamp:ka.localeCompare(kb)
+  })
+  const groups=new Map<string,any>()
+  items.forEach((m:any)=>{
+    const key=getGroupKey(m,sortKey)
+    ;(groups.get(key)||groups.set(key,{key,items:[],isGroup:true}).get(key)).items.push(m)
+  })
+  return reverseIf([...groups.values()])
 })
-const emptyText=computed(()=>keyword.value?`${props.i18n?.notFound||'未找到'}${placeholders[props.mode].replace(/搜索|\.\.\./g,'')}`:`${props.i18n?.empty||'暂无'}${placeholders[props.mode].replace(/搜索|\.\.\./g,'')}`)
+const markGroupKeys=computed(()=>isGroupedMarkMode.value?list.value.map((item:any)=>item.key):[])
+const isCollapsed=(key:string)=>!!collapsed.value[key]
+const getMarkItems=(item:any)=>item?.isGroup?(isCollapsed(item.key)?[]:item.items):[item]
+const markAllExpanded=computed(()=>!!markGroupKeys.value.length&&!markGroupKeys.value.some(isCollapsed))
+const emptyText=computed(()=>`${keyword.value?props.i18n?.notFound||'未找到':props.i18n?.empty||'暂无'}${placeholders[props.mode].replace(/搜索|\.\.\./g,'')}`)
 // ===== 目录 =====
 let tocView:any,relocateHandler:any,tocInteract=0
 
@@ -283,7 +305,11 @@ const initToc=async()=>{
       relocateHandler=(e:any)=>Date.now()-tocInteract>1e4&&tocView?.setCurrentHref?.(e.detail?.tocItem?.href)
       view.addEventListener('relocate',relocateHandler)
     }
-    setTimeout(()=>{tocView?.setCurrentHref?.(view.lastLocation?.tocItem?.href);addBookmarks()},50)
+    setTimeout(()=>{
+      tocView?.setCurrentHref?.(view.lastLocation?.tocItem?.href)
+      addBookmarks()
+      tocAllExpanded.value=!!tocRef.value?.querySelector('[aria-expanded]')&&!tocRef.value?.querySelector('[aria-expanded="false"]')
+    },50)
   }catch(e){console.error('[TOC]',e)}
 }
 
@@ -293,22 +319,80 @@ const cleanupToc=()=>{
   relocateHandler=tocView=null
 }
 
+const setCollapsed=(keys:string[],active:boolean)=>collapsed.value=active?Object.fromEntries(keys.map(key=>[key,true])):{}
+const toggleMarkGroup=(key:string,collapse=!isCollapsed(key))=>{
+  if(collapse)return collapsed.value={...collapsed.value,[key]:true}
+  const {[key]:_,...rest}=collapsed.value
+  collapsed.value=rest
+}
+const toggleTocTree=(expand=!tocAllExpanded.value)=>{
+  const items=[...(tocRef.value?.querySelectorAll('[aria-expanded]')||[])]
+  items.forEach(el=>el.setAttribute('aria-expanded',expand?'true':'false'))
+  tocAllExpanded.value=!!items.length&&expand
+}
+const toggleMarkGroups=(expand=!markAllExpanded.value)=>setCollapsed(markGroupKeys.value,!expand)
+const getDragKey=(m:any)=>m.groupId||m.id||`${m.type}-${m.page||m.section||0}`
+const saveCustomOrder=(item:any,base:number)=>item.type==='ink-group'
+  ? Promise.all((item.inks||[]).map((ink:any,offset:number)=>marks.value?.updateMark?.(ink,{customOrder:base+offset})))
+  : item.type==='shape-group'
+    ? Promise.all((item.shapes||[]).map((shape:any,offset:number)=>marks.value?.updateMark?.(shape,{customOrder:base+offset})))
+    : marks.value?.updateMark?.(item,{customOrder:base})
+const startMarkDrag=(e:DragEvent,m:any)=>{
+  dragState.value.from=getDragKey(m)
+  if(e.dataTransfer){
+    e.dataTransfer.setData('text/plain',dragState.value.from)
+    e.dataTransfer.effectAllowed='move'
+  }
+}
+const endMarkDrag=()=>dragState.value={from:'',over:''}
+const dropMark=async(target:any)=>{
+  const sourceId=dragState.value.from,targetId=getDragKey(target)
+  if(!canDragMarks.value||!sourceId||sourceId===targetId)return endMarkDrag()
+  const items=[...list.value],from=items.findIndex((item:any)=>getDragKey(item)===sourceId),to=items.findIndex((item:any)=>getDragKey(item)===targetId)
+  if(from<0||to<0)return endMarkDrag()
+  const [moved]=items.splice(from,1)
+  items.splice(to,0,moved)
+  await Promise.all(items.map((item:any,index:number)=>saveCustomOrder(item,index*1000)))
+  refreshKey.value++
+  endMarkDrag()
+}
+
+const createTocAction=(cls:string,icon:string,handler:(e:Event)=>void)=>{
+  const btn=document.createElement('button')
+  btn.className=`${cls} b3-tooltips b3-tooltips__w`
+  btn.innerHTML=`<svg style="width:14px;height:14px"><use xlink:href="${icon}"/></svg>`
+  btn.onclick=handler
+  return btn as HTMLButtonElement
+}
+
 const addBookmarks=()=>{
-  if(!tocRef.value||!marks.value)return
+  if(!tocRef.value)return
   const bks=new Set(data.value.bookmarks.map((b:any)=>b.title))
   tocRef.value.querySelectorAll('a[href]').forEach(a=>{
     const h=a.getAttribute('href'),l=a.textContent?.trim()
     if(!h||!l)return
-    let btn=a.querySelector('.toc-bookmark-btn') as HTMLButtonElement
-    if(!btn){
-      btn=Object.assign(document.createElement('button'),{className:'toc-bookmark-btn b3-tooltips b3-tooltips__w',innerHTML:'<svg style="width:14px;height:14px"><use xlink:href="#iconBookmark"/></svg>',onclick:(e:Event)=>{e.stopPropagation();e.preventDefault();toggleBookmark(h,l)}})
-      a.style.position='relative'
-      a.appendChild(btn)
-    }
+    const exportBtn=(a.querySelector('.toc-export-btn') as HTMLButtonElement)||createTocAction('toc-export-btn','#lucide-send',e=>{e.stopPropagation();e.preventDefault();exportTocItem(h,l)})
+    const btn=(a.querySelector('.toc-bookmark-btn') as HTMLButtonElement)||createTocAction('toc-bookmark-btn','#iconBookmark',e=>{e.stopPropagation();e.preventDefault();toggleBookmark(h,l)})
+    a.style.position='relative'
+    exportBtn.parentNode||a.appendChild(exportBtn)
+    btn.parentNode||a.appendChild(btn)
+    exportBtn.setAttribute('aria-label',props.i18n?.export||'导出')
     const has=bks.has(l)
     btn.classList.toggle('has-bookmark',has)
     btn.setAttribute('aria-label',has?'移除书签':'添加书签')
   })
+}
+
+const exportTocItem=async(href:string,label:string)=>{
+  try{
+    const bookUrl=getUrl()||''
+    await exportBookLink({chapter:label,cfi:href},{
+      bookUrl,
+      bookInfo:bookUrl?await bookshelfManager.getBook(bookUrl):null,
+      reader:activeReader.value,
+      showMsg
+    })
+  }catch(e:any){showMsg(e.message||'导出失败','error')}
 }
 
 const toggleBookmark=async(href:string,label:string)=>{
@@ -335,10 +419,11 @@ const cancelEdit=()=>editingId.value=null
 const saveEdit=async(m:any)=>{
   try{
     const u:any={color:editColor.value,note:editNote.value.trim()||undefined}
-    if(m.type==='shape')u.shapeType=editShapeType.value
+    if(m.type==='shape'){u.shapeType=editShapeType.value;u.text=editShapeType.value==='textbox'?(editText.value.trim()||'文本框'):undefined}
     else{u.text=editText.value.trim();u.style=editStyle.value}
     const{saveMarkEdit}=await import('@/utils/copy')
     await saveMarkEdit(m,u,{marks:marks.value,bookUrl:getUrl(),isPdf:(activeView.value as any)?.isPdf||false,reader:activeReader.value,pdfViewer:(activeView.value as any)?.viewer,shapeCache})
+    Object.assign(m,u)
     showMsg('已更新');editingId.value=null;refreshKey.value++
   }catch(e:any){showMsg(e.message||'保存失败','error')}
 }
@@ -425,13 +510,20 @@ onUnmounted(()=>{cleanupToc();thumbObs?.disconnect();window.removeEventListener(
   :deep([aria-expanded="false"]>svg){transform:rotate(-90deg)}
   :deep([role="group"]){display:none}
   :deep([aria-expanded="true"]+[role="group"]){display:block}
-  :deep(.toc-bookmark-btn){position:absolute;right:12px;top:50%;width:24px;height:24px;padding:0;border:none;background:transparent;cursor:pointer;opacity:0;transform:translateY(-50%);transition:opacity .2s,transform .2s;
+  :deep(.toc-export-btn),
+  :deep(.toc-bookmark-btn){position:absolute;top:50%;width:24px;height:24px;padding:0;border:none;background:transparent;cursor:pointer;opacity:0;transform:translateY(-50%);transition:opacity .2s,transform .2s;
     svg{width:14px;height:14px;color:var(--b3-theme-on-surface);transition:color .2s}
     &:hover{transform:translateY(-50%) rotate(15deg);
       svg{color:var(--b3-theme-error)}}
     &.has-bookmark{opacity:1;svg{color:var(--b3-theme-error)}}}
+  :deep(.toc-export-btn){right:40px;
+    &:hover svg{color:var(--b3-theme-primary)}}
+  :deep(.toc-bookmark-btn){right:12px;
+    &:hover svg{color:var(--b3-theme-error)}}
   :deep(a:hover .toc-bookmark-btn),
-  :deep(span[role="treeitem"]:hover .toc-bookmark-btn){opacity:1}}
+  :deep(a:hover .toc-export-btn),
+  :deep(span[role="treeitem"]:hover .toc-bookmark-btn),
+  :deep(span[role="treeitem"]:hover .toc-export-btn){opacity:1}}
 .sr-list{padding:8px}
 .expand-enter-active,.expand-leave-active{transition:all .3s ease}
 .expand-enter-from,.expand-leave-to{max-height:0;opacity:0;margin-top:0;padding-top:0;padding-bottom:0}
@@ -445,12 +537,15 @@ onUnmounted(()=>{cleanupToc();thumbObs?.disconnect();window.removeEventListener(
 // 统一标注卡片样式
 .sr-card{position:relative;padding:12px;margin-bottom:8px;background:var(--b3-theme-surface);border-radius:6px;border:1px solid var(--b3-border-color);transition:background .15s;cursor:pointer;
   &:hover{background:var(--b3-theme-surface-light);.sr-btns,.sr-expand-btn{opacity:1}}}
+.sr-card-drag{cursor:move}
+.sr-card-drag.is-dragging{opacity:.45}
+.sr-card-drag.is-drag-over{border-color:var(--b3-theme-primary);box-shadow:0 0 0 1px color-mix(in srgb,var(--b3-theme-primary) 35%,transparent)}
 .sr-card-edit{cursor:default;.sr-main{cursor:default}}
 .sr-group{cursor:pointer}
 .sr-group-content{display:flex;align-items:center;gap:8px;padding-left:8px}
-.sr-group-title{flex:1;font-size:13px;font-weight:600;color:var(--b3-theme-primary)}
-.sr-group-count{font-size:11px;padding:2px 8px;background:var(--b3-theme-primary-lightest);color:var(--b3-theme-primary);border-radius:10px}
-.sr-bar{position:absolute;left:6px;top:12px;width:4px;height:24px;border-radius:2px;transition:all .2s cubic-bezier(.4,0,.2,1);
+.sr-group-title{flex:1;font-weight:500;color:var(--b3-theme-primary);word-break:break-word}
+.sr-group-count{color:var(--b3-theme-primary);opacity:.65}
+.sr-bar{position:absolute;left:6px;top:12px;width:4px;height:20px;border-radius:2px;transition:all .2s cubic-bezier(.4,0,.2,1);
   .sr-group &{background:var(--b3-theme-primary);top:50%;transform:translateY(-50%);&.collapsed{border-radius:50%;width:8px;height:8px;left:4px}}}
 .sr-main{padding-left:8px}
 .sr-head{display:flex;align-items:center;gap:8px;margin-bottom:4px}

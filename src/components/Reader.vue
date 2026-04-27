@@ -6,7 +6,7 @@
     <div v-if="(showToc||showSearch)&&!loading" class="reader-overlay" @click="showToc=false;showSearch=false"/>
     
     <!-- PDF 工具栏 -->
-    <PdfToolbar v-if="isPdfMode&&pdfViewer&&pdfSearcher" :viewer="pdfViewer" :searcher="pdfSearcher" :file-size="pdfSource?.byteLength" :fixed="pdfToolbarFixed" @print="handlePrint" @download="handleDownload" @export-images="handleExportImages" @ink-toggle="handleInkToggle" @ink-color="handleInkColor" @ink-width="handleInkWidth" @ink-undo="handleInkUndo" @ink-clear="handleInkClear" @ink-eraser="handleInkEraser" @shape-toggle="handleShapeToggle" @shape-type="handleShapeType" @shape-color="handleShapeColor" @shape-width="handleShapeWidth" @shape-filled="handleShapeFilled" @shape-undo="handleShapeUndo" @shape-clear="handleShapeClear"/>
+    <PdfToolbar v-if="isPdfMode&&pdfViewer&&pdfSearcher" :viewer="pdfViewer" :searcher="pdfSearcher" :file-size="pdfSource?.byteLength" :fixed="pdfToolbarFixed" :settings="currentSettings?.pdfToolbar" @update-settings="handlePdfToolbarSettingsUpdate" @print="handlePrint" @download="handleDownload" @export-images="handleExportImages" @ink-toggle="handleInkToggle" @ink-color="handleInkColor" @ink-width="handleInkWidth" @ink-undo="handleInkUndo" @ink-clear="handleInkClear" @ink-eraser="handleInkEraser" @shape-toggle="handleShapeToggle" @shape-type="handleShapeType" @shape-color="handleShapeColor" @shape-width="handleShapeWidth" @shape-filled="handleShapeFilled" @shape-undo="handleShapeUndo" @shape-clear="handleShapeClear"/>
     
     <div ref="viewerContainerRef" class="viewer-container" :class="{'has-pdf-toolbar':isPdfMode,'has-fixed-toolbar':isPdfMode&&pdfToolbarFixed}"></div>
     
@@ -68,7 +68,8 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { showMessage } from 'siyuan'
 import type { Plugin } from 'siyuan'
-import type { ReaderSettings } from '@/composables/useSetting'
+import type { ReaderSettings, PdfToolbarSettings } from '@/composables/useSetting'
+import { settingsManager } from '@/composables/useSetting'
 import { openDict as openDictDialog } from '@/utils/dictionary'
 import { createReader, type FoliateReader, setActiveReader, clearActiveReader } from '@/core/epub'
 import type { FoliateView } from '@/core/epub/types'
@@ -93,13 +94,38 @@ const { can, showUpgrade } = useLicense(i18n.value)
 const currentSettings = ref(props.settings)
 const getSettings = () => currentSettings.value || props.settings
 const pdfToolbarFixed = computed(() => currentSettings.value?.pdfToolbarStyle === 'fixed')
+let pdfToolbarSaveTimer:any
+const updateSettingsState=(settings:ReaderSettings)=>{
+  currentSettings.value=settings
+  ;(window as any).__sireader_settings=settings
+}
+const queueSettingsSave=(settings:ReaderSettings)=>{
+  clearTimeout(pdfToolbarSaveTimer)
+  pdfToolbarSaveTimer=setTimeout(()=>settingsManager.save(settings).catch(()=>{}),200)
+}
+const hasSettingChanged=(prev:any,next:any,keys:string[])=>keys.some(key=>JSON.stringify(prev?.[key])!==JSON.stringify(next?.[key]))
+const getBookName=()=>props.bookInfo?.title||props.file?.name||'book'
+const handlePdfToolbarSettingsUpdate=(toolbar:PdfToolbarSettings)=>{
+  const base=(currentSettings.value||props.settings)
+  if(!base)return
+  const next={...base,pdfToolbar:{...base.pdfToolbar,...toolbar}}
+  updateSettingsState(next)
+  queueSettingsSave(next)
+}
 
 // 标注面板引用
 const markPanelRef = ref()
 const markManager = ref<MarkManager | null>(null)
 
 // 监听设置更新
-const handleSettingsUpdate=async(e:Event)=>{const s=(e as CustomEvent).detail;currentSettings.value=s;(window as any).__sireader_settings=s;reader?.updateSettings?.(s);pdfViewer.value&&await pdfViewer.value.updateTheme(s);await syncTTS()}
+const handleSettingsUpdate=async(e:Event)=>{
+  const s=(e as CustomEvent).detail
+  const prev=currentSettings.value
+  updateSettingsState(s)
+  hasSettingChanged(prev,s,['theme','customTheme','textSettings','paragraphSettings','layoutSettings','visualSettings','viewMode','pageAnimation'])&&reader?.updateSettings?.(s)
+  hasSettingChanged(prev,s,['theme','customTheme','textSettings','paragraphSettings','layoutSettings','visualSettings','viewMode','pdfToolbarStyle'])&&pdfViewer.value&&await pdfViewer.value.updateTheme(s)
+  JSON.stringify(prev?.tts)!==JSON.stringify(s?.tts)&&await syncTTS()
+}
 
 const containerRef = ref<HTMLElement>()
 const viewerContainerRef = ref<HTMLElement>()
@@ -133,6 +159,43 @@ let reader: FoliateReader | null = null
 let pdfSource: ArrayBuffer | null = null
 let inkToolManager: InkToolManager | null = null
 let shapeToolManager: ShapeToolManager | null = null
+const bindPdfToolManagers=(manager:any,ink:InkToolManager,shape:ShapeToolManager)=>{
+  manager.inkManager=ink
+  manager.shapeManager=shape
+}
+const togglePdfToolManagers=async(ink:boolean,shape:boolean)=>{
+  await inkToolManager?.toggle(ink)
+  await shapeToolManager?.toggle(shape)
+}
+const updatePdfToolbarToolMode=(toolMode:'text'|'hand'|'ink'|'shape')=>{
+  const base=currentSettings.value||props.settings
+  if(!base||base.pdfToolbar?.toolMode===toolMode)return
+  const next={...base,pdfToolbar:{...base.pdfToolbar,toolMode}}
+  updateSettingsState(next)
+  queueSettingsSave(next)
+}
+const setPdfToolActive=async(type:'ink'|'shape',active:boolean)=>{
+  if(!active)return type==='ink'?await inkToolManager?.toggle(false):await shapeToolManager?.toggle(false)
+  if(type==='ink'){
+    await shapeToolManager?.toggle(false)
+    await inkToolManager?.toggle(true)
+    return
+  }
+  await inkToolManager?.toggle(false)
+  await shapeToolManager?.toggle(true)
+}
+const exitPdfAnnotationTool=async()=>{
+  await togglePdfToolManagers(false,false)
+  updatePdfToolbarToolMode('text')
+}
+const finishPdfAnnotation=async(item:any,x?:number,y?:number,edit?:boolean)=>{
+  await exitPdfAnnotationTool()
+  edit&&item&&markPanelRef.value?.showCard(item,x,y,true)
+}
+const withCurrentPdfPage=(fn:(page:number)=>Promise<void>|void)=>{
+  const page=pdfViewer.value?.getCurrentPage()
+  return page?fn(page):undefined
+}
 
 // TTS
 const ttsController = new TTSController()
@@ -154,6 +217,52 @@ const searchCount=computed(()=>{
 });
 
 // 初始化
+const initPdfMode=async(bookUrl:string,onProgress:()=>Promise<void>,loadFile:()=>Promise<File|null>,bookshelfManager:any)=>{
+  const{PDFViewer,PDFSearch}=await import('@/core/pdf')
+  const container=viewerContainerRef.value!
+  const showAnn=(a:any)=>markPanelRef.value?.showAnnotationCard(a)
+  const viewer=new PDFViewer({container,scale:1.5,onPageChange:onProgress,onAnnotationClick:showAnn})
+  ;(window as any).__pdfViewer=viewer
+  ;(container as any).__pdfViewer=viewer
+  getSettings()&&viewer.applyTheme(getSettings()!)
+
+  const file=await loadFile()
+  pdfSource=file?await file.arrayBuffer():null as any
+  if(!pdfSource)throw new Error('未提供PDF文件')
+
+  const searcher=new PDFSearch()
+  await viewer.open(pdfSource)
+  await viewer.fitWidth()
+  searcher.setPDF(viewer.getPDF()!)
+  ;(window as any).__pdfDoc=viewer.getPDF()
+  searcher.extractAllText().catch(()=>{})
+
+  const view=await viewer.createView()
+  const manager=createMarkManager({format:'pdf',plugin:props.plugin,bookUrl,bookName:getBookName(),onAnnotationClick:showAnn,pdfViewer:viewer})
+  await manager.init()
+  await bookshelfManager.restoreProgress(bookUrl,null,viewer)
+
+  const handleShapeClick=(shape:any)=>markPanelRef.value?.showShapeCard(shape,viewer)
+  const ink=createInkToolManager(container,props.plugin,bookUrl,getBookName(),viewer)
+  const shape=createShapeToolManager(container,props.plugin,bookUrl,getBookName(),handleShapeClick,viewer)
+  await ink.init()
+  await shape.init()
+  bindPdfToolManagers(manager,ink,shape)
+
+  const cleanupEvents=initPdfAnnotationEvents(container,viewer,manager,(data,x,y)=>markPanelRef.value?.showMenu(data,x,y))
+  const cleanupRender=initPdfAnnotationRender(viewer,manager,ink,shape)
+  container.addEventListener('keydown',handleKeydown)
+
+  pdfViewer.value=viewer
+  pdfSearcher.value=searcher
+  markManager.value=manager
+  inkToolManager=ink
+  shapeToolManager=shape
+  currentView.value={...view,isPdf:true,marks:manager,cleanup:()=>{cleanupEvents();cleanupRender();container.removeEventListener('keydown',handleKeydown)}}
+  updatePageInfo()
+  setActiveReader(currentView.value,null,getSettings())
+}
+
 const init=async()=>{
   if(!containerRef.value)return
   try{
@@ -175,54 +284,7 @@ const init=async()=>{
     }
     
     if(isPdf){
-      const{PDFViewer,PDFSearch}=await import('@/core/pdf')
-      const showAnn=(a:any)=>markPanelRef.value?.showAnnotationCard(a)
-      const viewer=new PDFViewer({container:viewerContainerRef.value!,scale:1.5,onPageChange:onProgress,onAnnotationClick:showAnn})
-      
-      // 暴露 PDF 查看器实例给 TTS
-      ;(window as any).__pdfViewer = viewer
-      ;(viewerContainerRef.value as any).__pdfViewer = viewer
-      getSettings()&&viewer.applyTheme(getSettings()!)
-      const searcher=new PDFSearch()
-      const file=await loadFile()
-      pdfSource=file?await file.arrayBuffer():null as any
-      if(!pdfSource)throw new Error('未提供PDF文件')
-      await viewer.open(pdfSource)
-      await viewer.fitWidth()
-      searcher.setPDF(viewer.getPDF()!)
-      ;(window as any).__pdfDoc=viewer.getPDF()
-      searcher.extractAllText().catch(()=>{})
-      
-      const view=await viewer.createView()
-      
-      markManager.value=createMarkManager({format:'pdf',plugin:props.plugin,bookUrl,bookName:props.bookInfo?.title||props.file?.name||'book',onAnnotationClick:showAnn,pdfViewer:viewer})
-      await markManager.value.init()
-      await bookshelfManager.restoreProgress(bookUrl,null,viewer)
-      
-      currentView.value={...view,isPdf:true,marks:markManager.value}
-      pdfViewer.value=viewer
-      pdfSearcher.value=searcher
-      
-      inkToolManager=createInkToolManager(viewerContainerRef.value!,props.plugin,bookUrl,props.bookInfo?.title||props.file?.name||'book',viewer)
-      const handleShapeClick=(shape:any)=>markPanelRef.value?.showShapeCard(shape,viewer)
-      shapeToolManager=createShapeToolManager(viewerContainerRef.value!,props.plugin,bookUrl,props.bookInfo?.title||props.file?.name||'book',handleShapeClick,viewer)
-      await inkToolManager.init()
-      await shapeToolManager.init()
-      ;(markManager.value as any).inkManager=inkToolManager
-      ;(markManager.value as any).shapeManager=shapeToolManager
-      updatePageInfo()
-      setActiveReader(currentView.value,null,getSettings())
-      
-      // 初始化PDF标注（事件+渲染）
-      const cleanupEvents = initPdfAnnotationEvents(viewerContainerRef.value!,viewer,markManager.value,(data,x,y)=>markPanelRef.value?.showMenu(data,x,y))
-      const cleanupRender = initPdfAnnotationRender(viewer,markManager.value,inkToolManager,shapeToolManager)
-      
-      viewerContainerRef.value!.addEventListener('keydown',handleKeydown)
-      currentView.value.cleanup=()=>{
-        cleanupEvents()
-        cleanupRender()
-        viewerContainerRef.value?.removeEventListener('keydown',handleKeydown)
-      }
+      await initPdfMode(bookUrl,onProgress,loadFile,bookshelfManager)
     }else{
       reader=createReader({container:viewerContainerRef.value!,settings:getSettings()!,plugin:props.plugin})
       
@@ -232,7 +294,7 @@ const init=async()=>{
       }else await reader.open(props.file||props.url||await loadFile()||await Promise.reject(new Error('未提供书籍')))
       
       const view=reader.getView()
-      markManager.value=createMarkManager({format:'epub',view,plugin:props.plugin,bookUrl,bookName:props.bookInfo?.title||props.file?.name||'book',reader})
+      markManager.value=createMarkManager({format:'epub',view,plugin:props.plugin,bookUrl,bookName:getBookName(),reader})
       await markManager.value.init()
       ;(view as any).marks=markManager.value
       await bookshelfManager.restoreProgress(bookUrl,reader)
@@ -298,7 +360,7 @@ const handleDownload=async()=>pdfSource&&(await import('@/core/pdf')).downloadPD
 const handleExportImages=async()=>pdfViewer.value&&(await import('@/core/pdf')).exportAsImages(pdfViewer.value.getPDF()!)
 
 // 墨迹工具
-const handleInkToggle=async(a:boolean)=>{a&&await shapeToolManager?.toggle(false);await inkToolManager?.toggle(a)}
+const handleInkToggle=async(a:boolean)=>setPdfToolActive('ink',a)
 const handleInkColor=async(c:string)=>inkToolManager?.setConfig({color:c})
 const handleInkWidth=async(w:number)=>inkToolManager?.setConfig({width:w})
 const handleInkEraser=async(a:boolean)=>inkToolManager?.setConfig(a?{color:'#fff',width:20}:{color:'#f00',width:2})
@@ -306,13 +368,13 @@ const handleInkUndo=async()=>inkToolManager?.undo()
 const handleInkClear=async()=>inkToolManager?.clear()
 
 // 形状工具
-const handleShapeToggle=async(a:boolean)=>{a&&await inkToolManager?.toggle(false);await shapeToolManager?.toggle(a)}
+const handleShapeToggle=async(a:boolean)=>setPdfToolActive('shape',a)
 const handleShapeType=async(t:string)=>shapeToolManager?.setConfig({shapeType:t})
 const handleShapeColor=async(c:string)=>shapeToolManager?.setConfig({color:c})
 const handleShapeWidth=async(w:number)=>shapeToolManager?.setConfig({width:w})
 const handleShapeFilled=async(f:boolean)=>shapeToolManager?.setConfig({filled:f})
-const handleShapeUndo=async()=>{const p=pdfViewer.value?.getCurrentPage();p&&shapeToolManager?.undo(p)}
-const handleShapeClear=async()=>{const p=pdfViewer.value?.getCurrentPage();p&&shapeToolManager?.clear(p)}
+const handleShapeUndo=async()=>withCurrentPdfPage(page=>shapeToolManager?.undo(page))
+const handleShapeClear=async()=>withCurrentPdfPage(page=>shapeToolManager?.clear(page))
 
 // 进度保存 & 书签
 const updateBookmarkState=()=>hasBookmark.value=!!markManager.value?.hasBookmark?.()
@@ -367,11 +429,12 @@ const suppressError=(e:PromiseRejectionEvent)=>/createTreeWalker|destroy/.test(e
 const setupTabObserver=()=>{if(isMobile())return;let el=containerRef.value?.parentElement;while(el){if(el.hasAttribute('data-id')){const h=document.querySelector(`li[data-type="tab-header"][data-id="${el.getAttribute('data-id')}"]`);if(h){const obs=new MutationObserver(ms=>ms.forEach(m=>{if(m.type!=='attributes'||m.attributeName!=='class')return;const focused=(m.target as HTMLElement).classList.contains('item--focus');focused&&setActiveReader(currentView.value,reader,getSettings());focused&&window.dispatchEvent(new CustomEvent('sireader:tab-switched'));syncReaderFocus(focused&&hasReaderFocus())}));obs.observe(h,{attributes:true,attributeFilter:['class']});(containerRef.value as any).__observer=obs;break}}el=el.parentElement}}
 
 // 形状创建后自动显示编辑窗口
-const handleShapeCreated=(e:CustomEvent)=>{const{shape,x,y,edit}=e.detail;edit&&markPanelRef.value?.showCard(shape,x,y,true)}
+const handleShapeCreated=async(e:CustomEvent)=>{const{shape,x,y,edit}=e.detail;await finishPdfAnnotation(shape,x,y,edit)}
+const handleInkCreated=async(e:CustomEvent)=>{const{ink,x,y,edit}=e.detail||{};await finishPdfAnnotation(ink,x,y,edit)}
 
-onMounted(()=>{init();containerRef.value?.focus();events.forEach(([e,h])=>window.addEventListener(e,h as any));window.addEventListener('keydown',handleKeydown);window.addEventListener('unhandledrejection',suppressError);window.addEventListener('shape-created',handleShapeCreated as any);window.addEventListener('blur',handleWindowBlur);window.addEventListener('focus',handleWindowFocus);document.addEventListener('visibilitychange',handleVisibilityChange);setupTabObserver();const c=containerRef.value;c&&(c.addEventListener('focusin',handleFocusIn),c.addEventListener('focusout',handleFocusOut));isMobile()&&c&&(c.addEventListener('touchstart',handleTouchStart),c.addEventListener('touchend',handleTouchEnd));window.dispatchEvent(new CustomEvent('reader:open',{detail:{bookUrl:getBookUrl()}}));syncReaderFocus(true)})
+onMounted(()=>{init();containerRef.value?.focus();events.forEach(([e,h])=>window.addEventListener(e,h as any));window.addEventListener('keydown',handleKeydown);window.addEventListener('unhandledrejection',suppressError);window.addEventListener('shape-created',handleShapeCreated as any);window.addEventListener('ink-created',handleInkCreated as any);window.addEventListener('blur',handleWindowBlur);window.addEventListener('focus',handleWindowFocus);document.addEventListener('visibilitychange',handleVisibilityChange);setupTabObserver();const c=containerRef.value;c&&(c.addEventListener('focusin',handleFocusIn),c.addEventListener('focusout',handleFocusOut));isMobile()&&c&&(c.addEventListener('touchstart',handleTouchStart),c.addEventListener('touchend',handleTouchEnd));window.dispatchEvent(new CustomEvent('reader:open',{detail:{bookUrl:getBookUrl()}}));syncReaderFocus(true)})
 
-onUnmounted(async()=>{syncReaderFocus(false);window.dispatchEvent(new CustomEvent('reader:close'));savePosition();clearActiveReader();await markManager.value?.destroy();try{reader?.destroy();currentView.value?.cleanup?.();currentView.value?.viewer?.destroy?.()}catch{};inkToolManager?.destroy?.();shapeToolManager?.destroy?.();ttsController.destroy();setTimeout(()=>viewerContainerRef.value&&(viewerContainerRef.value.innerHTML=''),50);events.forEach(([e,h])=>window.removeEventListener(e,h as any));window.removeEventListener('keydown',handleKeydown);window.removeEventListener('unhandledrejection',suppressError);window.removeEventListener('shape-created',handleShapeCreated as any);window.removeEventListener('blur',handleWindowBlur);window.removeEventListener('focus',handleWindowFocus);document.removeEventListener('visibilitychange',handleVisibilityChange);(containerRef.value as any)?.__observer?.disconnect();const c=containerRef.value;c&&(c.removeEventListener('focusin',handleFocusIn),c.removeEventListener('focusout',handleFocusOut));isMobile()&&c&&(c.removeEventListener('touchstart',handleTouchStart),c.removeEventListener('touchend',handleTouchEnd));const{bookshelfManager}=await import('@/core/bookshelf');await bookshelfManager.flush();bookshelfManager.cleanup()})
+onUnmounted(async()=>{syncReaderFocus(false);window.dispatchEvent(new CustomEvent('reader:close'));savePosition();clearTimeout(pdfToolbarSaveTimer);clearActiveReader();await markManager.value?.destroy();try{reader?.destroy();currentView.value?.cleanup?.();currentView.value?.viewer?.destroy?.()}catch{};inkToolManager?.destroy?.();shapeToolManager?.destroy?.();ttsController.destroy();setTimeout(()=>viewerContainerRef.value&&(viewerContainerRef.value.innerHTML=''),50);events.forEach(([e,h])=>window.removeEventListener(e,h as any));window.removeEventListener('keydown',handleKeydown);window.removeEventListener('unhandledrejection',suppressError);window.removeEventListener('shape-created',handleShapeCreated as any);window.removeEventListener('ink-created',handleInkCreated as any);window.removeEventListener('blur',handleWindowBlur);window.removeEventListener('focus',handleWindowFocus);document.removeEventListener('visibilitychange',handleVisibilityChange);(containerRef.value as any)?.__observer?.disconnect();const c=containerRef.value;c&&(c.removeEventListener('focusin',handleFocusIn),c.removeEventListener('focusout',handleFocusOut));isMobile()&&c&&(c.removeEventListener('touchstart',handleTouchStart),c.removeEventListener('touchend',handleTouchEnd));const{bookshelfManager}=await import('@/core/bookshelf');await bookshelfManager.flush();bookshelfManager.cleanup()})
 </script>
 
 <style scoped lang="scss">
