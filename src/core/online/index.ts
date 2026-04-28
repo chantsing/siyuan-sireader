@@ -3,7 +3,7 @@
  */
 import { getBookFileDataPath, getCoverFileDataPath, getManagedFileExt, saveManagedFile } from '@/core/bookStore'
 
-const getPath = (title: string, url: string, ext: string) => getBookFileDataPath(title, url, ext)
+const getPath = (_title: string, url: string, ext: string) => getBookFileDataPath(url, ext)
 const load = async (path: string) => await fetch(path.startsWith('/assets/') || path.startsWith('/public/') ? path : '/api/file/getFile', path.startsWith('/assets/') || path.startsWith('/public/') ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) }).then(r => r.ok ? r.text() : null).catch(() => null)
 const save = async (path: string, html: string) => saveManagedFile(new Blob([html], { type: 'text/html' }), path, path.split('/').pop()!)
 const has = (html: string, i: number) => html.includes(`id="ch${i}"`)
@@ -39,7 +39,7 @@ export async function addOnlineBook(book: any, preloadedChapters?: any[]) {
       if (res.ok) {
         const blob = await res.blob()
         const ext = getManagedFileExt(blob.type.split('/').pop() || book.coverUrl, 'jpg')
-        const coverPath = getCoverFileDataPath(book.name, book.bookUrl, ext)
+        const coverPath = getCoverFileDataPath(book.bookUrl, ext)
         cover = await saveManagedFile(blob, coverPath, coverPath.split('/').pop()!)
       }
     } catch {}

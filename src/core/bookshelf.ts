@@ -3,7 +3,7 @@
  */
 import { reactive } from 'vue';
 import { getDatabase } from './database';
-import { getBookFileDataPath, getCoverFileDataPath, getManagedFileExt, readDirEntries, readFileBlob, removeManagedFile, saveManagedFile } from './bookStore';
+import { getBookFileDataPath, getCoverFileDataPath, getManagedFileExt, normalizeBookTitle, readDirEntries, readFileBlob, readManagedFile, removeManagedFile, saveManagedFile } from './bookStore';
 
 export type BookFormat = 'pdf' | 'epub' | 'mobi' | 'azw3' | 'online' | 'txt';
 export type BookStatus = 'unread' | 'reading' | 'finished';
@@ -43,27 +43,43 @@ class BookshelfManager {
     }, fallback);
   
   // ===== 存储助手 =====
-  private saveManagedBookFile = async (file: File, title: string, url: string) => {
+  private saveManagedBookFile = async (file: File, url: string) => {
     const ext = file.name.split('.').pop() || 'bin';
-    return await saveManagedFile(file, getBookFileDataPath(title, url, ext), file.name);
+    return await saveManagedFile(file, getBookFileDataPath(url, ext));
   };
-  private saveManagedCoverFile = async (blob: Blob, title: string, url: string) => {
+  private saveManagedCoverFile = async (blob: Blob, url: string) => {
     const ext = getManagedFileExt(blob.type.split('/').pop() || '', 'jpg');
-    return await saveManagedFile(blob, getCoverFileDataPath(title, url, ext), `${url.replace(/[^a-z0-9]/gi, '_')}.${ext}`);
+    return await saveManagedFile(blob, getCoverFileDataPath(url, ext));
   };
-  private saveCoverBlob = async (blob: Blob | undefined, title: string, url: string) =>
-    blob ? await this.saveManagedCoverFile(blob, title, url) : undefined;
-  private downloadCover = async (coverUrl: string | undefined, title: string, url: string) => {
+  private saveCoverBlob = async (blob: Blob | undefined, url: string) =>
+    blob ? await this.saveManagedCoverFile(blob, url) : undefined;
+  private toFileUrl = (value = '') => {
+    const path = String(value || '').trim()
+    if (!path) return ''
+    if (path.startsWith('file://')) return path
+    if (path.startsWith('/')) return `file://${encodeURI(path)}`
+    return `file:///${path.replace(/\\/g, '/').replace(/^\/+/, '')}`
+  }
+  private prepareLocalBook = async (file: File, parsedMeta?: any) => {
+    const originalFormat = this.getFormat(file.name)
+    if (file.name.toLowerCase().endsWith('.txt')) file = await (await import('@/core/txt')).convertTxtFile(file)
+    const format = originalFormat
+    const name = file.name.replace(/\.[^.]+$/, '')
+    const meta = parsedMeta || await this.extractMeta(file, format, name)
+    const title = normalizeBookTitle(meta.title || name) || name
+    return { file, format, name, meta, title }
+  }
+  private downloadCover = async (coverUrl: string | undefined, url: string) => {
     if (!coverUrl) return '';
     try {
       const { httpSourceManager } = await import('@/utils/HttpSources');
       const blob = await httpSourceManager.downloadCover(coverUrl);
-      return blob ? await this.saveManagedCoverFile(blob, title, url) : '';
+      return blob ? await this.saveManagedCoverFile(blob, url) : '';
     } catch { return ''; }
   };
   private buildBookPayload = (info: any) => ({
     url: info.url,
-    title: info.title || '未知',
+    title: normalizeBookTitle(info.title || '未知') || '未知',
     author: info.author || '未知',
     cover: info.cover || '',
     format: info.format || 'epub',
@@ -301,7 +317,12 @@ class BookshelfManager {
   
   getCoverUrl(book: any) {
     if (!book.cover) return '';
-    if (book.cover.startsWith('/assets/') || book.cover.startsWith('/public/') || /^https?:\/\//.test(book.cover)) return book.cover;
+    if (book.cover.startsWith('/assets/') || /^https?:\/\//.test(book.cover)) return book.cover;
+    if (book.cover.startsWith('/public/siyuan-sireader/')) {
+      if (!(book.cover in this.coverCache)) this.loadCover(book.cover);
+      return this.coverCache[book.cover] || '';
+    }
+    if (book.cover.startsWith('/public/')) return book.cover;
     if (book.cover.startsWith('/data/')) {
       if (!(book.cover in this.coverCache)) this.loadCover(book.cover);
       return this.coverCache[book.cover] || '';
@@ -338,43 +359,60 @@ class BookshelfManager {
     return r
   }
   
-  async addLocalBook(file: File) {
+  async addLocalBook(file: File, parsedMeta?: any) {
     await this.init()
-    const originalFormat=this.getFormat(file.name)
-    if(file.name.toLowerCase().endsWith('.txt'))file=await(await import('@/core/txt')).convertTxtFile(file)
-    const format=originalFormat,name=file.name.replace(/\.[^.]+$/,''),url=`${format}://${name}_${file.size}`
-    const meta=await this.extractMeta(file,format,name)
-    const title = meta.title || name
-    const [path, cover] = await Promise.all([this.saveManagedBookFile(file, title, url), this.saveCoverBlob(meta.coverBlob, title, url)])
-    await this.addBook({ url, title, author: meta.author || '未知作者', cover, format, path, size: file.size, metadata: this.buildMetadata(meta) })
+    const { file: source, format, meta, title } = await this.prepareLocalBook(file, parsedMeta)
+    const url=`${format}://${source.name.replace(/\.[^.]+$/,'')}_${source.size}`
+    const [path, cover] = await Promise.all([this.saveManagedBookFile(source, url), this.saveCoverBlob(meta.coverBlob, url)])
+    await this.addBook({ url, title, author: meta.author || '未知作者', cover, format, path, size: source.size, metadata: this.buildMetadata(meta) })
+  }
+
+  async addLocalLinkBook(file: File, parsedMeta?: any) {
+    await this.init()
+    const localPath = (file as any)?.path || (file as any)?._path || ''
+    if (!localPath) throw new Error('本地文件链接不可用')
+    const { file: source, format, meta, title } = await this.prepareLocalBook(file, parsedMeta)
+    const url=this.toFileUrl(localPath)
+    const cover = await this.saveCoverBlob(meta.coverBlob, url)
+    await this.addBook({ url, title, author: meta.author || '未知作者', cover, format, path: url, size: source.size, metadata: this.buildMetadata(meta) })
   }
   
-  async addUrlBook(url: string, coverUrl?: string, bookInfo?: { title?: string; author?: string }) {
+  async addUrlBook(url: string, coverUrl?: string, bookInfo?: { title?: string; author?: string }, parsedMeta?: any) {
     await this.init()
     
     // HTTP书源快速通道：跳过文件下载和元数据提取
     if (bookInfo?.title) {
       const format = this.getFormat(url)
-      const cover = await this.downloadCover(coverUrl, bookInfo.title, url)
+      const cover = await this.downloadCover(coverUrl, url)
       const file = await this.loadFile(url)
-      const path = await this.saveManagedBookFile(file, bookInfo.title, url)
-      await this.addBook({ url, title: bookInfo.title, author: bookInfo.author || '未知作者', cover, format, path, size: file.size, metadata: {} })
+      const path = await this.saveManagedBookFile(file, url)
+      await this.addBook({ url, title: normalizeBookTitle(bookInfo.title) || bookInfo.title, author: bookInfo.author || '未知作者', cover, format, path, size: file.size, metadata: {} })
       return
     }
     
     // 常规路径：需要下载文件提取元数据
-    const { filePath, name, format, meta } = await this.parseUrlBook(url)
+    const { filePath, name, format, meta } = parsedMeta ? { filePath: url, name: parsedMeta.title || url.split(/[/\\]/).pop()?.split('?')[0]?.replace(/\.[^.]+$/, '') || '未知书籍', format: this.getFormat(url), meta: parsedMeta } : await this.parseUrlBook(url)
     const file = await this.loadFile(filePath)
-    const title = meta.title || name
-    const path = await this.saveManagedBookFile(file, title, filePath)
-    let cover = await this.downloadCover(coverUrl, title, filePath)
-    if (!cover) cover = await this.saveCoverBlob(meta.coverBlob, title, filePath)
+    const title = normalizeBookTitle(meta.title || name) || name
+    const path = await this.saveManagedBookFile(file, filePath)
+    let cover = await this.downloadCover(coverUrl, filePath)
+    if (!cover) cover = await this.saveCoverBlob(meta.coverBlob, filePath)
     await this.addBook({ url: filePath, title, author: meta.author || '未知作者', cover, format, path, size: file.size, metadata: this.buildMetadata(meta) })
   }
   
   async previewUrlBook(url: string) {
     const { meta, format } = await this.parseUrlBook(url)
     return { ...meta, format, cover: meta.coverBlob ? URL.createObjectURL(meta.coverBlob) : '' }
+  }
+
+  async previewLocalBook(file: File) {
+    await this.init()
+    const originalFormat = this.getFormat(file.name)
+    if (file.name.toLowerCase().endsWith('.txt')) file = await (await import('@/core/txt')).convertTxtFile(file)
+    const format = originalFormat
+    const name = file.name.replace(/\.[^.]+$/, '')
+    const meta = await this.extractMeta(file, format, name)
+    return { ...meta, format, title: normalizeBookTitle(meta.title || name) || name, cover: meta.coverBlob ? URL.createObjectURL(meta.coverBlob) : '' }
   }
   
   private async parseUrlBook(url: string) {
@@ -391,8 +429,8 @@ class BookshelfManager {
   async addAssetBook(assetPath: string, file: File) {
     await this.init()
     const format = this.getFormat(file.name), name = file.name.replace(/\.[^.]+$/, ''), url = `asset://${assetPath}`, meta = await this.extractMeta(file, format, name)
-    const title = meta.title || name
-    await this.addBook({ url, title, author: meta.author || '未知作者', cover: await this.saveCoverBlob(meta.coverBlob, title, url), format, path: assetPath, metadata: this.buildMetadata(meta) })
+    const title = normalizeBookTitle(meta.title || name) || name
+    await this.addBook({ url, title, author: meta.author || '未知作者', cover: await this.saveCoverBlob(meta.coverBlob, url), format, path: assetPath, metadata: this.buildMetadata(meta) })
   }
   
   // 统一文件加载方法（用于添加书籍和阅读器）
@@ -403,7 +441,7 @@ class BookshelfManager {
       return new File([await res.arrayBuffer()], path.split('/').pop()?.split('?')[0] || 'book', { type: res.headers.get('content-type') || 'application/octet-stream' })
     }
     if (path.startsWith('file://')) {
-      const filePath = path.substring(7)
+      const filePath = decodeURI(path.substring(7)).replace(/^\/([a-zA-Z]:[\\/])/, '$1')
       if (typeof window !== 'undefined' && (window as any).require) {
         const fs = (window as any).require('fs'), buffer = fs.readFileSync(filePath)
         return new File([buffer], filePath.split(/[/\\]/).pop() || 'book')
@@ -416,6 +454,11 @@ class BookshelfManager {
         ? `/${path}`
         : ''
     if (publicPath) {
+      if (publicPath.startsWith('/public/siyuan-sireader/')) {
+        const file = await readManagedFile(publicPath, path.split(/[/\\]/).pop() || 'book')
+        if (!file) throw new Error('文件加载失败')
+        return file
+      }
       const res = await fetch(publicPath)
       if (!res.ok) throw new Error('文件加载失败')
       return new File([await res.arrayBuffer()], path.split(/[/\\]/).pop() || 'book', { type: res.headers.get('content-type') || 'application/octet-stream' })
@@ -440,7 +483,7 @@ class BookshelfManager {
       const coverBlob = (format === 'epub' || format === 'txt') ? await this.extractCover(file).catch(() => undefined) : undefined
       view.remove()
       return {
-        title: norm(metadata.title) || defaultName, subtitle: norm(metadata.subtitle), author: contrib(metadata.author) || '未知作者',
+        title: normalizeBookTitle(norm(metadata.title) || defaultName) || defaultName, subtitle: norm(metadata.subtitle), author: contrib(metadata.author) || '未知作者',
         publisher: contrib(metadata.publisher), published: metadata.published instanceof Date ? metadata.published.toISOString().split('T')[0] : metadata.published ? String(metadata.published) : undefined,
         language: arr(metadata.language)[0], identifier: arr(metadata.identifier)[0], intro: metadata.description,
         subjects: arr(metadata.subject).map((s: any) => typeof s === 'string' ? s : norm(s?.name)).filter(Boolean),
@@ -455,11 +498,23 @@ class BookshelfManager {
       if (!opfPath) return;
       const opf = await zip.file(opfPath)?.async('text');
       if (!opf) return;
-      const base = opfPath.replace(/[^/]+$/, ''), norm = (h: string) => (base + h).replace(/\/+/g, '/'), getBlob = async (h: string) => await zip.file(norm(h))?.async('blob');
+      const base = opfPath.replace(/[^/]+$/, ''), norm = (h: string) => (base + h).replace(/\/+/g, '/'), getBlob = async (h: string) => {
+        return await zip.file(norm(h))?.async('blob')
+      };
       let href = opf.match(/<item[^>]+properties="cover-image"[^>]+href="([^"]+)"/)?.[1] || opf.match(/<item[^>]+href="([^"]+)"[^>]+properties="cover-image"/)?.[1];
       if (href) return await getBlob(href);
       const item = opf.match(/<item[^>]+id="cover(-image)?"[^>]+href="([^"]+)"/i)?.[2];
-      if (item) { if (/\.(xhtml|html)$/i.test(item)) { const html = await zip.file(norm(item))?.async('text'), img = html?.match(/<(?:img|image)[^>]+(?:src|(?:xlink:)?href)="([^"]+)"/i)?.[1]; if (img) return await getBlob((item.replace(/[^/]+$/, '') + img).replace(/^\.?\//, '')); } return await getBlob(item); }
+      if (item) {
+        if (/\.(xhtml|html)$/i.test(item)) {
+          const html = await zip.file(norm(item))?.async('text')
+          const img = html?.match(/<(?:img|image)[^>]+(?:src|(?:xlink:)?href)="([^"]+)"/i)?.[1]
+          const bg = html?.match(/background(?:-image)?:\s*url\((['"]?)([^'")]+)\1\)/i)?.[2]
+          const inlineSvg = html?.match(/<(?:image)[^>]+(?:xlink:href|href)=["']([^"']+)["']/i)?.[1]
+          const coverRef = img || bg || inlineSvg
+          if (coverRef) return await getBlob((item.replace(/[^/]+$/, '') + coverRef).replace(/^\.?\//, ''))
+        }
+        return await getBlob(item)
+      }
       const id = opf.match(/<meta\s+name="cover"\s+content="([^"]+)"/i)?.[1];
       if (id && (href = opf.match(new RegExp(`<item[^>]+id="${id}"[^>]+href="([^"]+)"`, 'i'))?.[1])) return await getBlob(href);
       if (href = opf.match(/<item[^>]+href="([^"]+\.(?:jpg|jpeg|png|gif))"/i)?.[1]) return await getBlob(href);

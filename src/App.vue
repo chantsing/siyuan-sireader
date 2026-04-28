@@ -53,24 +53,8 @@ const mountReader = async (el: HTMLElement, props: any) => {
 // 暴露渲染接口供其他插件调用
 ;(window as any).sireader = {
   mountReader: async (el: HTMLElement, props: any) => await mountReader(el, props),
-  openEpubTab: (file: File, title?: string) => openTab({
-    app: (plugin as any).app,
-    custom: {
-      icon: 'siyuan-reader-icon',
-      title: title || file.name.replace(/\.[^.]+$/, ''),
-      data: { file },
-      id: `${plugin.name}epub_reader`
-    }
-  }),
-  openOnlineTab: (bookInfo: any) => openTab({
-    app: (plugin as any).app,
-    custom: {
-      icon: 'siyuan-reader-icon',
-      title: bookInfo.name || '在线阅读',
-      data: { bookInfo },
-      id: `${plugin.name}custom_tab_online_reader`
-    }
-  })
+  openEpubTab: async (file: File, title?: string) => (await import('@/utils/bookOpen')).openReaderTab(plugin, title || file.name.replace(/\.[^.]+$/, ''), { file }, `${plugin.name}epub_reader`),
+  openOnlineTab: async (bookInfo: any) => (await import('@/utils/bookOpen')).openReaderTab(plugin, bookInfo.name || '在线阅读', { bookInfo }, `${plugin.name}custom_tab_online_reader`)
 }
 
 // 注册标签页
@@ -135,16 +119,8 @@ const handleEbookLink = async (e: MouseEvent) => {
   e.preventDefault(), e.stopPropagation()
   const file = await fetchFile(cleanUrl)
   if (!file) return
-  openTab({
-    app: (plugin as any).app,
-    custom: {
-      icon: 'siyuan-reader-icon',
-      title: file.name.replace(/\.[^.]+$/, ''),
-      data: { file, url: cleanUrl, blockId: link.closest('[data-node-id]')?.getAttribute('data-node-id') },
-      id: `${plugin.name}epub_reader`
-    },
-    position: { rightTab: 'right', bottomTab: 'bottom' }[settings.value.openMode]
-  })
+  const { openReaderTab } = await import('@/utils/bookOpen')
+  openReaderTab(plugin, file.name.replace(/\.[^.]+$/, ''), { file, url: cleanUrl, blockId: link.closest('[data-node-id]')?.getAttribute('data-node-id') }, `${plugin.name}epub_reader`, settings.value)
 }
 
 setOpenSettingHandler(openSetting)

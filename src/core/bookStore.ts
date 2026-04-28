@@ -45,19 +45,13 @@ const hash = (str: string) => {
   return Math.abs(value).toString(36)
 }
 
-const sanitize = (name: string) => name
-  .replace(/[<>:"/\\|?*\x00-\x1f[\]{};,]/g, '')
-  .replace(/\s+/g, '_')
-  .replace(/[._-]+/g, '_')
-  .replace(/^[._-]+|[._-]+$/g, '')
-  .slice(0, 50) || 'book'
-
 const publicToDataPath = (path = '') => path.startsWith('/public/') ? path.replace('/public/', '/data/public/') : path
 const toPublicPath = (path = '') => path.startsWith('/data/public/') ? path.replace('/data/public/', '/public/') : path
 const toLegacyPath = (path = '') => path.replace(OLD_PUBLIC_ROOT, OLD_PUBLIC_DATA_ROOT).replace(OLD_PUBLIC_DATA_ROOT, LEGACY_ROOT)
 const isRemotePath = (path = '') => /^(https?:\/\/|file:\/\/)/i.test(path)
 const isPublicPath = (path = '') => path.startsWith('/public/') || path.startsWith('/data/public/')
 const isLegacyManagedPath = (path = '') => path.startsWith(LEGACY_ROOT) || path.startsWith(OLD_PUBLIC_ROOT) || path.startsWith(OLD_PUBLIC_DATA_ROOT)
+const isManagedPath = (path = '') => path.startsWith(PUBLIC_ROOT) || path.startsWith(PUBLIC_DATA_ROOT) || isLegacyManagedPath(path)
 const getRecordKey = (url: string) => `${RECORDS_DIR}/${hash(url)}.json`
 const getLegacyRecordKey = (url: string) => `${LEGACY_RECORD_KEY_PREFIX}${hash(url)}.json`
 const parseStoredValue = <T = any>(value: any): T | null => {
@@ -88,7 +82,14 @@ export const readFileText = async (path: string) => {
 
 export const readFileBlob = async (path: string) => {
   const res = await readFileResponse(path)
-  return res?.ok ? await res.blob().catch(() => null) : null
+  if (!res?.ok) return null
+  const blob = await res.blob().catch(() => null)
+  if (!blob) return null
+  if (blob.size <= 512) {
+    const text = await blob.text().catch(() => '')
+    if (text && isApiErrorPayload(new TextEncoder().encode(text))) return null
+  }
+  return blob
 }
 
 export const readFileBytes = async (path: string) => {
@@ -104,6 +105,11 @@ export const readFileBytes = async (path: string) => {
   return isApiErrorPayload(bytes) ? null : bytes
 }
 
+export const readManagedFile = async (path: string, fallbackName?: string) => {
+  const blob = await readFileBlob(path)
+  return blob ? new File([blob], fallbackName || path.split(/[/\\]/).pop() || 'file', { type: blob.type || 'application/octet-stream' }) : null
+}
+
 const putPublicFile = async (blob: Blob, publicPath: string, name?: string) => {
   const dataPath = publicToDataPath(publicPath)
   const dirPath = dataPath.split('/').slice(0, -1).join('/')
@@ -114,14 +120,20 @@ const putPublicFile = async (blob: Blob, publicPath: string, name?: string) => {
   return publicPath
 }
 
-export const getBookFileName = (title: string, url: string, ext: string) => `${sanitize(title)}_${hash(url)}.${ext}`
-export const getBookFileDataPath = (title: string, url: string, ext: string) => `${PUBLIC_ROOT}/${BOOKS_DIR}/${getBookFileName(title, url, ext)}`
+export const getBookFileName = (url: string, ext: string) => `${hash(url)}.${ext}`
+export const getBookFileDataPath = (url: string, ext: string) => `${PUBLIC_ROOT}/${BOOKS_DIR}/${getBookFileName(url, ext)}`
 export const getManagedFileExt = (path = '', fallback = 'bin') => {
   const cleanPath = path.split('?')[0].split('#')[0]
   const ext = cleanPath.split('.').pop()?.trim().toLowerCase()
   return ext && /^[a-z0-9]+$/.test(ext) ? ext : fallback
 }
-export const getCoverFileDataPath = (title: string, url: string, ext = 'jpg') => `${PUBLIC_ROOT}/${COVERS_DIR}/${getBookFileName(title, url, ext)}`
+export const getCoverFileDataPath = (url: string, ext = 'jpg') => `${PUBLIC_ROOT}/${COVERS_DIR}/${getBookFileName(url, ext)}`
+export const normalizeBookTitle = (title = '') => {
+  const trimmed = title.trim()
+  if (!trimmed) return ''
+  const withoutExt = trimmed.replace(/\.(epub|pdf|mobi|azw3|azw|txt|fb2|cbz)$/i, '')
+  return withoutExt.replace(/_[a-z0-9]{4,12}$/i, '') || withoutExt || trimmed
+}
 
 export const loadData = async <T = any>(key: string): Promise<T | null> => {
   try {
@@ -143,10 +155,10 @@ export const saveManagedFile = async (blob: Blob, path: string, name?: string) =
 
 export const migrateManagedPath = async (path = '', fallbackPath?: string) => {
   if (!path || path.startsWith('asset://')) return path
-  if (path.startsWith('/public/')) return path
-  if (!isLegacyManagedPath(path)) return path
+  if (!isManagedPath(path)) return path
   const bytes = await readFileBytes(path)
   const target = fallbackPath || toPublicPath(path).replace(OLD_PUBLIC_ROOT, PUBLIC_ROOT).replace(OLD_PUBLIC_DATA_ROOT, PUBLIC_ROOT).replace(LEGACY_ROOT, PUBLIC_ROOT)
+  if (path === target || publicToDataPath(path) === publicToDataPath(target)) return target
   if (!bytes?.byteLength) {
     return target
   }

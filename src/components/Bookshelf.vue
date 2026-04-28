@@ -9,7 +9,6 @@
       <button @click="toggleViewMode"><svg><use :xlink:href="viewModeIcon"/></svg></button>
       <button @click.stop="showAddMenu"><svg><use xlink:href="#lucide-book-plus"/></svg></button>
     </div>
-    <input ref="fileInput" type="file" accept=".epub,.pdf,.mobi,.azw3,.azw,.fb2,.cbz,.txt" multiple style="display:none" @change="handleFileUpload">
     <Transition name="slide">
       <div v-if="selectedBooks.size" class="sr-batch-bar">
         <label class="sr-batch-info"><input type="checkbox" :checked="isAllSelected" @change="toggleSelectAll"><span>已选 {{selectedBooks.size}} 本</span></label>
@@ -170,12 +169,31 @@
           </template>
           <!-- 添加书籍 -->
           <template v-else-if="panelMode==='add'">
-            <div class="sr-panel-field"><label>链接或路径</label><input v-model="urlInput" placeholder="HTTP(S)链接、绝对路径或相对路径" @keyup.enter="previewBook"></div>
-            <template v-if="previewBookInfo">
-              <div v-if="previewBookInfo.cover" class="sr-panel-cover"><img :src="previewBookInfo.cover"></div>
-              <div v-for="f in previewFields" :key="f.label" class="sr-panel-field"><label>{{f.label}}</label><span>{{f.value}}</span></div>
+            <template v-if="importMode==='link'">
+              <div class="sr-panel-field"><label>书籍链接</label><textarea v-model="importDraft" class="sr-textarea" placeholder="支持批量导入，每行一个链接"></textarea></div>
+              <div class="sr-panel-actions">
+                <button @click="parseImportUrls" :disabled="!importDraft.trim()||importParsing">{{importParsing?'解析中...':'解析链接'}}</button>
+              </div>
             </template>
-            <div class="sr-panel-actions"><button @click="closePanel">取消</button><button v-if="!previewBookInfo" @click="previewBook" :disabled="!urlInput.trim()||previewLoading">{{previewLoading?'加载中...':'预览'}}</button><button v-else @click="confirmAdd" class="btn-save">确认添加</button></div>
+            <div v-if="importHasItems" class="sr-import-list">
+              <label class="sr-import-head"><input type="checkbox" v-model="importAllSelected"><span>已选 {{importSelectedCount}} / {{importItems.length}}</span><span v-if="importParsing">{{importProgress}}%</span></label>
+              <div v-for="item in importItems" :key="item.id" class="sr-import-item">
+                <input type="checkbox" v-model="item.selected" :disabled="!!item.error||item.loading">
+                <div v-if="item.preview?.cover" class="sr-import-cover"><img :src="item.preview.cover"></div>
+                <div v-else class="sr-import-cover sr-import-cover--text">{{item.preview?.title?.slice(0,2)||'书籍'}}</div>
+                <div class="sr-import-info">
+                  <div class="sr-import-title">{{item.preview?.title||item.label}}</div>
+                  <div class="sr-import-meta">{{item.preview?.author||'未知作者'}}<span v-if="item.preview?.format"> · {{item.preview.format.toUpperCase()}}</span></div>
+                  <div v-if="item.error" class="sr-import-error">{{item.error}}</div>
+                  <div v-else-if="item.loading" class="sr-import-meta">解析中...</div>
+                </div>
+              </div>
+            </div>
+            <div class="sr-panel-actions">
+              <button @click="closePanel">取消</button>
+              <button v-if="importMode==='file'" @click="confirmImport('link')" :disabled="!importLinkSelectedCount||importParsing||importing">{{importing?'导入中...':'导入链接'}}</button>
+              <button @click="confirmImport(importMode==='file'?'file':'link')" class="btn-save" :disabled="!importSelectedCount||importParsing||importing">{{importing?'导入中...':importMode==='file'?'导入文件':'确认导入'}}</button>
+            </div>
           </template>
           <!-- 筛选 -->
           <template v-else-if="panelMode==='filter'">
@@ -197,7 +215,7 @@ import { bookshelfManager, SORTS, STATUS_OPTIONS, STATUS_MAP, RATING_OPTIONS, FO
 import { showMessage, Menu } from 'siyuan'
 import { isMobile } from '@/utils/mobile'
 import { searchDocs } from '@/composables/useSetting'
-import { usePlugin } from '@/main'
+import { useBookImport } from '@/composables/useBookImport'
 import { useLicense } from '@/composables/useLicense'
 
 const props = defineProps<{ i18n?: any; coverSize?: number; openDocAssets?: boolean }>()
@@ -212,15 +230,15 @@ const MENU_ICONS = {status:{unread:'iconUncheck',reading:'iconEye',finished:'ico
 // 状态
 const books = ref<Book[]>([]), groups = ref<GroupConfig[]>([]), allTags = ref<Array<{tag:string;count:number}>>([])
 const stats = ref({byStatus:{unread:0,reading:0,finished:0},byFormat:{epub:0,pdf:0,mobi:0,azw3:0,online:0},withUpdate:0})
-const keyword = ref(''), currentGroup = ref<string|null>(null), fileInput = ref<HTMLInputElement>(), urlInput = ref('')
-const previewBookInfo = ref<any>(null), previewLoading = ref(false)
+const keyword = ref(''), currentGroup = ref<string|null>(null)
 const filterStatus = ref<BookStatus[]>([]), filterRating = ref(0), filterFormats = ref<BookFormat[]>([]), filterTags = ref<string[]>([]), filterHasUpdate = ref(false)
 const sortType = ref<SortType>('time'), sortReverse = ref(false), viewMode = ref<'grid'|'list'|'compact'>('grid')
 const selectedBooks = ref<Set<string>>(new Set()), groupCounts = ref<Record<string,number>>({}), groupPreviews = ref<Record<string,any[]>>({})
 const editingBook = ref<string|null>(null), editingGroup = ref<GroupConfig|null>(null), confirmDelete = ref<{type:'group'|'book';id:string;item:any}|null>(null)
-const panelMode = ref<'detail'|'edit'|'group'|'filter'|'add'|null>(null), panelBook = ref<Book|null>(null), panelWidth = ref(320)
+const panelMode = ref<'detail'|'edit'|'group'|'filter'|'add'|null>(null), panelBook = ref<Book|null>(null), panelWidth = ref(320), importMode = ref<'link'|'file'>('link')
 const editForm = ref({title:'',author:'',tags:'',rating:0,status:'unread' as BookStatus,cover:'',groups:[] as string[],bindDocId:'',bindDocName:'',autoSync:false,syncDelete:false})
 const bindSearch = ref(''), bindResults = ref<any[]>([]), bookshelfEl = ref<HTMLElement>()
+const { items: importItems, draft: importDraft, parsing: importParsing, importing, progress: importProgress, hasItems: importHasItems, selectedCount: importSelectedCount, linkSelectedCount: importLinkSelectedCount, allSelected: importAllSelected, reset: resetImport, parseUrls, parseFiles, selectFiles: pickImportFiles, importSelected } = useBookImport()
 let settingsLoaded = false
 const settingTimers = new Map<string, number>()
 const saveUiSetting = (key: string, value: any, delay = 180) => {
@@ -361,22 +379,20 @@ const updateBookField = async (book: Book, field: string, value: any, msg: strin
   await bookOps[field](book.url, value);
   await (field === 'group' ? refresh() : loadBooks()); showMessage(msg, 2000, 'info');
 }
-const readBook = async (book: Book) => {const {getBookWithFallback,openWithSiyuanPdf,findOpenedTab} = await import('@/utils/bookOpen');const full = await getBookWithFallback(bookshelfManager,book.url);if(!full)return showMessage('加载失败',3000,'error');const readerSettings={openMode:'rightTab',openDocAssets:props.openDocAssets} as any;if(openWithSiyuanPdf(usePlugin(),full,readerSettings))return;const tab = findOpenedTab(full.title);if(tab)return tab.click();if(isMobile()){window.dispatchEvent(new CustomEvent('reader:open',{detail:{book:full}}))}else{emit('read',full)}}
+const readBook = async (book: Book) => {const {getBookWithFallback} = await import('@/utils/bookOpen');const full = await getBookWithFallback(bookshelfManager,book.url);if(!full)return showMessage('加载失败',3000,'error');if(isMobile()){window.dispatchEvent(new CustomEvent('reader:open',{detail:{book:full}}))}else{emit('read',full)}}
 const removeBook = async (book: Book) => {const res = await bookshelfManager.removeBooks([book.url]); confirmDelete.value = null; await refresh(); showMessage(res.failed ? '删除失败' : '已移出', 2000, res.failed ? 'error' : 'info');}
-const showAddMenu = (e: MouseEvent) => buildMenu([{icon:'iconLink',label:'添加链接',click:()=>{if (!can.value('advanced-add')) return showUpgrade('高级添加方式'); panelMode.value='add';urlInput.value='';previewBookInfo.value=null}},{icon:'iconUpload',label:'选择文件',click:()=>fileInput.value?.click()}]).open({x:e.clientX,y:e.clientY})
-const uploadFiles=async(files:File[])=>{if(!files.length)return;files.length>1&&showMessage(`正在导入 ${files.length} 本书籍...`,2000,'info');const{success,failed}=await bookshelfManager.uploadBooks(files);await loadBooks();showMessage(failed?(success?`成功${success}本，失败${failed}本`:'导入失败'):`导入${success}本`,3000,failed&&!success?'error':'info')}
-const handleFileUpload=async(e:Event)=>{const files=Array.from((e.target as HTMLInputElement).files||[]);await uploadFiles(files);fileInput.value&&(fileInput.value.value='')}
+const openImportPanel = (mode: 'link'|'file') => { panelMode.value='add'; importMode.value=mode; resetImport() }
+const showAddMenu = (e: MouseEvent) => buildMenu([
+  {icon:'iconLink',label:'添加链接',click:()=>{if (!can.value('advanced-add')) return showUpgrade('高级添加方式'); openImportPanel('link')}},
+  {icon:'iconUpload',label:'选择文件',click:async()=>{if (!can.value('advanced-add')) return showUpgrade('高级添加方式'); openImportPanel('file'); const files=await pickImportFiles(); files.length&&await parseFiles(files)}}
+]).open({x:e.clientX,y:e.clientY})
+const uploadFiles=async(files:File[])=>{if(!files.length)return;files.length>1&&showMessage(`正在导入 ${files.length} 本书籍...`,2000,'info');const{success,failed}=await bookshelfManager.uploadBooks(files);await loadBooks();showMessage(failed?`成功${success}本，失败${failed}本`:`导入${success}本`,3000,failed&&!success?'error':'info')}
 const drag=ref({file:false,book:null as string|null,target:null as string|null})
 const onDrop=async(e:DragEvent,gid?:string)=>{e.preventDefault();e.stopPropagation();drag.value.file=false;drag.value.target=null;if(gid&&drag.value.book){await bookshelfManager.addBooksToGroup([drag.value.book],gid);drag.value.book=null;await refresh();showMessage('已添加到分组',1500,'info');return}await uploadFiles(Array.from(e.dataTransfer?.files||[]).filter(f=>/\.(epub|pdf|mobi|azw3?|fb2|cbz|txt)$/i.test(f.name)))}
 const onDragOver=(e:DragEvent,gid?:string)=>{e.preventDefault();e.stopPropagation();drag.value.file=!drag.value.book;drag.value.target=gid||null}
 const onDragLeave=()=>{drag.value.file=false;drag.value.target=null}
-const previewBook=async()=>{if(!urlInput.value.trim()||previewLoading.value)return;previewLoading.value=true;try{previewBookInfo.value=await bookshelfManager.previewUrlBook(urlInput.value.trim())}catch(e){showMessage(e instanceof Error?e.message:'预览失败',2000,'error')}finally{previewLoading.value=false}}
-const confirmAdd=async()=>{try{await bookshelfManager.addUrlBook(urlInput.value.trim());await loadBooks();showMessage('添加成功',2000,'info');closePanel()}catch(e){showMessage(e instanceof Error?e.message:'添加失败',2000,'error')}}
-const previewFields = computed(() => {
-  if (!previewBookInfo.value) return []
-  const m = previewBookInfo.value
-  return [{label:'书名',value:m.title},{label:'作者',value:m.author},{label:'格式',value:m.format?.toUpperCase()},{label:'出版社',value:m.publisher},{label:'出版日期',value:m.published},{label:'语言',value:m.language},{label:'ISBN',value:m.identifier},{label:'简介',value:m.intro}].filter(f=>f.value)
-})
+const parseImportUrls=async()=>{try{await parseUrls()}catch(e){showMessage(e instanceof Error?e.message:'解析失败',2000,'error')}}
+const confirmImport=async(mode:'file'|'link')=>{const res=await importSelected(mode);await loadBooks();showMessage(res.failed?`成功${res.success}本，失败${res.failed}本`:`导入${res.success}本`,3000,res.failed&&!res.success?'error':'info');if(!res.failed)closePanel()}
 const handleClick = (book: Book, e?: MouseEvent) => {if (selectedBooks.value.size || e?.ctrlKey || e?.metaKey) return toggleSelect(book); readBook(book);}
 
 // 选择
@@ -442,7 +458,7 @@ const showPanel = async (mode: 'detail'|'edit'|'group', book?: Book, group?: Gro
   } 
   if (group) startEditGroup(group);
 }
-const closePanel = () => {panelMode.value = null; panelBook.value = null; editingBook.value = null; editingGroup.value = null}
+const closePanel = () => {panelMode.value = null; panelBook.value = null; editingBook.value = null; editingGroup.value = null; resetImport()}
 const startResize = (e: MouseEvent) => {
   const {clientX, offsetWidth = 800} = {clientX: e.clientX, offsetWidth: bookshelfEl.value?.offsetWidth}, w = panelWidth.value
   const move = (e: MouseEvent) => panelWidth.value = Math.max(280, Math.min(offsetWidth - 20, w + clientX - e.clientX))
@@ -532,6 +548,16 @@ $ease: cubic-bezier(.4,0,.2,1);
 .sr-panel-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--b3-border-color);font-size:14px;font-weight:600;button{width:24px;height:24px;padding:0;border:none;background:transparent;cursor:pointer;svg{width:16px;height:16px}&:hover{color:var(--b3-theme-primary)}}}
 .sr-panel-body{flex:1;overflow-y:auto;padding:16px}
 .sr-panel-cover{width:120px;height:170px;margin:0 auto 16px;border-radius:6px;overflow:hidden;img{width:100%;height:100%;object-fit:cover}}
+.sr-textarea{width:100%;min-height:84px;padding:8px 10px;border:1px solid var(--b3-border-color);border-radius:6px;background:var(--b3-theme-background);resize:vertical}
+.sr-import-list{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.sr-import-head{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--b3-theme-on-surface-light);gap:8px}
+.sr-import-item{display:grid;grid-template-columns:auto 44px 1fr;gap:10px;align-items:center;padding:8px;border:1px solid var(--b3-border-color);border-radius:8px;background:var(--b3-theme-surface)}
+.sr-import-cover{width:44px;height:60px;border-radius:6px;overflow:hidden;background:var(--b3-theme-background);display:flex;align-items:center;justify-content:center;img{width:100%;height:100%;object-fit:cover}}
+.sr-import-cover--text{font-size:11px;font-weight:600;text-align:center;padding:4px;color:var(--b3-theme-on-surface)}
+.sr-import-info{min-width:0}
+.sr-import-title{font-size:13px;font-weight:600;line-height:1.35;word-break:break-word}
+.sr-import-meta{font-size:12px;color:var(--b3-theme-on-surface-light);margin-top:2px}
+.sr-import-error{font-size:12px;color:var(--b3-theme-error);margin-top:2px}
 .sr-panel-field{display:flex;flex-direction:column;gap:4px;padding:8px 0;border-bottom:1px solid var(--b3-border-color);font-size:12px;&:last-child{border-bottom:none}label{color:var(--b3-theme-on-surface-variant);font-weight:500}span{color:var(--b3-theme-on-surface);word-break:break-word;line-height:1.4;&.mono{font-size:10px;font-family:monospace;opacity:.8;word-break:break-all}}input,select{width:100%;padding:6px 8px;border:1px solid var(--b3-border-color);border-radius:4px;font-size:12px;background:var(--b3-theme-background);color:var(--b3-theme-on-surface);box-sizing:border-box;&:focus{outline:none;border-color:var(--b3-theme-primary)}}}
 .sr-panel-actions{display:flex;gap:8px;padding-top:16px;border-top:1px solid var(--b3-border-color);button{flex:1;padding:8px 12px;border-radius:4px;cursor:pointer;font-size:13px;transition:all .15s;border:1px solid var(--b3-border-color);background:var(--b3-theme-surface);color:var(--b3-theme-on-surface);&:hover{background:var(--b3-list-hover)}&.btn-save{background:var(--b3-theme-primary);color:white;border-color:var(--b3-theme-primary);&:hover{opacity:.9;background:var(--b3-theme-primary)}}}}
 .sr-chips{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;.sr-chip{padding:3px 8px;background:var(--b3-theme-background);border:1px solid var(--b3-border-color);color:var(--b3-theme-on-surface);border-radius:10px;font-size:11px;cursor:pointer;transition:all .15s;&:hover{background:var(--b3-list-hover)}&.active{background:var(--b3-theme-primary-lightest);color:var(--b3-theme-primary);border-color:var(--b3-theme-primary)}}}

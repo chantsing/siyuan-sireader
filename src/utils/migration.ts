@@ -1,5 +1,5 @@
 import { putFile, readDir, removeFile } from '@/api'
-import { DB_KEYS, LEGACY_ROOT, getBookFileDataPath, getCoverFileDataPath, getManagedFileExt, loadData, migrateManagedPath, readFileBytes, readFileText, removeData, saveData } from '@/core/bookStore'
+import { DB_KEYS, LEGACY_ROOT, getBookFileDataPath, getCoverFileDataPath, getManagedFileExt, loadData, migrateManagedPath, normalizeBookTitle, readFileBytes, readFileText, removeData, saveData } from '@/core/bookStore'
 import { getDatabase, getSqlJs } from '@/core/database'
 import { showMessage } from 'siyuan'
 
@@ -7,6 +7,7 @@ const OLD_DATA_PATH = LEGACY_ROOT
 const MIGRATION_DONE_KEY = 'migrated.json'
 const BACKUP_ROOT = `${LEGACY_ROOT}-backup`
 const DEBUG_PREFIX = '[SiReader:migration]'
+const NORMALIZE_VERSION = 1
 const LEGACY_JSON_KEYS = ['index.json', 'config.json'] as const
 const LEGACY_SETTING_KEYS = ['book_record_storage_v1', 'book_storage_root_v2', 'book_storage_cleanup_v1'] as const
 const INTERNAL_SETTING_KEYS = new Set([...LEGACY_SETTING_KEYS, 'annotation_record_count_v1'])
@@ -20,11 +21,10 @@ const RETRY_DELAYS = [0, 80, 200] as const
 const db = async () => getDatabase()
 const emptyResult = () => ({ success: 0, failed: 0, totalAnnotations: 0 })
 
-const hash = (url: string) => Math.abs(url.split('').reduce((value, char) => (((value << 5) - value) + char.charCodeAt(0)) | 0, 0)).toString(36)
 const sanitize = (name: string) => name.replace(/[<>:"/\\|?*\x00-\x1f[\]{};,]/g, '').replace(/\s+/g, '_').replace(/[._-]+/g, '_').replace(/^[._-]+|[._-]+$/g, '').slice(0, 50) || 'book'
-const getBookIndexFile = (book: any) => `${sanitize(book.name)}_${hash(book.bookUrl)}.json`
-const getBookAssetPath = (title: string, url: string, path = '', format = 'epub') => getBookFileDataPath(title, url, getManagedFileExt(path, format))
-const getCoverAssetPath = (title: string, url: string, path = '') => getCoverFileDataPath(title, url, getManagedFileExt(path, 'jpg'))
+const getBookIndexFile = (book: any) => `${sanitize(book.name)}_${Math.abs(book.bookUrl.split('').reduce((value: number, char: string) => (((value << 5) - value) + char.charCodeAt(0)) | 0, 0)).toString(36)}.json`
+const getBookAssetPath = (url: string, path = '', format = 'epub') => getBookFileDataPath(url, getManagedFileExt(path, format))
+const getCoverAssetPath = (url: string, path = '') => getCoverFileDataPath(url, getManagedFileExt(path, 'jpg'))
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 const parseStoredJson = <T = any>(value: any): T | null => {
   if (value == null || value === '') return null
@@ -176,7 +176,7 @@ const normalizeLegacyBook = (row: any) => {
   const progress = Math.max(0, Math.min(100, asNumber(row.progress ?? row.epubProgress, 0)))
   return {
     url,
-    title: asString(row.title || row.name, '未知书名'),
+    title: normalizeBookTitle(asString(row.title || row.name, '未知书名')) || '未知书名',
     author: asString(row.author, '未知作者'),
     cover: asString(row.cover || row.coverUrl),
     format: asString(row.format, 'epub'),
@@ -292,16 +292,16 @@ async function migrateBook(bookIndex: any, raw: any) {
 
   const book = {
     url: bookIndex.bookUrl,
-    title: bookIndex.name || data.name || '未知书名',
+    title: normalizeBookTitle(bookIndex.name || data.name || '未知书名') || '未知书名',
     author: bookIndex.author || data.author || '未知作者',
     cover: await migrateManagedPath(
       bookIndex.coverUrl || '',
-      getCoverAssetPath(bookIndex.name || data.name || '', bookIndex.bookUrl, bookIndex.coverUrl || ''),
+      getCoverAssetPath(bookIndex.bookUrl, bookIndex.coverUrl || ''),
     ),
     format,
     path: await migrateManagedPath(
       data.filePath || '',
-      getBookAssetPath(bookIndex.name || data.name || '', bookIndex.bookUrl, data.filePath || '', format),
+      getBookAssetPath(bookIndex.bookUrl, data.filePath || '', format),
     ),
     size: data.fileSize || 0,
     added: bookIndex.addTime || data.addTime || now,
@@ -436,11 +436,11 @@ async function normalizeCurrentStorage() {
   for (const book of books) {
     try {
       const [path, cover, annotations] = await Promise.all([
-        migrateManagedPath(book.path || '', getBookAssetPath(book.title || '', book.url, book.path || '', book.format || 'epub')),
-        migrateManagedPath(book.cover || '', getCoverAssetPath(book.title || '', book.url, book.cover || '')),
+        migrateManagedPath(book.path || '', getBookAssetPath(book.url, book.path || '', book.format || 'epub')),
+        migrateManagedPath(book.cover || '', getCoverAssetPath(book.url, book.cover || '')),
         database.getAnnotations(book.url).catch(() => []),
       ])
-      await withRetry(`normalizeBook:${book.url}`, async () => database.saveBook({ ...book, path, cover }))
+      await withRetry(`normalizeBook:${book.url}`, async () => database.saveBook({ ...book, title: normalizeBookTitle(book.title || '') || book.title, path, cover }))
       totalAnnotations += annotations.length
       success++
     } catch (error) {
@@ -452,6 +452,23 @@ async function normalizeCurrentStorage() {
   await withRetry('deleteLegacySettings', async () => database.deleteSettings([...LEGACY_SETTING_KEYS]))
   const compacted = await withRetry('compactStorage', async () => database.compactStorage(), [0, 120, 320, 800])
   return { success, failed, totalAnnotations: Math.max(totalAnnotations, adopted.annotations || 0), adopted, compacted }
+}
+
+async function normalizeStorageIfNeeded(force = false) {
+  const state = await getMigrationState()
+  if (!force && state?.normalizedVersion === NORMALIZE_VERSION) return true
+  const database = await db()
+  const normalized = await normalizeCurrentStorage()
+  await withRetry('flushNormalizedDatabase', async () => database.saveNow(), [0, 120, 320, 800])
+  await saveMigrationState({
+    normalized: !normalized.failed,
+    normalizedVersion: NORMALIZE_VERSION,
+    normalizeSuccess: normalized.success,
+    normalizeFailed: normalized.failed,
+    normalizeAnnotations: normalized.totalAnnotations,
+    at: Date.now(),
+  })
+  return !normalized.failed
 }
 
 async function migrateFromLegacyDb(files: Array<{ key: typeof DB_KEYS[number], bytes: Uint8Array }>) {
@@ -593,6 +610,7 @@ async function migrate() {
   await saveMigrationState({
     done: completed,
     normalized: !normalized.failed,
+    normalizedVersion: NORMALIZE_VERSION,
     at: Date.now(),
     importedDb,
     success,
@@ -615,10 +633,12 @@ async function migrate() {
 
 export async function ensureMigrationCompleted() {
   const state = await getMigrationState()
-  if (state?.done && state?.success && state?.normalized) return true
-  if (!await autoMigrate()) return true
-  setTimeout(() => location.reload(), 1200)
-  return false
+  if (!state?.done || !state?.success || !state?.normalized) {
+    if (!await autoMigrate()) return true
+    setTimeout(() => location.reload(), 1200)
+    return false
+  }
+  return await normalizeStorageIfNeeded()
 }
 
 async function getAllFiles(basePath: string) {

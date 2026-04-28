@@ -7,6 +7,7 @@ import { isMobile } from '@/utils/mobile'
 type TabPosition = 'right' | 'bottom'
 type NativePdfTarget = { kind: 'asset' | 'pdf'; path: string }
 type OpenModeSettings = Pick<ReaderSettings, 'openMode' | 'openDocAssets'>
+type ReaderTabData = { file?: File; url?: string; blockId?: string | null; bookInfo?: any }
 
 // 查找已打开的阅读器标签页
 export const findOpenedTab = (bookName: string, pluginName: string) => {
@@ -24,8 +25,18 @@ export const getBookWithFallback = async (manager: typeof bookshelfManager, book
   return await manager.getBook(bookUrl)
 }
 
-const getTabPosition = (settings: Pick<ReaderSettings, 'openMode'>): TabPosition =>
-  ({ rightTab: 'right', bottomTab: 'bottom' }[settings.openMode] || 'right')
+export const getOpenTabPosition = (settings: Pick<ReaderSettings, 'openMode'>): TabPosition | undefined =>
+  ({ rightTab: 'right', bottomTab: 'bottom' }[settings.openMode])
+
+export const openReaderTab = (plugin: Plugin, title: string, data: ReaderTabData, id: string, settings?: Pick<ReaderSettings, 'openMode'>, onReady?: () => void) => {
+  const position = settings ? getOpenTabPosition(settings) : undefined
+  openTab({
+    app: (plugin as any).app,
+    custom: { icon: 'siyuan-reader-icon', title, data, id },
+    ...(position ? { position } : {}),
+    afterOpen: onReady
+  })
+}
 
 const normalizeNativePdfPath = (path: string) => {
   if (!path || /^https?:\/\//i.test(path) || /^file:\/\//i.test(path)) return null
@@ -46,11 +57,12 @@ export const getSiyuanPdfTarget = (book: Book, settings: OpenModeSettings): Nati
 export const openWithSiyuanPdf = (plugin: Plugin, book: Book, settings: OpenModeSettings, onReady?: () => void) => {
   const target = getSiyuanPdfTarget(book, settings)
   if (!target) return false
+  const position = getOpenTabPosition(settings)
 
   openTab({
     app: (plugin as any).app,
     [target.kind]: { path: target.path },
-    position: getTabPosition(settings),
+    ...(position ? { position } : {}),
     afterOpen: onReady
   })
   return true
@@ -89,16 +101,5 @@ export const openOrActivateBook = (plugin: Plugin, book: Book, settings: ReaderS
     onReady?.()
     return
   }
-  
-  openTab({
-    app: (plugin as any).app,
-    custom: {
-      icon: 'siyuan-reader-icon',
-      title: book.title,
-      data: { bookInfo: book },
-      id: `${plugin.name}custom_tab_online_reader`
-    },
-    position: getTabPosition(settings),
-    afterOpen: onReady
-  })
+  openReaderTab(plugin, book.title, { bookInfo: book }, `${plugin.name}custom_tab_online_reader`, settings, onReady)
 }

@@ -202,10 +202,10 @@ export class ReaderDatabase {
   }
 
   private getBookAssetPath = (book: Partial<Book> & Pick<Book, 'url' | 'title' | 'format'>) =>
-    getBookFileDataPath(book.title, book.url, getManagedFileExt(book.path || '', book.format || 'epub'))
+    getBookFileDataPath(book.url, getManagedFileExt(book.path || '', book.format || 'epub'))
 
   private getCoverAssetPath = (book: Partial<Book> & Pick<Book, 'url' | 'title'>) =>
-    getCoverFileDataPath(book.title, book.url, getManagedFileExt(book.cover || '', 'jpg'))
+    getCoverFileDataPath(book.url, getManagedFileExt(book.cover || '', 'jpg'))
 
   private stripBookForIndex(book: Partial<Book> & Pick<Book, 'url' | 'title' | 'format' | 'status'>): Book {
     const source = book.source && typeof book.source === 'object'

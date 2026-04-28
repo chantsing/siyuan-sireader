@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI translation, Anki flashcards
 
-[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-1.1.2-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,28 @@ Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI tr
 ---
 
 ## 📝 Latest Updates
+
+### v1.1.2 (2026.4.28)
+
+**Fixed**
+
+- Fixed an issue where some migrated books could not be opened because of file naming.
+- Fixed cover and book file loading failures after unified managed-file renaming.
+- Fixed "New Tab" still opening on the right side.
+
+**Added**
+
+- Added pre-import parsing so books can be previewed before import.
+- Added book link import.
+- Added local file import as links.
+
+**Improved**
+
+- Reused parsed metadata during import to avoid duplicate parsing and speed up batch import.
+- Unified open-position logic so all open behaviors follow the same setting.
+- Simplified reader-tab opening logic and reused the same entry for bookshelf, document links, and external calls.
+
+---
 
 ### v1.1.0 (2026.4.28)
 
