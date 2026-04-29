@@ -1,6 +1,5 @@
-name: Release from Local Build
+name: Release from Synced Package
 
-# 触发条件：当 package.json 或 package.zip 被推送到 main 分支时
 on:
   push:
     branches:
@@ -8,6 +7,12 @@ on:
     paths:
       - 'package.json'
       - 'package.zip'
+      - 'plugin.json'
+      - 'README.md'
+      - 'README_zh_CN.md'
+      - '*.md'
+      - 'preview.png'
+      - '.github/workflows/release.yml'
 
 jobs:
   release:
@@ -16,76 +21,100 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Get version
+      - name: Read version
         id: version
+        shell: bash
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "📦 Version: v$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Check if tag exists
-        id: check-tag
+      - name: Check tag exists
+        id: tag
+        shell: bash
         run: |
-          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-            echo "⏭️ Tag v${{ steps.version.outputs.version }} already exists, skipping release"
+          if git rev-parse "refs/tags/${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
           else
-            echo "exists=false" >> $GITHUB_OUTPUT
-            echo "✨ Tag v${{ steps.version.outputs.version }} is new, will create release"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Verify package.zip
-        if: steps.check-tag.outputs.exists == 'false'
+        shell: bash
         run: |
-          if [ ! -f "package.zip" ]; then
-            echo "❌ package.zip not found! Please build locally and commit package.zip"
-            echo "💡 Run: pnpm build && git add package.zip && git commit -m 'chore: update package.zip'"
-            exit 1
-          fi
-          echo "✅ package.zip found"
+          test -f package.zip
           ls -lh package.zip
-          echo "📦 Package contents:"
-          unzip -l package.zip | head -30
 
       - name: Create tag
-        if: steps.check-tag.outputs.exists == 'false'
+        if: steps.tag.outputs.exists == 'false'
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
-          git push origin "v${{ steps.version.outputs.version }}"
-          echo "✅ Tag v${{ steps.version.outputs.version }} created"
+          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
 
-      - name: Get changelog
-        if: steps.check-tag.outputs.exists == 'false'
-        id: changelog
+      - name: Build release body
+        shell: bash
         run: |
-          # 提取当前版本的更新内容
-          VERSION="${{ steps.version.outputs.version }}"
-          CHANGELOG=$(awk "/## 🚀 v${VERSION}/,/^## 🚀 v[0-9]|^---$/" CHANGELOG.md | sed '1d;$d')
-          echo "changelog<<EOF" >> $GITHUB_OUTPUT
-          echo "$CHANGELOG" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          python <<'PY'
+          from pathlib import Path
+          import json, os, re
 
-      - name: Create Release
-        if: steps.check-tag.outputs.exists == 'false'
+          version = json.loads(Path('package.json').read_text(encoding='utf-8'))['version']
+          patterns = [
+              re.compile(rf'^##\s+v{re.escape(version)}(?:\s*\(.*\))?\s*$', re.M),
+              re.compile(rf'^###\s+v{re.escape(version)}(?:\s*\(.*\))?\s*$', re.M),
+          ]
+
+          body = None
+          chosen_path = None
+          md_files = [Path('CHANGELOG.md'), Path('README_zh_CN.md'), Path('README.md')]
+          md_files.extend(sorted(
+              path for path in Path('.').glob('*.md')
+              if path.name not in {'CHANGELOG.md', 'README_zh_CN.md', 'README.md'}
+          ))
+
+          for path in md_files:
+            if not path.exists():
+              continue
+            text = path.read_text(encoding='utf-8')
+            for pattern in patterns:
+              m = pattern.search(text)
+              if not m:
+                continue
+              rest = text[m.start():]
+              nxt = re.search(r'^(##|###)\s+v\d+\.\d+\.\d+(?:\s*\(.*\))?\s*$', rest[m.end() - m.start():], re.M)
+              body = rest[:m.end() - m.start() + nxt.start()] if nxt else rest
+              chosen_path = path.name
+              break
+            if body:
+              break
+
+          if not body:
+            body = f'## Release v{version}'
+            chosen_path = 'N/A'
+
+          body = body.strip() + (
+              f'\n\n---\n\n'
+              f'Source: {chosen_path}\n'
+              f'Synced package release: v{version}\n'
+              f'Commit: {os.environ.get("GITHUB_SHA", "")}\n'
+          )
+          Path('release-body.md').write_text(body, encoding='utf-8')
+          PY
+
+      - name: Create or update release
         uses: ncipollo/release-action@v1
         with:
-          tag: v${{ steps.version.outputs.version }}
-          name: v${{ steps.version.outputs.version }}
-          artifacts: "package.zip"
+          tag: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          artifacts: package.zip
           token: ${{ secrets.GITHUB_TOKEN }}
-          generateReleaseNotes: true
           makeLatest: true
-          body: |
-            ## 📦 完整更新日志
-            
-            ${{ steps.changelog.outputs.changelog }}
-            
-            ---
-            
-            查看完整更新日志：[CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)
+          allowUpdates: true
+          bodyFile: release-body.md

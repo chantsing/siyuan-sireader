@@ -1,5 +1,5 @@
 import { putFile, readDir, removeFile } from '@/api'
-import { DB_KEYS, LEGACY_ROOT, getBookFileDataPath, getCoverFileDataPath, getManagedFileExt, loadData, migrateManagedPath, normalizeBookTitle, readFileBytes, readFileText, removeData, saveData } from '@/core/bookStore'
+import { DB_KEYS, LEGACY_ROOT, getBookFileDataPath, getCoverFileDataPath, getManagedFileExt, loadData, normalizeBookTitle, readFileBytes, readFileText, removeData, saveData, saveManagedFile } from '@/core/bookStore'
 import { getDatabase, getSqlJs } from '@/core/database'
 import { showMessage } from 'siyuan'
 
@@ -7,7 +7,8 @@ const OLD_DATA_PATH = LEGACY_ROOT
 const MIGRATION_DONE_KEY = 'migrated.json'
 const BACKUP_ROOT = `${LEGACY_ROOT}-backup`
 const DEBUG_PREFIX = '[SiReader:migration]'
-const NORMALIZE_VERSION = 1
+const NORMALIZE_VERSION = 6
+const LARGE_FILE_NOTICE_BYTES = 80 * 1024 * 1024
 const LEGACY_JSON_KEYS = ['index.json', 'config.json'] as const
 const LEGACY_SETTING_KEYS = ['book_record_storage_v1', 'book_storage_root_v2', 'book_storage_cleanup_v1'] as const
 const INTERNAL_SETTING_KEYS = new Set([...LEGACY_SETTING_KEYS, 'annotation_record_count_v1'])
@@ -19,13 +20,16 @@ const DEFAULT_GROUPS = [
 const RETRY_DELAYS = [0, 80, 200] as const
 
 const db = async () => getDatabase()
-const emptyResult = () => ({ success: 0, failed: 0, totalAnnotations: 0 })
+const emptyResult = () => ({ success: 0, failed: 0, skipped: 0, totalAnnotations: 0 })
 
 const sanitize = (name: string) => name.replace(/[<>:"/\\|?*\x00-\x1f[\]{};,]/g, '').replace(/\s+/g, '_').replace(/[._-]+/g, '_').replace(/^[._-]+|[._-]+$/g, '').slice(0, 50) || 'book'
-const getBookIndexFile = (book: any) => `${sanitize(book.name)}_${Math.abs(book.bookUrl.split('').reduce((value: number, char: string) => (((value << 5) - value) + char.charCodeAt(0)) | 0, 0)).toString(36)}.json`
+const getBookUrlHash = (url = '') => Math.abs(url.split('').reduce((value: number, char: string) => (((value << 5) - value) + char.charCodeAt(0)) | 0, 0)).toString(36)
+const getBookIndexFile = (book: any) => `${sanitize(book.name)}_${getBookUrlHash(book.bookUrl)}.json`
 const getBookAssetPath = (url: string, path = '', format = 'epub') => getBookFileDataPath(url, getManagedFileExt(path, format))
 const getCoverAssetPath = (url: string, path = '') => getCoverFileDataPath(url, getManagedFileExt(path, 'jpg'))
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+const getFileName = (path = '') => path.split(/[\\/]/).pop()?.split('?')[0]?.split('#')[0] || 'file'
+const isSiyuanAssetPath = (path = '') => /^asset:\/\/assets\//i.test(path) || /^\/?assets\//i.test(path)
 const parseStoredJson = <T = any>(value: any): T | null => {
   if (value == null || value === '') return null
   if (typeof value === 'string') {
@@ -98,11 +102,278 @@ const readJsonFile = async <T = any>(path: string): Promise<T | null> => {
 }
 
 const readDirSafe = async (path: string) => (await readDir(path).catch(() => ({ data: [] as any[] })))?.data || []
+let legacyAssetIndexPromise: Promise<Record<string, string>> | null = null
+const normalizeMatchText = (value = '') => normalizeBookTitle(String(value || ''))
+  .toLowerCase()
+  .replace(/^\d+_/, '')
+  .replace(/_[a-z0-9]{4,12}$/i, '')
+  .replace(/[【】\[\]()（）\s_\-—–:：,，.。!！?？'"“”‘’·;；/\\]/g, '')
+const stripCoverLabel = (label = '') => label.replace(/:cover$/i, '')
+const getStem = (name = '') => name.replace(/\.[^.]+$/, '')
+const scoreLegacyTitleMatch = (label: string, fileName: string) => {
+  const target = normalizeMatchText(stripCoverLabel(label))
+  const stem = normalizeMatchText(getStem(fileName))
+  if (!target || !stem) return 0
+  if (target === stem) return 100
+  if (stem.includes(target)) return Math.min(95, 60 + target.length)
+  if (target.includes(stem)) return Math.min(90, 50 + stem.length)
+  const overlap = [...target].filter(char => stem.includes(char)).length
+  return overlap >= Math.min(target.length, stem.length) * 0.7 ? overlap : 0
+}
+
+const getLegacyAssetIndex = async () => {
+  if (!legacyAssetIndexPromise) {
+    legacyAssetIndexPromise = (async () => {
+      const dirs = [`${OLD_DATA_PATH}/books`, `${OLD_DATA_PATH}/covers`]
+      const entries = await Promise.all(dirs.map(readDirSafe))
+      const index: Record<string, string> = {}
+      dirs.forEach((dir, i) => {
+        entries[i].forEach((item: any) => {
+          if (item?.isDir || !item?.name) return
+          index[item.name] = `${dir}/${item.name}`
+        })
+      })
+      return index
+    })()
+  }
+  return legacyAssetIndexPromise
+}
+
+const isCoverExt = (ext = '') => /^(jpg|jpeg|png|webp|gif)$/i.test(ext)
+const isBookExt = (ext = '') => /^(epub|pdf|txt|mobi|azw3|azw|fb2|cbz)$/i.test(ext)
+const parseLegacyHashFile = (name = '') => {
+  const match = name.match(/_([a-z0-9]{4,12})\.([a-z0-9]+)$/i)
+  return match ? { hash: match[1], ext: match[2].toLowerCase() } : null
+}
+
+async function recoverLegacyFilesToPublic(reporter?: ReturnType<typeof createMigrationReporter>) {
+  const legacyIndex = await getLegacyAssetIndex()
+  const entries = Object.entries(legacyIndex)
+  let copied = 0
+  let skipped = 0
+  reporter?.phase('恢复旧版资源文件', entries.length, '正在按 hash 规则补齐 public 目录中的书籍和封面')
+  for (const [name, fullPath] of entries) {
+    const parsed = parseLegacyHashFile(name)
+    if (!parsed) {
+      skipped++
+      reporter?.step(name, { skipped, success: copied, failed: 0 })
+      continue
+    }
+    const { hash, ext } = parsed
+    const target = isCoverExt(ext)
+      ? `/public/siyuan-sireader/covers/${hash}.${ext}`
+      : isBookExt(ext)
+        ? `/public/siyuan-sireader/books/${hash}.${ext}`
+        : ''
+    if (!target) {
+      skipped++
+      reporter?.step(name, { skipped, success: copied, failed: 0 })
+      continue
+    }
+    const exists = await readFileBytes(target).catch(() => null)
+    if (exists?.byteLength) {
+      skipped++
+      reporter?.step(name, { skipped, success: copied, failed: 0 })
+      continue
+    }
+    const bytes = await readFileBytes(fullPath).catch(() => null)
+    if (!bytes?.byteLength) {
+      skipped++
+      reporter?.step(name, { skipped, success: copied, failed: 0 })
+      continue
+    }
+    await saveManagedFile(new Blob([bytes]), target, getFileName(target))
+    copied++
+    reporter?.step(name, { skipped, success: copied, failed: 0 })
+  }
+  return { copied, skipped, total: entries.length }
+}
+
+const findLegacyAssetByTitle = (legacyIndex: Record<string, string>, label: string, target: string) => {
+  const ext = getManagedFileExt(target, '')
+  const isCover = /\.(jpg|jpeg|png|webp|gif)$/i.test(target)
+  let best: { path: string, score: number } | null = null
+  Object.entries(legacyIndex).forEach(([name, fullPath]) => {
+    if (!name) return
+    const candidateExt = getManagedFileExt(name, '')
+    if (ext && candidateExt !== ext) return
+    if (isCover !== /\.(jpg|jpeg|png|webp|gif)$/i.test(name)) return
+    const score = scoreLegacyTitleMatch(label, name)
+    if (!score) return
+    if (!best || score > best.score) best = { path: fullPath, score }
+  })
+  return best?.path || ''
+}
 
 const readLegacyJson = async <T = any>(key: typeof LEGACY_JSON_KEYS[number]): Promise<T | null> => {
   const pluginData = parseStoredJson<T>(await loadData(key))
   if (pluginData != null) return pluginData
   return readJsonFile<T>(`${OLD_DATA_PATH}/${key}`)
+}
+
+type MigrationProgress = {
+  phase: string
+  current: number
+  total: number
+  success: number
+  failed: number
+  skipped: number
+  detail: string
+  updatedAt: number
+  status: 'running' | 'completed' | 'error'
+}
+
+const createMigrationReporter = () => {
+  const progress: MigrationProgress = {
+    phase: '准备迁移',
+    current: 0,
+    total: 0,
+    success: 0,
+    failed: 0,
+    skipped: 0,
+    detail: '正在分析旧数据，请勿关闭或刷新当前页面',
+    updatedAt: Date.now(),
+    status: 'running',
+  }
+  let host: HTMLDivElement | null = null
+  let lastPaint = 0
+  let lastPersist = 0
+  const removeHost = () => {
+    if (host?.parentNode) host.parentNode.removeChild(host)
+    host = null
+  }
+  const ensure = () => {
+    if (typeof document === 'undefined' || host) return
+    host = document.createElement('div')
+    host.id = 'sireader-migration-progress'
+    host.style.cssText = 'position:fixed;right:20px;bottom:20px;z-index:2147483647;width:min(420px,calc(100vw - 24px));padding:14px 16px;border-radius:12px;background:var(--b3-theme-surface, #fff);border:1px solid var(--b3-border-color, #ddd);box-shadow:0 10px 30px rgba(0,0,0,.18);font-size:13px;line-height:1.5;color:var(--b3-theme-on-surface, #222);'
+    document.body.appendChild(host)
+  }
+  const paint = (force = false) => {
+    ensure()
+    const now = Date.now()
+    if (!force && now - lastPaint < 120) return
+    lastPaint = now
+    if (!host) return
+    const percent = progress.total ? Math.max(0, Math.min(100, Math.round((progress.current / progress.total) * 100))) : 0
+    const done = progress.status !== 'running'
+    const statusText = progress.status === 'completed' ? '已完成' : progress.status === 'error' ? '出错' : '进行中'
+    const statusColor = progress.status === 'completed' ? '#16a34a' : progress.status === 'error' ? '#dc2626' : 'var(--b3-theme-primary, #3b82f6)'
+    host.innerHTML =
+      '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:8px"><strong>SiReader 数据迁移</strong><span>' + percent + '%</span></div>' +
+      '<div style="height:6px;border-radius:999px;background:rgba(127,127,127,.18);overflow:hidden;margin-bottom:10px"><div style="height:100%;width:' + percent + '%;background:' + statusColor + ';transition:width .2s"></div></div>' +
+      '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px"><div>' + progress.phase + '</div><span style="font-size:12px;color:' + statusColor + '">' + statusText + '</span></div>' +
+      '<div style="font-size:12px;opacity:.78;margin-bottom:8px;word-break:break-all">' + (progress.detail || '正在迁移...') + '</div>' +
+      '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;opacity:.86"><span>' + progress.current + '/' + (progress.total || 0) + '</span><span>成功 ' + progress.success + '</span><span>失败 ' + progress.failed + '</span><span>跳过 ' + progress.skipped + '</span></div>' +
+      '<div style="margin-top:8px;font-size:12px;color:var(--b3-theme-warning, #b45309)">' + (done ? '迁移结果会保留在这里，请确认信息后点击按钮刷新思源。' : '迁移进行中，请勿关闭思源、切换工作空间或刷新页面。') + '</div>' +
+      (done ? '<div style="display:flex;justify-content:flex-end;margin-top:10px"><button id="sireader-migration-close" style="padding:6px 12px;border:1px solid var(--b3-border-color,#ddd);background:var(--b3-theme-background,#fff);border-radius:8px;cursor:pointer">关闭并刷新</button></div>' : '')
+    const closeBtn = host.querySelector('#sireader-migration-close')
+    if (closeBtn) closeBtn.onclick = () => {
+      removeHost()
+      location.reload()
+    }
+  }
+  const persist = (force = false) => {
+    const now = Date.now()
+    if (!force && now - lastPersist < 1000) return
+    lastPersist = now
+    void saveMigrationState({ progress: { ...progress, updatedAt: now } })
+  }
+  return {
+    begin(phase: string, total = 0, detail = '') {
+      progress.phase = phase
+      progress.total = total
+      progress.current = 0
+      progress.detail = detail || progress.detail
+      progress.updatedAt = Date.now()
+      progress.status = 'running'
+      paint(true)
+      persist(true)
+    },
+    phase(phase: string, total = progress.total, detail = progress.detail) {
+      progress.phase = phase
+      progress.total = total
+      progress.current = 0
+      progress.detail = detail
+      progress.updatedAt = Date.now()
+      progress.status = 'running'
+      paint(true)
+      persist(true)
+    },
+    step(detail: string, patch: Partial<MigrationProgress> = {}, force = false) {
+      progress.current += 1
+      progress.detail = detail
+      Object.assign(progress, patch, { updatedAt: Date.now() })
+      progress.status = 'running'
+      paint(force)
+      persist(force)
+    },
+    update(patch: Partial<MigrationProgress>, force = false) {
+      Object.assign(progress, patch, { updatedAt: Date.now() })
+      paint(force)
+      persist(force)
+    },
+    async finish(detail: string, status: MigrationProgress['status'] = 'completed') {
+      progress.detail = detail
+      progress.updatedAt = Date.now()
+      progress.status = status
+      paint(true)
+      persist(true)
+      await saveMigrationState({ progress: null })
+    },
+  }
+}
+
+const resolveLegacySourceCandidates = async (path = '', target = '', label = '') => {
+  const sourceCandidates = [path]
+  if (!(target.startsWith('/public/siyuan-sireader/') || target.startsWith('/data/public/siyuan-sireader/'))) return sourceCandidates
+  const legacyIndex = await getLegacyAssetIndex()
+  const fileName = getFileName(target)
+  const hashMatch = fileName.match(/^([a-z0-9]+)\.([a-z0-9]+)$/i)
+  if (legacyIndex[fileName]) sourceCandidates.push(legacyIndex[fileName])
+  if (hashMatch) {
+    const [, hash, ext] = hashMatch
+    Object.entries(legacyIndex).forEach(([name, fullPath]) => {
+      if (name === fileName) return
+      if (name.endsWith('_' + hash + '.' + ext) || name.endsWith('.' + ext) && name.includes('_' + hash + '.')) sourceCandidates.push(fullPath)
+    })
+  }
+  const titleMatched = findLegacyAssetByTitle(legacyIndex, label, target)
+  if (titleMatched) sourceCandidates.push(titleMatched)
+  return Array.from(new Set(sourceCandidates))
+}
+
+const migrateAssetPath = async (path = '', fallbackPath = '', size = 0, label = '') => {
+  if (!path || path.startsWith('asset://')) return path
+  if (isSiyuanAssetPath(path)) return path.replace(/^asset:\/\//i, '').replace(/^\/assets\//i, 'assets/')
+  if (size > LARGE_FILE_NOTICE_BYTES) console.warn(DEBUG_PREFIX, 'migrateAssetPath:large-file', { path, size, fallbackPath, label })
+  const target = fallbackPath || path
+  const targetBytes = await readFileBytes(target).catch(() => null)
+  if (path === target && targetBytes?.byteLength) return target
+  try {
+    const uniqueCandidates = await resolveLegacySourceCandidates(path, target, label)
+    let sourceBytes = null
+    let sourcePath = path
+    for (const candidate of uniqueCandidates) {
+      sourceBytes = await readFileBytes(candidate).catch(() => null)
+      if (sourceBytes?.byteLength) {
+        sourcePath = candidate
+        break
+      }
+    }
+    if (!sourceBytes?.byteLength) {
+      if (!targetBytes?.byteLength && (target.startsWith('/public/siyuan-sireader/') || target.startsWith('/data/public/siyuan-sireader/'))) {
+        throw new Error('missing source file for ' + (label || target))
+      }
+      return targetBytes?.byteLength ? target : path
+    }
+    await saveManagedFile(new Blob([sourceBytes]), target, getFileName(target))
+    console.info(DEBUG_PREFIX, 'migrateAssetPath:copied', { label, sourcePath, target, size: sourceBytes.byteLength })
+    return target
+  } catch (error) {
+    console.error(DEBUG_PREFIX, 'migrateAssetPath:error', { path, target, size, label, error })
+    return path
+  }
 }
 
 const toBytes = (value: any): Uint8Array | null => {
@@ -224,8 +495,16 @@ const ensureDefaultGroups = async () => {
 }
 const saveImportedBook = async (database: any, book: any, annotations: any[], labels: { book: string, annotation: (id: string) => string }) => {
   await withRetry(labels.book, async () => database.saveBook(book))
-  for (const annotation of annotations) await withRetry(labels.annotation(annotation.id || 'unknown'), async () => database.saveAnnotation(annotation))
-  return annotations.length
+  let saved = 0
+  for (const annotation of annotations) {
+    try {
+      await withRetry(labels.annotation(annotation.id || 'unknown'), async () => database.saveAnnotation(annotation))
+      saved++
+    } catch (error) {
+      console.error(DEBUG_PREFIX, 'saveImportedBook:annotation-error', { book: book.url, annotationId: annotation.id, error })
+    }
+  }
+  return saved
 }
 
 const toAnnotation = (bookUrl: string, mark: any, format: string, now: number) => {
@@ -259,6 +538,7 @@ const toAnnotation = (bookUrl: string, mark: any, format: string, now: number) =
 async function migrateBook(bookIndex: any, raw: any) {
   const now = Date.now()
   const data = raw || {}
+  const bookUrl = asString(bookIndex.bookUrl || data.bookUrl || bookIndex.url || data.url)
   const format = bookIndex.format || data.format || 'epub'
   const progress = bookIndex.epubProgress || data.epubProgress || 0
   const pos: any = {}
@@ -289,21 +569,26 @@ async function migrateBook(bookIndex: any, raw: any) {
   if (data.totalChapterNum) meta.pageCount = data.totalChapterNum
   if (data.series) meta.series = data.series
   if (data.subjects) meta.subjects = data.subjects
+  const size = asNumber(data.fileSize || bookIndex.fileSize || data.size || bookIndex.size)
 
   const book = {
-    url: bookIndex.bookUrl,
+    url: bookUrl,
     title: normalizeBookTitle(bookIndex.name || data.name || '未知书名') || '未知书名',
     author: bookIndex.author || data.author || '未知作者',
-    cover: await migrateManagedPath(
+    cover: await migrateAssetPath(
       bookIndex.coverUrl || '',
-      getCoverAssetPath(bookIndex.bookUrl, bookIndex.coverUrl || ''),
+      getCoverAssetPath(bookUrl, bookIndex.coverUrl || ''),
+      0,
+      `${bookUrl}:cover`,
     ),
     format,
-    path: await migrateManagedPath(
+    path: await migrateAssetPath(
       data.filePath || '',
-      getBookAssetPath(bookIndex.bookUrl, data.filePath || '', format),
+      getBookAssetPath(bookUrl, data.filePath || '', format),
+      size,
+      bookIndex.name || bookUrl,
     ),
-    size: data.fileSize || 0,
+    size,
     added: bookIndex.addTime || data.addTime || now,
     read: bookIndex.durChapterTime || data.durChapterTime || now,
     finished: progress >= 100 ? now : 0,
@@ -327,10 +612,10 @@ async function migrateBook(bookIndex: any, raw: any) {
   return {
     book,
     annotations: [
-      ...(data.annotations || []).map((mark: any) => toAnnotation(bookIndex.bookUrl, mark, format, now)),
+      ...(data.annotations || []).map((mark: any) => toAnnotation(bookUrl, mark, format, now)),
       ...(data.inkAnnotations || []).map((ink: any) => ({
         id: ink.id || `ink-${ink.page}-${ink.timestamp}`,
-        book: bookIndex.bookUrl,
+        book: bookUrl,
         type: 'ink',
         loc: `page-${ink.page}`,
         text: '',
@@ -344,7 +629,7 @@ async function migrateBook(bookIndex: any, raw: any) {
       })),
       ...(data.shapeAnnotations || []).map((shape: any) => ({
         id: shape.id || `shape-${shape.page}-${shape.timestamp}`,
-        book: bookIndex.bookUrl,
+        book: bookUrl,
         type: 'shape',
         loc: `page-${shape.page}`,
         text: '',
@@ -359,7 +644,7 @@ async function migrateBook(bookIndex: any, raw: any) {
       ...(data.epubBookmarks || []).flatMap((bookmark: any) => ([
         {
           id: `bookmark-${bookmark.cfi}-${bookmark.time}`,
-          book: bookIndex.bookUrl,
+          book: bookUrl,
           type: 'bookmark',
           loc: bookmark.cfi || '',
           text: bookmark.title || '',
@@ -373,7 +658,7 @@ async function migrateBook(bookIndex: any, raw: any) {
         },
         {
           id: `bookmark-section-${bookmark.section}-${bookmark.time}`,
-          book: bookIndex.bookUrl,
+          book: bookUrl,
           type: 'bookmark',
           loc: `section-${bookmark.section}`,
           text: bookmark.title || '',
@@ -425,40 +710,48 @@ export async function needsMigration() {
   }
 }
 
-async function normalizeCurrentStorage() {
+async function normalizeCurrentStorage(reporter?: ReturnType<typeof createMigrationReporter>) {
   const database = await db()
   const adopted = await withRetry('adoptLegacyAnnotations', async () => database.adoptLegacyAnnotations())
+  await recoverLegacyFilesToPublic(reporter)
   const books = await database.getBooks().catch(() => [])
   let success = 0
   let failed = 0
+  let skipped = 0
   let totalAnnotations = 0
+
+  reporter?.phase('规范化当前数据', books.length, '正在校验书籍路径、封面路径与标注数据')
 
   for (const book of books) {
     try {
       const [path, cover, annotations] = await Promise.all([
-        migrateManagedPath(book.path || '', getBookAssetPath(book.url, book.path || '', book.format || 'epub')),
-        migrateManagedPath(book.cover || '', getCoverAssetPath(book.url, book.cover || '')),
+        migrateAssetPath(book.path || '', getBookAssetPath(book.url, book.path || '', book.format || 'epub'), Number(book.size || 0), book.title || book.url),
+        migrateAssetPath(book.cover || '', getCoverAssetPath(book.url, book.cover || ''), 0, `${book.title || book.url}:cover`),
         database.getAnnotations(book.url).catch(() => []),
       ])
       await withRetry(`normalizeBook:${book.url}`, async () => database.saveBook({ ...book, title: normalizeBookTitle(book.title || '') || book.title, path, cover }))
       totalAnnotations += annotations.length
       success++
+      reporter?.step(book.title || book.url, { success, failed, skipped })
     } catch (error) {
       failed++
+      skipped++
       console.error(DEBUG_PREFIX, 'normalizeCurrentStorage:error', { url: book.url, error })
+      reporter?.step(book.title || book.url, { success, failed, skipped })
     }
   }
 
   await withRetry('deleteLegacySettings', async () => database.deleteSettings([...LEGACY_SETTING_KEYS]))
   const compacted = await withRetry('compactStorage', async () => database.compactStorage(), [0, 120, 320, 800])
-  return { success, failed, totalAnnotations: Math.max(totalAnnotations, adopted.annotations || 0), adopted, compacted }
+  return { success, failed, skipped, totalAnnotations: Math.max(totalAnnotations, adopted.annotations || 0), adopted, compacted }
 }
 
 async function normalizeStorageIfNeeded(force = false) {
   const state = await getMigrationState()
   if (!force && state?.normalizedVersion === NORMALIZE_VERSION) return true
   const database = await db()
-  const normalized = await normalizeCurrentStorage()
+  const reporter = createMigrationReporter()
+  const normalized = await normalizeCurrentStorage(reporter)
   await withRetry('flushNormalizedDatabase', async () => database.saveNow(), [0, 120, 320, 800])
   await saveMigrationState({
     normalized: !normalized.failed,
@@ -468,10 +761,16 @@ async function normalizeStorageIfNeeded(force = false) {
     normalizeAnnotations: normalized.totalAnnotations,
     at: Date.now(),
   })
+  await reporter.finish(
+    normalized.failed
+      ? `规范化完成，但有 ${normalized.failed} 本书处理失败，请查看迁移面板信息后手动刷新。`
+      : `规范化完成，共处理 ${normalized.success} 本书，请查看迁移面板信息后手动刷新。`,
+    normalized.failed ? 'error' : 'completed',
+  )
   return !normalized.failed
 }
 
-async function migrateFromLegacyDb(files: Array<{ key: typeof DB_KEYS[number], bytes: Uint8Array }>) {
+async function migrateFromLegacyDb(files: Array<{ key: typeof DB_KEYS[number], bytes: Uint8Array }>, reporter?: ReturnType<typeof createMigrationReporter>) {
   const opened = await openLegacyDatabase(files)
   if (!opened) return emptyResult()
 
@@ -503,11 +802,17 @@ async function migrateFromLegacyDb(files: Array<{ key: typeof DB_KEYS[number], b
 
   let success = 0
   let failed = 0
+  let skipped = 0
   let totalAnnotations = 0
+  reporter?.begin('迁移旧数据库', legacyBooks.length, `已发现 ${legacyBooks.length} 本书籍，正在迁移`)
 
   for (const row of legacyBooks) {
     const book = normalizeLegacyBook(row)
-    if (!book.url) continue
+    if (!book.url) {
+      skipped++
+      reporter?.step('跳过缺少书籍 URL 的旧记录', { success, failed, skipped })
+      continue
+    }
     try {
       totalAnnotations += await saveImportedBook(database, {
         ...book,
@@ -531,9 +836,11 @@ async function migrateFromLegacyDb(files: Array<{ key: typeof DB_KEYS[number], b
         annotation: id => `saveAnnotation:${book.url}:${id}`,
       })
       success++
+      reporter?.step(book.title || book.url, { success, failed, skipped })
     } catch (error) {
       failed++
       console.error(DEBUG_PREFIX, 'migrateFromLegacyDb:error', { url: book.url, error })
+      reporter?.step(book.title || book.url, { success, failed, skipped })
     }
   }
 
@@ -544,34 +851,51 @@ async function migrateFromLegacyDb(files: Array<{ key: typeof DB_KEYS[number], b
   )
   if (Object.keys(settings).length) await withRetry('batchSaveSettings', async () => database.batchSaveSettings(settings))
   try { legacy.close?.() } catch {}
-  return { success, failed, totalAnnotations }
+  return { success, failed, skipped, totalAnnotations }
 }
 
-async function migrateFromIndex(indexData: any[]) {
+const resolveLegacyBookDataPath = (bookIndex: any, legacyBooks: any[]) => {
+  const exact = getBookIndexFile(bookIndex)
+  if (legacyBooks.some(file => !file.isDir && file.name === exact)) return `${OLD_DATA_PATH}/books/${exact}`
+  const suffix = `_${getBookUrlHash(asString(bookIndex.bookUrl || bookIndex.url))}.json`
+  const matched = legacyBooks.find(file => !file.isDir && file.name.endsWith(suffix))
+  return `${OLD_DATA_PATH}/books/${matched?.name || exact}`
+}
+
+async function migrateFromIndex(indexData: any[], legacyBooks: any[], reporter?: ReturnType<typeof createMigrationReporter>) {
   const database = await db()
   let success = 0
   let failed = 0
+  let skipped = 0
   let totalAnnotations = 0
+  reporter?.begin('迁移旧索引数据', indexData.length, `已发现 ${indexData.length} 本书籍，正在迁移`)
 
   for (const bookIndex of indexData) {
     try {
-      const raw = await readJsonFile(`${OLD_DATA_PATH}/books/${getBookIndexFile(bookIndex)}`)
+      const raw = await readJsonFile(resolveLegacyBookDataPath(bookIndex, legacyBooks))
       const { book, annotations } = await migrateBook(bookIndex, raw)
+      if (!book.url) {
+        skipped++
+        reporter?.step(bookIndex?.name || '未知书籍', { success, failed, skipped })
+        continue
+      }
       totalAnnotations += await saveImportedBook(database, book, annotations, {
         book: `saveIndexBook:${book.url}`,
         annotation: id => `saveIndexAnnotation:${book.url}:${id}`,
       })
       success++
+      reporter?.step(book.title || book.url, { success, failed, skipped })
     } catch (error) {
       failed++
       console.error(DEBUG_PREFIX, 'migrateFromIndex:error', { book: bookIndex?.name, error })
+      reporter?.step(bookIndex?.name || '未知书籍', { success, failed, skipped })
     }
   }
 
-  return { success, failed, totalAnnotations }
+  return { success, failed, skipped, totalAnnotations }
 }
 
-async function migrate() {
+async function migrate(reporter?: ReturnType<typeof createMigrationReporter>) {
   const sources = await getSources()
   if (!sources.shouldRun) return { ...emptyResult(), importedDb: false, normalized: false, migrated: false, completed: true, sources }
 
@@ -579,10 +903,10 @@ async function migrate() {
   let importedDb = false
 
   if (sources.legacyDbFiles.length) {
-    result = await migrateFromLegacyDb(sources.legacyDbFiles)
+    result = await migrateFromLegacyDb(sources.legacyDbFiles, reporter)
     importedDb = true
   }
-  if (!result.success && sources.indexData.length) result = await migrateFromIndex(sources.indexData)
+  if (!result.success && sources.indexData.length) result = await migrateFromIndex(sources.indexData, sources.legacyBooks, reporter)
 
   const database = await db()
   if (sources.configData?.settings) await withRetry('batchSaveConfigSettings', async () => database.batchSaveSettings(sources.configData.settings))
@@ -601,10 +925,11 @@ async function migrate() {
     return { ...result, importedDb, normalized: false, migrated, completed: false, sources }
   }
 
-  const normalized = await normalizeCurrentStorage()
+  const normalized = await normalizeCurrentStorage(reporter)
   await withRetry('flushDatabase', async () => database.saveNow(), [0, 120, 320, 800])
   const success = result.success || normalized.success
   const failed = result.failed + normalized.failed
+  const skipped = result.skipped + normalized.skipped
   const totalAnnotations = result.totalAnnotations || normalized.totalAnnotations
   const completed = (migrated || !!normalized.success || sources.shouldNormalize) && !failed
   await saveMigrationState({
@@ -615,13 +940,15 @@ async function migrate() {
     importedDb,
     success,
     failed,
+    skipped,
     totalAnnotations,
     retryable: !completed,
   })
-  console.info(DEBUG_PREFIX, 'migrate:done', { success, failed, annotations: totalAnnotations, importedDb, completed })
+  console.info(DEBUG_PREFIX, 'migrate:done', { success, failed, skipped, annotations: totalAnnotations, importedDb, completed })
   return {
     success,
     failed,
+    skipped,
     totalAnnotations,
     importedDb,
     normalized: !normalized.failed,
@@ -635,7 +962,6 @@ export async function ensureMigrationCompleted() {
   const state = await getMigrationState()
   if (!state?.done || !state?.success || !state?.normalized) {
     if (!await autoMigrate()) return true
-    setTimeout(() => location.reload(), 1200)
     return false
   }
   return await normalizeStorageIfNeeded()
@@ -699,17 +1025,6 @@ const isWhitelisted = (filePath: string) => [
   /^dictionaries\//,
 ].some(rule => rule.test(filePath))
 
-const removeLegacyDbFiles = async () => {
-  let deleted = 0
-  for (const key of DB_KEYS) {
-    try {
-      await removeFile(`${OLD_DATA_PATH}/${key}`)
-      deleted++
-    } catch {}
-  }
-  return deleted
-}
-
 async function cleanupOldData() {
   let deleted = 0
   let failed = 0
@@ -721,27 +1036,30 @@ async function cleanupOldData() {
       failed++
     }
   }
-  deleted += await removeLegacyDbFiles()
   return { deleted, failed }
 }
 
 export async function autoMigrate(): Promise<boolean> {
+  const reporter = createMigrationReporter()
   try {
     if (!await needsMigration()) return false
-    showMessage('Legacy data detected, migrating...', 3000, 'info')
-    const result = await migrate()
+    reporter.begin('开始迁移', 0, '正在分析旧数据结构')
+    showMessage('检测到旧版数据，开始迁移，请勿刷新页面。', 4000, 'info')
+    const result = await migrate(reporter)
     if (!result.completed) {
-      showMessage(`Migration incomplete: ${result.success} succeeded, ${result.failed} failed. Legacy data was kept for retry.`, 5000, 'error')
+      await reporter.finish(`迁移未完成：成功 ${result.success} 本，失败 ${result.failed} 本，跳过 ${result.skipped} 本。旧数据已保留，可修复后再次刷新重试。`, 'error')
+      showMessage(`迁移未完成：成功 ${result.success}，失败 ${result.failed}，跳过 ${result.skipped}。旧数据已保留，请处理后手动刷新重试。`, 7000, 'error')
       return false
     }
+    reporter.begin('备份迁移前数据', 0, '正在生成旧数据备份，便于后续回滚')
     const backupPath = await backupLegacyData(result.sources, {
       success: result.success,
       failed: result.failed,
+      skipped: result.skipped,
       totalAnnotations: result.totalAnnotations,
       importedDb: result.importedDb,
     })
     await removeDataKeys([...LEGACY_JSON_KEYS, ...LEGACY_SETTING_KEYS])
-    if (result.importedDb || result.success) await removeDataKeys(DB_KEYS)
     const cleanup = await cleanupOldData()
     const completed = !cleanup.failed
     await saveMigrationState({
@@ -752,10 +1070,15 @@ export async function autoMigrate(): Promise<boolean> {
       backupPath,
       at: Date.now(),
     })
+    await reporter.finish(
+      cleanup.failed
+        ? `迁移已完成，但清理阶段有 ${cleanup.failed} 项失败。旧数据库文件已保留。`
+        : `迁移完成：${result.success} 本书、${result.totalAnnotations} 条标注，旧数据库文件已保留。`,
+    )
     showMessage(
       cleanup.failed
-        ? `Migration finished, but cleanup failed for ${cleanup.failed} items. Backup: ${backupPath}`
-        : `Migration succeeded: ${result.success} books, ${result.totalAnnotations} annotations. Legacy data backed up and cleaned.`,
+        ? `迁移已完成，但仍有 ${cleanup.failed} 个旧文件未清理。备份位置：${backupPath}。请确认后手动刷新页面。`
+        : `迁移完成：${result.success} 本书，${result.totalAnnotations} 条标注。备份位置：${backupPath}。请确认后手动刷新页面。`,
       5000,
       cleanup.failed ? 'error' : 'info',
     )
@@ -769,7 +1092,8 @@ export async function autoMigrate(): Promise<boolean> {
       at: Date.now(),
       error: error?.message || String(error),
     }).catch(() => {})
-    showMessage(`Migration failed: ${error?.message || 'unknown error'}`, 4000, 'error')
+    await reporter.finish(`迁移失败：${error?.message || 'unknown error'}。旧数据未删除，请修复后手动刷新重试。`, 'error')
+    showMessage(`迁移失败：${error?.message || 'unknown error'}。旧数据未删除，请处理后手动刷新重试。`, 7000, 'error')
     return false
   }
 }

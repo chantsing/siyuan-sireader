@@ -30,7 +30,6 @@ const PAID_FEATURES: Record<string, string> = {
   'smart-group': 'monthly',     // 智能分组
   'book-edit': 'trial',         // 书籍编辑
   'batch-operation': 'trial',   // 批量操作
-  'advanced-add': 'trial',      // 高级添加方式
   'doc-assets': 'monthly',      // 文档assets同步
   
   // 搜书功能

@@ -7,7 +7,7 @@
 让思源笔记变身专业阅读器，支持 EPUB/PDF/TXT/在线小说  
 提供智能标注、TTS 朗读、词典查询、AI 翻译、Anki 闪卡等功能
 
-[![Version](https://img.shields.io/badge/version-1.1.2-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-1.1.3-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,18 @@
 ---
 
 ## 📝 最新更新
+
+### v1.1.3 (2026.4.30)
+
+**修复**
+
+- 修复导入书籍时错误的会员判断问题。
+
+**新增**
+
+- 新增数据迁移进度弹窗，迁移过程更直观。
+
+---
 
 ### v1.1.2 (2026.4.28)
 

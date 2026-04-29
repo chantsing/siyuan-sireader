@@ -383,8 +383,8 @@ const readBook = async (book: Book) => {const {getBookWithFallback} = await impo
 const removeBook = async (book: Book) => {const res = await bookshelfManager.removeBooks([book.url]); confirmDelete.value = null; await refresh(); showMessage(res.failed ? '删除失败' : '已移出', 2000, res.failed ? 'error' : 'info');}
 const openImportPanel = (mode: 'link'|'file') => { panelMode.value='add'; importMode.value=mode; resetImport() }
 const showAddMenu = (e: MouseEvent) => buildMenu([
-  {icon:'iconLink',label:'添加链接',click:()=>{if (!can.value('advanced-add')) return showUpgrade('高级添加方式'); openImportPanel('link')}},
-  {icon:'iconUpload',label:'选择文件',click:async()=>{if (!can.value('advanced-add')) return showUpgrade('高级添加方式'); openImportPanel('file'); const files=await pickImportFiles(); files.length&&await parseFiles(files)}}
+  {icon:'iconLink',label:'添加链接',click:()=>openImportPanel('link')},
+  {icon:'iconUpload',label:'选择文件',click:async()=>{openImportPanel('file'); const files=await pickImportFiles(); files.length&&await parseFiles(files)}}
 ]).open({x:e.clientX,y:e.clientY})
 const uploadFiles=async(files:File[])=>{if(!files.length)return;files.length>1&&showMessage(`正在导入 ${files.length} 本书籍...`,2000,'info');const{success,failed}=await bookshelfManager.uploadBooks(files);await loadBooks();showMessage(failed?`成功${success}本，失败${failed}本`:`导入${success}本`,3000,failed&&!success?'error':'info')}
 const drag=ref({file:false,book:null as string|null,target:null as string|null})
