@@ -1,5 +1,5 @@
 <template>
-  <div class="deck-stat">
+  <div class="deck-stat sr-body-stack-12">
     <div class="sr-stats-tabs">
       <button v-for="t in TABS" :key="t.key" :class="{active:tab===t.key}" @click="tab=t.key">{{t.label}}</button>
     </div>

@@ -5,7 +5,7 @@
     <p class="hint">请先启用至少一个卡组</p>
     <button @click="loadSettings" class="sr-btn">重新加载</button>
   </div>
-  <div v-else class="sr-section">
+  <div v-else class="sr-body-stack-12">
     <div class="ds-card">
       <h3>每日上限</h3>
       <div class="ds-field input">

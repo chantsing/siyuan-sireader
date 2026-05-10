@@ -1,5 +1,5 @@
 <template>
-  <div class="sr-list">
+  <div class="sr-body-stack-12">
     <CardList :cards="displayCards" :editable="true" :empty-text="keyword?t('deckNoMatch','未找到匹配的卡片'):t('deckNoCards','暂无卡片')" list-class="sr-list-inner" back-class="deck-card-back" @save="handleSave" @delete="handleDelete"/>
     <div v-if="hasMore" class="sr-action-btns">
       <button @click="$emit('load-more')" class="sr-btn">加载更多 ({{Math.min(8,allCards.length-cards.length)}}张)</button>

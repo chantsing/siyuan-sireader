@@ -288,10 +288,7 @@ const init=async()=>{
     }else{
       reader=createReader({container:viewerContainerRef.value!,settings:getSettings()!,plugin:props.plugin})
       
-      if(props.bookInfo?.format==='online'){
-        const{loadOnlineBook}=await import('@/core/online')
-        await loadOnlineBook(reader,props.bookInfo)
-      }else await reader.open(props.file||props.url||await loadFile()||await Promise.reject(new Error('未提供书籍')))
+      await reader.open(props.file||props.url||await loadFile()||await Promise.reject(new Error('未提供书籍')))
       
       const view=reader.getView()
       markManager.value=createMarkManager({format:'epub',view,plugin:props.plugin,bookUrl,bookName:getBookName(),reader})

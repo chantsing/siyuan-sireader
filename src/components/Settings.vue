@@ -7,6 +7,7 @@ import { PRESET_THEMES, UI_CONFIG, useSetting, useConfirm, useDocSearch, useNote
 import BookSearch from './BookSearch.vue'
 import BookShelf from './BookShelf.vue'
 import ReaderToc from './ReaderToc.vue'
+import DockShell from './ui/DockShell.vue'
 import { bookshelfManager } from '@/core/bookshelf'
 import { offlineDictManager, onlineDictManager } from '@/utils/dictionary'
 import { usePlugin } from '@/main'
@@ -152,7 +153,6 @@ const dragDrop = async (e:DragEvent, to:number, type:'nav'|'dict'|'quickDoc', re
 const ttsI18nKey = (key:string, suffix='') => `tts${key.charAt(0).toUpperCase()}${key.slice(1)}${suffix}`
 
 // 计算属性
-const tooltipDir = computed(() => ({ left: 'e', right: 'w', top: 's', bottom: 'n' }[settings.value.navPosition] || 'n'))
 const navItems = computed(() => (settings.value.navItems || [
   { id: 'bookshelf', icon: 'lucide-library-big', tip: 'bookshelf', enabled: true, order: 0 },
   { id: 'search', icon: 'lucide-book-search', tip: 'search', enabled: true, order: 1 },
@@ -162,7 +162,9 @@ const navItems = computed(() => (settings.value.navItems || [
   { id: 'mark', icon: 'lucide-square-pen', tip: '标注', enabled: true, order: 5 },
   { id: 'appearance', icon: 'lucide-settings-2', tip: '设置', enabled: true, order: 7 }
 ]).filter(item => item.id !== 'dictionary').sort((a, b) => a.order - b.order))
+const tooltipDir = computed(() => ({ left: 'e', right: 'w', top: 's', bottom: 'n' }[settings.value.navPosition] || 'n'))
 const tabs = computed(() => navItems.value.filter(item => item.enabled && (item.id === 'appearance' || item.id === 'bookshelf' || item.id === 'search' || item.id === 'deck' || canShowToc.value)).map(item => ({id:item.id as any,icon:item.icon,tip:item.tip})))
+const bodyClass = computed(() => activeTab.value === 'appearance' ? 'sr-body-scroll sr-body-pad-16 sr-body-stack-12' : undefined)
 
 // 预览样式
 const previewStyle = computed(() => {
@@ -202,11 +204,14 @@ watch(canShowToc,(show) => !show&&['toc','bookmark','mark'].includes(activeTab.v
 </script>
 
 <template>
-  <div class="sr-settings" :class="`nav-${settings.navPosition}`">
-    <nav class="sr-nav">
-      <button v-for="tab in tabs" :key="tab.id" class="sr-nav-tab b3-tooltips" :class="[{'sr-nav-tab--active':activeTab===tab.id},`b3-tooltips__${tooltipDir}`]" :aria-label="i18n?.[tab.tip]||tab.tip" @click="activeTab=tab.id"><svg><use :xlink:href="'#'+tab.icon"/></svg></button>
-    </nav>
-    <main class="sr-content">
+  <DockShell
+    :active-tab="activeTab"
+    :body-class="bodyClass"
+    :nav-position="settings.navPosition"
+    :tooltip-dir="tooltipDir"
+    :tabs="tabs.map(tab => ({ ...tab, tip: i18n?.[tab.tip] || tab.tip }))"
+    @update:activeTab="activeTab = $event as any"
+  >
       <div v-if="activeTab==='appearance'" class="sr-preview" :class="{expanded:previewExpanded}" :style="previewStyle">
         <div class="sr-preview-hf" @click="togglePreview"><span>{{i18n.livePreview||'实时预览'}}</span><svg class="sr-preview-toggle"><use :xlink:href="previewExpanded?'#iconContract':'#iconExpand'"/></svg></div>
         <Transition name="expand"><div v-show="previewExpanded" class="sr-preview-body"><p>春江潮水连海平，海上明月共潮生。</p><p>滟滟随波千万里，何处春江无月明。</p></div></Transition>
@@ -418,19 +423,14 @@ watch(canShowToc,(show) => !show&&['toc','bookmark','mark'].includes(activeTab.v
         </div>
         <!-- 外部组件，不使用 Transition -->
       </Transition>
-      <BookSearch v-show="activeTab==='search'" :i18n="i18n" @read="handleReadOnline"/>
+      <BookSearch v-show="activeTab==='search'" :i18n="i18n" />
       <BookShelf v-show="activeTab==='bookshelf'" :i18n="i18n" :cover-size="settings.bookshelfCoverSize" :open-doc-assets="settings.openDocAssets" @read="handleReadOnline"/>
       <ReaderToc v-if="['toc','bookmark','mark','deck'].includes(activeTab)" v-model:mode="activeTab" :i18n="props.i18n"/>
-    </main>
-  </div>
+  </DockShell>
 </template>
 
 <style scoped lang="scss">
 @use './deck/deck.scss';
-.sr-settings{display:flex;height:100%;background:var(--b3-theme-background);&.nav-left{flex-direction:row}&.nav-right{flex-direction:row-reverse}&.nav-top{flex-direction:column}&.nav-bottom{flex-direction:column-reverse}}
-.sr-nav{background:var(--b3-theme-background);display:flex;flex-shrink:0;.nav-left &,.nav-right &{width:42px;flex-direction:column;border-right:1px solid var(--b3-theme-background-light);padding:8px 0}.nav-top &,.nav-bottom &{height:42px;border-bottom:1px solid var(--b3-theme-background-light);padding:0 8px}.nav-right &{border-right:0;border-left:1px solid var(--b3-theme-background-light)}.nav-bottom &{border-bottom:0;border-top:1px solid var(--b3-theme-background-light)}}
-.sr-nav-tab{display:flex;align-items:center;justify-content:center;padding:10px 8px;border:none;background:transparent;cursor:pointer;transition:var(--b3-transition);color:var(--b3-theme-on-surface);svg{width:16px;height:16px}&:hover{color:var(--b3-theme-on-background)}&--active{color:var(--b3-theme-primary)}}
-.sr-content{flex:1;overflow:hidden;display:flex;flex-direction:column}
 .ds-card{background:var(--b3-theme-surface);border:1px solid var(--b3-border-color);border-radius:8px;padding:16px;transition:all .2s;&:hover{box-shadow:0 2px 8px rgba(0,0,0,.08)}&.ds-accordion{cursor:pointer;user-select:none;h3{margin:0;font-size:14px;font-weight:600;display:flex;align-items:center;gap:16px;transition:color .15s}}}
 .license-avatar{position:relative;width:56px;height:56px;flex-shrink:0;img{width:100%;height:100%;border-radius:50%;object-fit:cover}}
 .license-placeholder{width:100%;height:100%;border-radius:50%;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:600}
@@ -440,7 +440,7 @@ watch(canShowToc,(show) => !show&&['toc','bookmark','mark'].includes(activeTab.v
 .license-tag{font-size:11px;padding:2px 7px;border-radius:3px;font-weight:500;margin-left:6px;opacity:.9;&.license-lifetime{background:rgba(156,39,176,.1);color:#9c27b0}&.license-annual{background:rgba(76,175,80,.1);color:#4caf50}&.license-monthly{background:rgba(33,150,243,.1);color:#2196f3}&.license-trial{background:rgba(255,152,0,.1);color:#ff9800}}
 .license-btn{width:100%;margin-top:8px}
 .license-actions{display:flex;flex-direction:column;gap:8px;margin-top:8px;>button{width:100%}input{width:100%}.license-btn-row{display:flex;gap:8px;>button{flex:1;white-space:nowrap}}}
-.sr-preview{position:sticky;top:0;z-index:10;margin:20px 20px 0;background:var(--b3-theme-surface);border-radius:8px;overflow:hidden;display:flex;flex-direction:column;transition:max-height .3s;column-count:var(--column-count,1);column-gap:var(--gap);max-height:50px;&.expanded{max-height:min(300px,var(--max-block))}p{margin:0;padding:var(--margin-v) var(--margin-h);text-indent:calc(1em * var(--text-indent,0));break-inside:avoid;& + p{margin-top:calc(1em * var(--paragraph-spacing,0.8))}}}
+.sr-preview{position:sticky;top:0;z-index:10;background:var(--b3-theme-surface);border-radius:8px;overflow:hidden;display:flex;flex-direction:column;transition:max-height .3s;column-count:var(--column-count,1);column-gap:var(--gap);max-height:50px;&.expanded{max-height:min(300px,var(--max-block))}p{margin:0;padding:var(--margin-v) var(--margin-h);text-indent:calc(1em * var(--text-indent,0));break-inside:avoid;& + p{margin-top:calc(1em * var(--paragraph-spacing,0.8))}}}
 .sr-preview-hf{height:50px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;font-size:12px;opacity:.6;border:1px dashed currentColor;border-width:1px 0 0;user-select:none;&:first-child{border-width:0 0 1px;font-weight:500}&:hover{opacity:.8;background:var(--b3-list-hover)}}
 .sr-preview-toggle{width:14px;height:14px;transition:transform .3s}
 .sr-preview-body{flex:1;overflow:auto;min-height:0}
@@ -462,6 +462,5 @@ watch(canShowToc,(show) => !show&&['toc','bookmark','mark'].includes(activeTab.v
 .ds-list-btn-del{color:var(--b3-theme-error);&:hover{background:var(--b3-theme-error);color:white;border-color:var(--b3-theme-error)}}
 .license-highlight{animation:license-pulse 2s ease;box-shadow:0 0 0 4px var(--b3-theme-primary-light),0 8px 24px rgba(33,150,243,.4) !important}
 @keyframes license-pulse{0%,100%{transform:scale(1);box-shadow:0 2px 8px rgba(0,0,0,.08)}10%,30%,50%{transform:scale(1.03);box-shadow:0 0 0 4px var(--b3-theme-primary-light),0 8px 24px rgba(33,150,243,.4)}20%,40%{transform:scale(1);box-shadow:0 0 0 2px var(--b3-theme-primary-lighter),0 4px 16px rgba(33,150,243,.2)}}
-@media (max-width:640px){.sr-settings{flex-direction:column !important}.sr-nav{width:100% !important;height:42px !important;flex-direction:row !important;padding:0 4px !important}}
 </style>
 

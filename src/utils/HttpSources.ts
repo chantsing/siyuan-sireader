@@ -1,16 +1,30 @@
 import { fetchSyncPost } from 'siyuan'
 import { bookshelfManager } from '@/core/bookshelf'
 
+type HttpSourceType = 'anna' | 'gutenberg' | 'standardebooks' | 'custom'
+
+interface HttpSourceSelectors {
+  item: string
+  title: string
+  author?: string
+  link: string
+  cover?: string
+  intro?: string
+}
+
 interface HttpSourceConfig {
   id: string
   name: string
-  type: 'anna' | 'gutenberg' | 'standardebooks' | 'custom'
+  type: HttpSourceType
   enabled: boolean
   url?: string
   searchUrl?: string
   domains?: string[]
   currentDomain?: string
+  requestPrefix?: string
   filters?: { extensions?: string[] }
+  selectors?: HttpSourceSelectors
+  bookUrlPrefix?: string
 }
 
 interface HttpBook {
@@ -31,15 +45,63 @@ interface HttpBook {
 }
 
 const DEFAULT_SOURCES: HttpSourceConfig[] = [
-  { id: 'anna', name: 'Anna Archive', type: 'anna', enabled: false, domains: ['https://annas-archive.se', 'https://annas-archive.li', 'https://annas-archive.gs', 'https://annas-archive.org'], currentDomain: 'https://annas-archive.se', filters: { extensions: [] } },
-  { id: 'gutenberg', name: 'Project Gutenberg', type: 'gutenberg', enabled: true, url: 'https://www.gutenberg.org' },
-  { id: 'standardebooks', name: 'Standard Ebooks', type: 'standardebooks', enabled: true, url: 'https://standardebooks.org' },
+  {
+    id: 'anna',
+    name: 'Anna Archive',
+    type: 'anna',
+    enabled: false,
+    domains: ['https://annas-archive.se', 'https://annas-archive.li', 'https://annas-archive.gs', 'https://annas-archive.org'],
+    currentDomain: 'https://annas-archive.se',
+    filters: { extensions: [] },
+  },
+  {
+    id: 'gutenberg',
+    name: 'Project Gutenberg',
+    type: 'gutenberg',
+    enabled: true,
+    url: 'https://www.gutenberg.org',
+    filters: { extensions: [] },
+  },
+  {
+    id: 'standardebooks',
+    name: 'Standard Ebooks',
+    type: 'standardebooks',
+    enabled: true,
+    url: 'https://standardebooks.org',
+    filters: { extensions: [] },
+  },
 ]
 
+const normalizeExtensions = (extensions: string[] = []) =>
+  Array.from(new Set(extensions.map(item => item.trim().toLowerCase()).filter(Boolean)))
+
 const mergeSources = (saved: HttpSourceConfig[] = []) => [
-  ...DEFAULT_SOURCES.map(source => ({ ...source, ...(saved.find(item => item.id === source.id) || {}) })),
-  ...saved.filter(source => source.type === 'custom'),
+  ...DEFAULT_SOURCES.map(source => {
+    const next = { ...source, ...(saved.find(item => item.id === source.id) || {}) }
+    return { ...next, filters: { extensions: normalizeExtensions(next.filters?.extensions || []) } }
+  }),
+  ...saved
+    .filter(source => source.type === 'custom')
+    .map(source => ({ ...source, filters: { extensions: normalizeExtensions(source.filters?.extensions || []) } })),
 ]
+
+const toAbsoluteUrl = (url: string, base = '') => {
+  if (!url) return ''
+  if (/^https?:\/\//i.test(url)) return url
+  if (url.startsWith('//')) return `https:${url}`
+  if (!base) return url
+  try {
+    return new URL(url, base).toString()
+  } catch {
+    return url
+  }
+}
+
+const applyRequestPrefix = (url: string, prefix = '') => {
+  const value = prefix.trim()
+  if (!value) return url
+  return value.includes('{url}') ? value.replace(/\{url\}/g, encodeURIComponent(url)) : `${value}${url}`
+}
 
 class HttpSourceManager {
   private readonly KEY = 'http_sources'
@@ -66,7 +128,10 @@ class HttpSourceManager {
 
   private async save() {
     await this.init()
-    await bookshelfManager.saveSetting(this.KEY, this.sources)
+    await bookshelfManager.saveSetting(this.KEY, this.sources.map(source => ({
+      ...source,
+      filters: { extensions: normalizeExtensions(source.filters?.extensions || []) },
+    })))
     window.dispatchEvent(new CustomEvent('http-sources-updated'))
   }
 
@@ -77,7 +142,15 @@ class HttpSourceManager {
   async updateSource(id: string, updates: Partial<HttpSourceConfig>) {
     const index = this.sources.findIndex(source => source.id === id)
     if (index < 0) return
-    this.sources[index] = { ...this.sources[index], ...updates }
+    const current = this.sources[index]
+    const next = {
+      ...current,
+      ...updates,
+      filters: {
+        extensions: normalizeExtensions(updates.filters?.extensions || current.filters?.extensions || []),
+      },
+    }
+    this.sources[index] = next
     await this.save()
   }
 
@@ -89,7 +162,13 @@ class HttpSourceManager {
   }
 
   async addCustomSource(config: Omit<HttpSourceConfig, 'id' | 'type'>) {
-    const source: HttpSourceConfig = { ...config, id: `custom_${Date.now()}`, type: 'custom', enabled: true }
+    const source: HttpSourceConfig = {
+      ...config,
+      id: `custom_${Date.now()}`,
+      type: 'custom',
+      enabled: true,
+      filters: { extensions: normalizeExtensions(config.filters?.extensions || []) },
+    }
     this.sources.push(source)
     await this.save()
     return source
@@ -104,8 +183,9 @@ class HttpSourceManager {
 
   async addAnnaDomain(domain: string) {
     const source = this.getSource('anna')
-    if (!source?.domains || source.domains.includes(domain)) return
-    source.domains.push(domain)
+    const value = domain.trim()
+    if (!source?.domains || !value || source.domains.includes(value)) return
+    source.domains.push(value)
     await this.save()
   }
 
@@ -131,26 +211,42 @@ class HttpSourceManager {
 
   private searchIn(source: HttpSourceConfig, keyword: string) {
     if (source.type === 'anna') return this.searchAnna(keyword, source)
-    if (source.type === 'gutenberg') return this.searchGutenberg(keyword)
-    if (source.type === 'standardebooks') return this.searchStandardEbooks(keyword)
+    if (source.type === 'gutenberg') return this.searchGutenberg(keyword, source)
+    if (source.type === 'standardebooks') return this.searchStandardEbooks(keyword, source)
+    if (source.type === 'custom') return this.searchCustom(keyword, source)
     return Promise.resolve([])
+  }
+
+  private matchExtension(source: HttpSourceConfig, extension = '') {
+    const exts = source.filters?.extensions || []
+    if (!exts.length) return true
+    return !!extension && exts.includes(extension.toLowerCase())
   }
 
   private async searchAnna(keyword: string, source: HttpSourceConfig): Promise<HttpBook[]> {
     try {
       const domain = source.currentDomain || source.domains?.[0] || ''
-      const html = await this.request(`${domain}/search?q=${encodeURIComponent(keyword)}`)
+      const html = await this.request(`${domain}/search?q=${encodeURIComponent(keyword)}`, source)
       if (!html) return []
-      const exts = source.filters?.extensions || []
       return Array.from(new DOMParser().parseFromString(html, 'text/html').querySelectorAll('[class*="search-result"]'))
         .slice(0, 10)
         .map(item => {
           const title = item.querySelector('[class*="title"]')?.textContent?.trim() || ''
           const author = item.querySelector('[class*="author"]')?.textContent?.trim() || 'Unknown'
           const link = item.querySelector('a')?.getAttribute('href') || ''
-          const ext = link.match(/\.(epub|pdf|mobi|azw3)/i)?.[1]?.toLowerCase()
-          if (!title || (exts.length && ext && !exts.includes(ext))) return null
-          return { name: title, author, bookUrl: `${domain}${link}`, downloadUrl: `${domain}${link}`, coverUrl: '', intro: '', extension: ext?.toUpperCase(), sourceName: source.name, sourceId: source.id }
+          const ext = link.match(/\.(epub|pdf|mobi|azw3)/i)?.[1]?.toLowerCase() || ''
+          if (!title || !this.matchExtension(source, ext)) return null
+          return {
+            name: title,
+            author,
+            bookUrl: `${domain}${link}`,
+            downloadUrl: `${domain}${link}`,
+            coverUrl: '',
+            intro: '',
+            extension: ext.toUpperCase(),
+            sourceName: source.name,
+            sourceId: source.id,
+          }
         })
         .filter((book): book is HttpBook => !!book)
     } catch {
@@ -158,9 +254,10 @@ class HttpSourceManager {
     }
   }
 
-  private async searchGutenberg(keyword: string): Promise<HttpBook[]> {
+  private async searchGutenberg(keyword: string, source: HttpSourceConfig): Promise<HttpBook[]> {
     try {
-      const html = await this.request(`https://www.gutenberg.org/ebooks/search/?query=${encodeURIComponent(keyword)}&submit_search=Go%21`)
+      const base = source.url || 'https://www.gutenberg.org'
+      const html = await this.request(`${base}/ebooks/search/?query=${encodeURIComponent(keyword)}&submit_search=Go%21`, source)
       if (!html) return []
       return Array.from(new DOMParser().parseFromString(html, 'text/html').querySelectorAll('li.booklink'))
         .slice(0, 10)
@@ -168,18 +265,18 @@ class HttpSourceManager {
           const link = item.querySelector('a[href*="/ebooks/"]')?.getAttribute('href') || ''
           const id = link.match(/\/ebooks\/(\d+)/)?.[1]
           const title = item.querySelector('.title')?.textContent?.trim() || ''
-          if (!id || !title) return null
+          if (!id || !title || !this.matchExtension(source, 'epub')) return null
           return {
             name: title,
             author: item.querySelector('.subtitle')?.textContent?.trim() || 'Unknown',
-            bookUrl: `https://www.gutenberg.org${link}`,
-            downloadUrl: `https://www.gutenberg.org/ebooks/${id}.epub3.images`,
-            coverUrl: `https://www.gutenberg.org/cache/epub/${id}/pg${id}.cover.medium.jpg`,
+            bookUrl: `${base}${link}`,
+            downloadUrl: `${base}/ebooks/${id}.epub3.images`,
+            coverUrl: `${base}/cache/epub/${id}/pg${id}.cover.medium.jpg`,
             intro: '',
             extension: 'EPUB',
             language: 'en',
-            sourceName: 'Project Gutenberg',
-            sourceId: 'gutenberg',
+            sourceName: source.name,
+            sourceId: source.id,
           }
         })
         .filter((book): book is HttpBook => !!book)
@@ -188,28 +285,29 @@ class HttpSourceManager {
     }
   }
 
-  private async searchStandardEbooks(keyword: string): Promise<HttpBook[]> {
+  private async searchStandardEbooks(keyword: string, source: HttpSourceConfig): Promise<HttpBook[]> {
     try {
-      const html = await this.request(`https://standardebooks.org/ebooks?query=${encodeURIComponent(keyword)}`)
+      const base = source.url || 'https://standardebooks.org'
+      const html = await this.request(`${base}/ebooks?query=${encodeURIComponent(keyword)}`, source)
       if (!html) return []
       return Array.from(new DOMParser().parseFromString(html, 'text/html').querySelectorAll('li[typeof="schema:Book"]'))
         .slice(0, 10)
         .map(item => {
           const link = item.querySelector('a')?.getAttribute('href') || ''
           const title = item.querySelector('[property="schema:name"]')?.textContent?.trim() || ''
-          if (!link || !title) return null
+          if (!link || !title || !this.matchExtension(source, 'epub')) return null
           const slug = link.replace('/ebooks/', '')
           return {
             name: title,
             author: item.querySelector('[property="schema:author"]')?.textContent?.trim() || 'Unknown',
-            bookUrl: `https://standardebooks.org${link}`,
-            downloadUrl: `https://standardebooks.org/ebooks/${slug}/downloads/${slug.replace('/', '_')}.epub?source=download`,
-            coverUrl: item.querySelector('img')?.getAttribute('src') ? `https://standardebooks.org${item.querySelector('img')?.getAttribute('src')}` : '',
+            bookUrl: `${base}${link}`,
+            downloadUrl: `${base}/ebooks/${slug}/downloads/${slug.replace('/', '_')}.epub?source=download`,
+            coverUrl: item.querySelector('img')?.getAttribute('src') ? `${base}${item.querySelector('img')?.getAttribute('src')}` : '',
             intro: '',
             extension: 'EPUB',
             language: 'en',
-            sourceName: 'Standard Ebooks',
-            sourceId: 'standardebooks',
+            sourceName: source.name,
+            sourceId: source.id,
           }
         })
         .filter((book): book is HttpBook => !!book)
@@ -218,9 +316,44 @@ class HttpSourceManager {
     }
   }
 
-  private async request(url: string) {
+  private async searchCustom(keyword: string, source: HttpSourceConfig): Promise<HttpBook[]> {
+    try {
+      const searchUrl = (source.searchUrl || '').replace(/\{query\}/g, encodeURIComponent(keyword))
+      if (!searchUrl || !source.selectors?.item || !source.selectors.title || !source.selectors.link) return []
+      const html = await this.request(searchUrl, source)
+      if (!html) return []
+      const doc = new DOMParser().parseFromString(html, 'text/html')
+      const base = source.bookUrlPrefix || source.url || searchUrl
+      return Array.from(doc.querySelectorAll(source.selectors.item))
+        .slice(0, 10)
+        .map(item => {
+          const title = item.querySelector(source.selectors!.title)?.textContent?.trim() || ''
+          const rawLink = item.querySelector(source.selectors!.link)?.getAttribute('href') || ''
+          const bookUrl = toAbsoluteUrl(rawLink, base)
+          const extension = bookUrl.match(/\.(epub|pdf|mobi|azw3)(\?|$)/i)?.[1]?.toLowerCase() || ''
+          if (!title || !bookUrl || !this.matchExtension(source, extension)) return null
+          return {
+            name: title,
+            author: source.selectors?.author ? item.querySelector(source.selectors.author)?.textContent?.trim() || 'Unknown' : 'Unknown',
+            bookUrl,
+            downloadUrl: bookUrl,
+            coverUrl: source.selectors?.cover ? toAbsoluteUrl(item.querySelector(source.selectors.cover)?.getAttribute('src') || '', base) : '',
+            intro: source.selectors?.intro ? item.querySelector(source.selectors.intro)?.textContent?.trim() || '' : '',
+            extension: extension ? extension.toUpperCase() : '',
+            sourceName: source.name,
+            sourceId: source.id,
+          }
+        })
+        .filter((book): book is HttpBook => !!book)
+    } catch {
+      return []
+    }
+  }
+
+  private async request(url: string, source?: HttpSourceConfig) {
+    const target = applyRequestPrefix(url, source?.requestPrefix)
     const res = await fetchSyncPost('/api/network/forwardProxy', {
-      url,
+      url: target,
       method: 'GET',
       contentType: 'text/html',
       headers: [{ name: 'User-Agent', value: 'Mozilla/5.0' }],
@@ -247,4 +380,4 @@ class HttpSourceManager {
 }
 
 export const httpSourceManager = new HttpSourceManager()
-export type { HttpSourceConfig, HttpBook }
+export type { HttpSourceConfig, HttpBook, HttpSourceSelectors, HttpSourceType }

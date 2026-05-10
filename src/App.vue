@@ -12,7 +12,6 @@ import { openTab, showMessage } from 'siyuan'
 import { usePlugin, setOpenSettingHandler, registerCleanup } from '@/main'
 import { useSetting, settingsManager } from '@/composables/useSetting'
 import { useStats } from '@/composables/useStats'
-import { bookSourceManager } from '@/utils/BookSearch'
 import { isMobile } from '@/utils/mobile'
 import Settings from '@/components/Settings.vue'
 import Reader from '@/components/Reader.vue'
@@ -54,7 +53,6 @@ const mountReader = async (el: HTMLElement, props: any) => {
 ;(window as any).sireader = {
   mountReader: async (el: HTMLElement, props: any) => await mountReader(el, props),
   openEpubTab: async (file: File, title?: string) => (await import('@/utils/bookOpen')).openReaderTab(plugin, title || file.name.replace(/\.[^.]+$/, ''), { file }, `${plugin.name}epub_reader`),
-  openOnlineTab: async (bookInfo: any) => (await import('@/utils/bookOpen')).openReaderTab(plugin, bookInfo.name || '在线阅读', { bookInfo }, `${plugin.name}custom_tab_online_reader`)
 }
 
 // 注册标签页
@@ -70,7 +68,7 @@ plugin.addTab({
 })
 
 plugin.addTab({
-  type: 'custom_tab_online_reader',
+  type: 'custom_tab_book_reader',
   async init() {
     const { bookInfo } = this.data
     if (!bookInfo) return this.element.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--b3-theme-error)">加载失败</div>'
@@ -514,7 +512,6 @@ const handleMobileReaderClose = () => {
 }
 
 onMounted(async () => {
-  await bookSourceManager.loadSources()
   window.addEventListener('click', handleEbookLink, true)
   window.addEventListener('stats:toggle', handleStatsToggle as any)
   registerCleanup(() => {

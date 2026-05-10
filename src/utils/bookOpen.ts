@@ -11,7 +11,7 @@ type ReaderTabData = { file?: File; url?: string; blockId?: string | null; bookI
 
 // 查找已打开的阅读器标签页
 export const findOpenedTab = (bookName: string, pluginName: string) => {
-  const type = `${pluginName}custom_tab_online_reader`
+  const type = `${pluginName}custom_tab_book_reader`
   const find = (o: any, id: string): any => o?.id === id ? o : o?.children?.reduce((r: any, c: any) => r || find(c, id), null)
   for (const el of document.querySelectorAll<HTMLElement>('.layout-tab-bar .item[data-id]')) {
     if ((el.getAttribute('data-title') || el.querySelector('.item__text')?.textContent) !== bookName) continue
@@ -101,5 +101,5 @@ export const openOrActivateBook = (plugin: Plugin, book: Book, settings: ReaderS
     onReady?.()
     return
   }
-  openReaderTab(plugin, book.title, { bookInfo: book }, `${plugin.name}custom_tab_online_reader`, settings, onReady)
+  openReaderTab(plugin, book.title, { bookInfo: book }, `${plugin.name}custom_tab_book_reader`, settings, onReady)
 }

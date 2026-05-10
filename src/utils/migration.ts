@@ -1,8 +1,12 @@
 import { putFile, readDir, removeFile } from '@/api'
-import { DB_KEYS, LEGACY_ROOT, getBookFileDataPath, getCoverFileDataPath, getManagedFileExt, loadData, normalizeBookTitle, readFileBytes, readFileText, removeData, saveData, saveManagedFile } from '@/core/bookStore'
+import { DB_KEYS, PUBLIC_ROOT, getBookFileDataPath, getCoverFileDataPath, getManagedFileExt, loadData, normalizeBookTitle, readFileBytes, readFileText, removeData, saveData, saveManagedFile, type BookRecord } from '@/core/bookStore'
 import { getDatabase, getSqlJs } from '@/core/database'
 import { showMessage } from 'siyuan'
 
+export const LEGACY_ROOT = '/data/storage/petal/siyuan-sireader'
+export const OLD_PUBLIC_DATA_ROOT = '/data/public/siyuan-sireader'
+export const OLD_PUBLIC_ROOT = '/public/siyuan-sireader'
+const LEGACY_RECORD_KEY_PREFIX = 'book-record-'
 const OLD_DATA_PATH = LEGACY_ROOT
 const MIGRATION_DONE_KEY = 'migrated.json'
 const BACKUP_ROOT = `${LEGACY_ROOT}-backup`
@@ -21,6 +25,12 @@ const RETRY_DELAYS = [0, 80, 200] as const
 
 const db = async () => getDatabase()
 const emptyResult = () => ({ success: 0, failed: 0, skipped: 0, totalAnnotations: 0 })
+const publicToDataPath = (path = '') => path.startsWith('/public/') ? path.replace('/public/', '/data/public/') : path
+const toPublicPath = (path = '') => path.startsWith('/data/public/') ? path.replace('/data/public/', '/public/') : path
+const toLegacyPath = (path = '') => path.replace(OLD_PUBLIC_ROOT, OLD_PUBLIC_DATA_ROOT).replace(OLD_PUBLIC_DATA_ROOT, LEGACY_ROOT)
+const isLegacyManagedPath = (path = '') => path.startsWith(LEGACY_ROOT) || path.startsWith(OLD_PUBLIC_ROOT) || path.startsWith(OLD_PUBLIC_DATA_ROOT)
+const isManagedPath = (path = '') => path.startsWith(PUBLIC_ROOT) || path.startsWith('/data/public/siyuan-sireader') || isLegacyManagedPath(path)
+const getLegacyRecordKey = (url: string) => `${LEGACY_RECORD_KEY_PREFIX}${Math.abs(url.split('').reduce((value: number, char: string) => (((value << 5) - value) + char.charCodeAt(0)) | 0, 0)).toString(36)}.json`
 
 const sanitize = (name: string) => name.replace(/[<>:"/\\|?*\x00-\x1f[\]{};,]/g, '').replace(/\s+/g, '_').replace(/[._-]+/g, '_').replace(/^[._-]+|[._-]+$/g, '').slice(0, 50) || 'book'
 const getBookUrlHash = (url = '') => Math.abs(url.split('').reduce((value: number, char: string) => (((value << 5) - value) + char.charCodeAt(0)) | 0, 0)).toString(36)
@@ -203,6 +213,40 @@ const findLegacyAssetByTitle = (legacyIndex: Record<string, string>, label: stri
     if (!best || score > best.score) best = { path: fullPath, score }
   })
   return best?.path || ''
+}
+
+// 迁移期兜底：旧路径仍然存在时，搬到当前 public 结构并返回新路径。
+export const migrateManagedPath = async (path = '', fallbackPath?: string) => {
+  if (!path || path.startsWith('asset://')) return path
+  if (!isManagedPath(path)) return path
+  const target = fallbackPath || toPublicPath(path).replace(OLD_PUBLIC_ROOT, PUBLIC_ROOT).replace(OLD_PUBLIC_DATA_ROOT, PUBLIC_ROOT).replace(LEGACY_ROOT, PUBLIC_ROOT)
+  if (path === target || publicToDataPath(path) === publicToDataPath(target)) return target
+  const bytes = await readFileBytes(path)
+  if (!bytes?.byteLength) return target
+  const nextPath = await saveManagedFile(new Blob([bytes]), target, target.split('/').pop())
+  if (path !== nextPath) {
+    try { await removeFile(path.startsWith('/public/') ? publicToDataPath(path) : toLegacyPath(path)) } catch {}
+  }
+  return nextPath
+}
+
+export const removeLegacyBookRecord = async (url: string) => {
+  try { await removeData(getLegacyRecordKey(url)) } catch {}
+}
+
+export const readCompatBookRecord = async (url: string): Promise<BookRecord | null> =>
+  await loadData<BookRecord>(`records/${Math.abs(url.split('').reduce((value: number, char: string) => (((value << 5) - value) + char.charCodeAt(0)) | 0, 0)).toString(36)}.json`)
+  || await loadData<BookRecord>(getLegacyRecordKey(url))
+
+export const writeCompatBookRecord = async (url: string, record: BookRecord) => {
+  const key = `records/${Math.abs(url.split('').reduce((value: number, char: string) => (((value << 5) - value) + char.charCodeAt(0)) | 0, 0)).toString(36)}.json`
+  await saveData(key, record)
+  await removeLegacyBookRecord(url)
+}
+
+export const removeCompatBookRecord = async (url: string) => {
+  const key = `records/${Math.abs(url.split('').reduce((value: number, char: string) => (((value << 5) - value) + char.charCodeAt(0)) | 0, 0)).toString(36)}.json`
+  await Promise.all([removeData(key), removeLegacyBookRecord(url)])
 }
 
 const readLegacyJson = async <T = any>(key: typeof LEGACY_JSON_KEYS[number]): Promise<T | null> => {
@@ -462,7 +506,6 @@ const normalizeLegacyBook = (row: any) => {
     chapter: asNumber(row.chapter || row.durChapterIndex),
     total: asNumber(row.total || row.totalChapterNum),
     pos: parseJson(row.pos, {}),
-    source: parseJson(row.source, {}),
     rating: asNumber(row.rating),
     meta: parseJson(row.meta, {}),
     tags: [] as string[],
@@ -542,7 +585,6 @@ async function migrateBook(bookIndex: any, raw: any) {
   const format = bookIndex.format || data.format || 'epub'
   const progress = bookIndex.epubProgress || data.epubProgress || 0
   const pos: any = {}
-  const source: any = {}
   const meta: any = {}
 
   if (data.epubCfi) pos.cfi = data.epubCfi
@@ -550,16 +592,6 @@ async function migrateBook(bookIndex: any, raw: any) {
   if (data.durChapterPos != null) pos.position = data.durChapterPos
   if (data.durChapterPage != null) pos.page = data.durChapterPage
   if (data.durChapterTitle) pos.chapterTitle = data.durChapterTitle
-
-  if (data.tocUrl) {
-    source.origin = data.origin || 'unknown'
-    source.bookUrl = bookIndex.bookUrl
-    source.tocUrl = data.tocUrl
-    source.latestChapter = data.latestChapterTitle
-    source.latestTime = data.latestChapterTime
-    source.lastCheckTime = data.lastCheckTime
-    source.updateCount = bookIndex.lastCheckCount || 0
-  }
 
   if (data.publisher) meta.publisher = data.publisher
   if (data.published) meta.publishDate = data.published
@@ -598,7 +630,6 @@ async function migrateBook(bookIndex: any, raw: any) {
     chapter: bookIndex.durChapterIndex || data.durChapterIndex || 0,
     total: bookIndex.totalChapterNum || data.totalChapterNum || 0,
     pos,
-    source,
     rating: data.rating || 0,
     meta,
     tags: data.tags || [],

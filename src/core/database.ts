@@ -1,5 +1,6 @@
 import initSqlJs from 'sql.js/dist/sql-asm.js'
-import { cleanupManagedStorage, getBookFileDataPath, getCoverFileDataPath, getManagedFileExt, loadData, migrateManagedPath, readBookRecord, removeBookRecord, saveData, writeBookRecord, type BookRecord } from './bookStore'
+import { cleanupManagedStorage, getBookFileDataPath, getCoverFileDataPath, getManagedFileExt, loadData, saveData, type BookRecord } from './bookStore'
+import { migrateManagedPath, readCompatBookRecord, removeCompatBookRecord, writeCompatBookRecord } from '@/utils/migration'
 
 const BOOK_INDEX_KEY = 'bookshelf.json'
 const SETTINGS_KEY = 'settings.json'
@@ -35,7 +36,6 @@ export interface Book {
   chapter: number
   total: number
   pos: any
-  source: any
   rating: number
   meta: any
   tags: string[]
@@ -44,6 +44,7 @@ export interface Book {
   bindDocName?: string
   autoSync?: boolean
   syncDelete?: boolean
+  annotationCount?: number
 }
 
 export type AnnotationType = 'highlight' | 'note' | 'bookmark' | 'vocab' | 'shape' | 'ink' | 'daily_reading'
@@ -96,7 +97,6 @@ const emptyBook = (book: Partial<Book> & Pick<Book, 'url' | 'title' | 'format' |
   chapter: 0,
   total: 0,
   pos: {},
-  source: {},
   rating: 0,
   meta: {},
   tags: [],
@@ -208,17 +208,6 @@ export class ReaderDatabase {
     getCoverFileDataPath(book.url, getManagedFileExt(book.cover || '', 'jpg'))
 
   private stripBookForIndex(book: Partial<Book> & Pick<Book, 'url' | 'title' | 'format' | 'status'>): Book {
-    const source = book.source && typeof book.source === 'object'
-      ? {
-          origin: (book.source as any).origin || '',
-          bookUrl: (book.source as any).bookUrl || '',
-          tocUrl: (book.source as any).tocUrl || '',
-          latestChapter: (book.source as any).latestChapter || '',
-          latestTime: (book.source as any).latestTime || '',
-          lastCheckTime: Number((book.source as any).lastCheckTime || 0),
-          updateCount: Number((book.source as any).updateCount || 0),
-        }
-      : {}
     return {
       url: book.url,
       title: book.title,
@@ -236,7 +225,6 @@ export class ReaderDatabase {
       chapter: Number(book.chapter || 0),
       total: Number(book.total || 0),
       pos: {},
-      source,
       rating: Number(book.rating || 0),
       meta: {},
       tags: Array.from(new Set(book.tags || [])),
@@ -260,10 +248,10 @@ export class ReaderDatabase {
     record ? { ...book, ...record, tags: book.tags, groups: book.groups } : book
 
   private readBookRecord = async (book: Book) =>
-    await readBookRecord(book.url) || { version: 1, book: { ...book }, annotations: [], updatedAt: Date.now() } as BookRecord
+    await readCompatBookRecord(book.url) || { version: 1, book: { ...book }, annotations: [], updatedAt: Date.now() } as BookRecord
 
   private writeBookRecord = async (book: Book, annotations: Annotation[]) =>
-    await writeBookRecord(book.url, { version: 1, book: { ...book }, annotations, updatedAt: Date.now() })
+    await writeCompatBookRecord(book.url, { version: 1, book: { ...book }, annotations, updatedAt: Date.now() })
 
   private listBooks = (orderBy = 'read DESC') => {
     const books = Object.values(this.books)
@@ -288,7 +276,11 @@ export class ReaderDatabase {
   }
 
   private async hydrateBook(book: Book) {
-    return this.mergeRecordBook(book, (await readBookRecord(book.url))?.book)
+    const record = await readCompatBookRecord(book.url)
+    return {
+      ...this.mergeRecordBook(book, record?.book),
+      annotationCount: record?.annotations?.length || 0,
+    }
   }
 
   private async hydrateBooks(books: Book[]) {
@@ -300,7 +292,7 @@ export class ReaderDatabase {
   }
 
   private async countRecordAnnotations(books: Book[]) {
-    return (await Promise.all(books.map(async book => (await readBookRecord(book.url))?.annotations?.length || 0))).reduce((sum, count) => sum + count, 0)
+    return (await Promise.all(books.map(async book => (await readCompatBookRecord(book.url))?.annotations?.length || 0))).reduce((sum, count) => sum + count, 0)
   }
 
   private getCachedAnnotationCount = () => Number(this.readRawSetting(ANNOTATION_COUNT_KEY) || 0)
@@ -349,7 +341,7 @@ export class ReaderDatabase {
   async saveBook(book: Partial<Book> & Pick<Book, 'url' | 'title' | 'format' | 'status'>) {
     await this.init()
     const current = await this.getBook(book.url)
-    const record = await readBookRecord(book.url)
+    const record = await readCompatBookRecord(book.url)
     const baseBook = { ...(current || {}), ...(record?.book || {}), ...book } as Partial<Book> & Pick<Book, 'url' | 'title' | 'format' | 'status'>
     const path = await migrateManagedPath(baseBook.path || '', this.getBookAssetPath(baseBook))
     const cover = await migrateManagedPath(baseBook.cover || '', this.getCoverAssetPath(baseBook))
@@ -369,12 +361,12 @@ export class ReaderDatabase {
 
   async deleteBook(url: string) {
     await this.init()
-    const annotationCount = (await readBookRecord(url))?.annotations?.length || 0
+    const annotationCount = (await readCompatBookRecord(url))?.annotations?.length || 0
     delete this.books[url]
     Object.values(this.dailyReading).forEach(items => delete items[url])
     this.markDirty('books')
     this.markDirty('daily')
-    await removeBookRecord(url)
+    await removeCompatBookRecord(url)
     this.bumpCachedAnnotationCount(-annotationCount)
     await this.saveNow()
   }
@@ -389,7 +381,7 @@ export class ReaderDatabase {
 
   async getAnnotations(book: string) {
     await this.init()
-    return (await readBookRecord(book))?.annotations || []
+    return (await readCompatBookRecord(book))?.annotations || []
   }
 
   async saveAnnotation(annotation: Partial<Annotation> & Pick<Annotation, 'id' | 'book' | 'type'>) {
@@ -438,7 +430,7 @@ export class ReaderDatabase {
   async deleteAnnotation(id: string) {
     await this.init()
     for (const book of this.listBooks('added DESC')) {
-      const record = await readBookRecord(book.url)
+      const record = await readCompatBookRecord(book.url)
       if (!record?.annotations?.some(item => item.id === id)) continue
       await this.writeBookRecord(record.book ? { ...book, ...record.book } : book, record.annotations.filter(item => item.id !== id))
       this.bumpCachedAnnotationCount(-1)
@@ -513,7 +505,6 @@ export class ReaderDatabase {
     rating?: number
     formats?: string[]
     tags?: string[]
-    hasUpdate?: boolean
     sortBy?: string
     reverse?: boolean
   } = {}) {
@@ -532,8 +523,7 @@ export class ReaderDatabase {
       (!opt.status?.length || opt.status.includes(book.status)) &&
       (!opt.rating || (book.rating || 0) >= opt.rating) &&
       (!opt.formats?.length || opt.formats.includes(book.format)) &&
-      (!opt.tags?.length || opt.tags.some(tag => (book.tags || []).includes(tag))) &&
-      (!opt.hasUpdate || Number(book.source?.updateCount || 0) > 0),
+      (!opt.tags?.length || opt.tags.some(tag => (book.tags || []).includes(tag))),
     )
     books = books.sort((a, b) => {
       const av = column === 'title' || column === 'author' ? String(a[column] || '').toLowerCase() : Number(a[column] || 0)
@@ -548,18 +538,16 @@ export class ReaderDatabase {
     await this.init()
     const books = Object.values(this.books)
     const byStatus: Record<string, number> = { unread: 0, reading: 0, finished: 0 }
-    const byFormat: Record<string, number> = { epub: 0, pdf: 0, mobi: 0, azw3: 0, online: 0 }
+    const byFormat: Record<string, number> = { epub: 0, pdf: 0, mobi: 0, azw3: 0, txt: 0 }
     const byRating: Record<number, number> = {}
-    let withUpdate = 0
     books.forEach(book => {
       byStatus[book.status] = (byStatus[book.status] || 0) + 1
       byFormat[book.format] = (byFormat[book.format] || 0) + 1
       if ((book.rating || 0) > 0) byRating[book.rating] = (byRating[book.rating] || 0) + 1
-      if (Number(book.source?.updateCount || 0) > 0) withUpdate++
     })
     const cached = this.readRawSetting(ANNOTATION_COUNT_KEY)
     const annotationCount = cached == null ? await this.rebuildAnnotationCount() : Number(cached || 0)
-    return { byStatus, byFormat, byRating, withUpdate, annotationCount }
+    return { byStatus, byFormat, byRating, annotationCount }
   }
 
   async getTodayReading() {
@@ -608,10 +596,6 @@ export class ReaderDatabase {
     this.markDirty('books')
   }
 
-  async getGroupPreviewBooks(gid: string, limit = 4) {
-    await this.init()
-    return this.hydrateBooks(this.listBooks('read DESC').filter(book => (book.groups || []).includes(gid)).slice(0, limit))
-  }
 }
 
 let instance: ReaderDatabase | null = null

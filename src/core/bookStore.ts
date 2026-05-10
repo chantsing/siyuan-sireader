@@ -1,9 +1,6 @@
 import { putFile, readDir, removeFile } from '@/api'
 import { usePlugin } from '@/main'
 
-export const LEGACY_ROOT = '/data/storage/petal/siyuan-sireader'
-export const OLD_PUBLIC_DATA_ROOT = '/data/public/siyuan-sireader'
-export const OLD_PUBLIC_ROOT = '/public/siyuan-sireader'
 export const PUBLIC_ROOT = '/public/siyuan-sireader'
 export const PUBLIC_DATA_ROOT = '/data/public/siyuan-sireader'
 export const DB_KEYS = ['reader.db', 'reader.last-good.db'] as const
@@ -11,20 +8,9 @@ export const DB_KEYS = ['reader.db', 'reader.last-good.db'] as const
 const BOOKS_DIR = 'books'
 const COVERS_DIR = 'covers'
 const RECORDS_DIR = 'records'
-const LEGACY_RECORD_KEY_PREFIX = 'book-record-'
-const getPlugin = () => usePlugin()
+const SUPPORTED_BOOK_EXTS = ['epub', 'pdf', 'mobi', 'azw3', 'azw', 'fb2', 'cbz', 'txt'] as const
 const decoder = new TextDecoder()
-const isApiErrorPayload = (bytes?: Uint8Array | null) => {
-  if (!bytes?.byteLength || bytes.byteLength > 512) return false
-  const text = decoder.decode(bytes).trim()
-  if (!text.startsWith('{') || !text.includes('"code"')) return false
-  try {
-    const payload = JSON.parse(text)
-    return typeof payload?.code === 'number' && payload.code !== 0
-  } catch {
-    return false
-  }
-}
+const getPlugin = () => usePlugin()
 
 export interface BookRecord {
   version: 1
@@ -46,14 +32,23 @@ const hash = (str: string) => {
 }
 
 const publicToDataPath = (path = '') => path.startsWith('/public/') ? path.replace('/public/', '/data/public/') : path
-const toPublicPath = (path = '') => path.startsWith('/data/public/') ? path.replace('/data/public/', '/public/') : path
-const toLegacyPath = (path = '') => path.replace(OLD_PUBLIC_ROOT, OLD_PUBLIC_DATA_ROOT).replace(OLD_PUBLIC_DATA_ROOT, LEGACY_ROOT)
 const isRemotePath = (path = '') => /^(https?:\/\/|file:\/\/)/i.test(path)
 const isPublicPath = (path = '') => path.startsWith('/public/') || path.startsWith('/data/public/')
-const isLegacyManagedPath = (path = '') => path.startsWith(LEGACY_ROOT) || path.startsWith(OLD_PUBLIC_ROOT) || path.startsWith(OLD_PUBLIC_DATA_ROOT)
-const isManagedPath = (path = '') => path.startsWith(PUBLIC_ROOT) || path.startsWith(PUBLIC_DATA_ROOT) || isLegacyManagedPath(path)
 const getRecordKey = (url: string) => `${RECORDS_DIR}/${hash(url)}.json`
-const getLegacyRecordKey = (url: string) => `${LEGACY_RECORD_KEY_PREFIX}${hash(url)}.json`
+const req = (id: string) => { try { return (window as any).require?.(id) } catch { return null } }
+
+const isApiErrorPayload = (bytes?: Uint8Array | null) => {
+  if (!bytes?.byteLength || bytes.byteLength > 512) return false
+  const text = decoder.decode(bytes).trim()
+  if (!text.startsWith('{') || !text.includes('"code"')) return false
+  try {
+    const payload = JSON.parse(text)
+    return typeof payload?.code === 'number' && payload.code !== 0
+  } catch {
+    return false
+  }
+}
+
 const parseStoredValue = <T = any>(value: any): T | null => {
   if (value == null || value === '') return null
   if (typeof value === 'string') {
@@ -72,7 +67,19 @@ const readFileResponse = async (path: string) => {
   }).catch(() => null)
 }
 
+const putPublicFile = async (blob: Blob, publicPath: string, name?: string) => {
+  const dataPath = publicToDataPath(publicPath)
+  const dirPath = dataPath.split('/').slice(0, -1).join('/')
+  const fileName = name || publicPath.split('/').pop() || 'file'
+  const file = new File([blob], fileName, { type: blob.type || 'application/octet-stream' })
+  try { await putFile(dirPath, true, new File([], '')) } catch {}
+  await putFile(dataPath, false, file)
+  return publicPath
+}
+
 export const readDirEntries = async (path: string) => (await readDir(path).catch(() => ({ data: [] as any[] })))?.data || []
+export const isSupportedBookFile = (name = '') => new RegExp(`\\.(${SUPPORTED_BOOK_EXTS.join('|')})$`, 'i').test(name)
+export const filterSupportedBookFiles = (files: File[]) => files.filter(file => isSupportedBookFile(file.name))
 
 export const readFileText = async (path: string) => {
   const res = await readFileResponse(path)
@@ -100,7 +107,7 @@ export const readFileBytes = async (path: string) => {
   }
   if (path.startsWith('file://')) return null
   const res = await readFileResponse(path)
-  if (!res.ok) return null
+  if (!res?.ok) return null
   const bytes = new Uint8Array(await res.arrayBuffer())
   return isApiErrorPayload(bytes) ? null : bytes
 }
@@ -110,14 +117,44 @@ export const readManagedFile = async (path: string, fallbackName?: string) => {
   return blob ? new File([blob], fallbackName || path.split(/[/\\]/).pop() || 'file', { type: blob.type || 'application/octet-stream' }) : null
 }
 
-const putPublicFile = async (blob: Blob, publicPath: string, name?: string) => {
-  const dataPath = publicToDataPath(publicPath)
-  const dirPath = dataPath.split('/').slice(0, -1).join('/')
-  const fileName = name || publicPath.split('/').pop() || 'file'
-  const file = new File([blob], fileName, { type: blob.type || 'application/octet-stream' })
-  try { await putFile(dirPath, true, new File([], '')) } catch {}
-  await putFile(dataPath, false, file)
-  return publicPath
+export const normalizeNativePath = (value = '') => {
+  if (!value) return ''
+  const path = req('path')
+  const raw = decodeURI(`${value}`).replace(/^file:\/+/, path?.sep === '\\' ? '' : '/')
+  return path ? path.normalize(raw) : raw
+}
+
+export const createLocalFileRef = (path: string, size: number, lastModified: number) => {
+  const normalized = normalizeNativePath(path)
+  return {
+    name: normalized.split(/[\\/]/).pop() || 'file',
+    size,
+    type: '',
+    lastModified,
+    path: normalized,
+  } as File
+}
+
+export const materializeNativeFile = (file: File): File => {
+  const path = normalizeNativePath((file as any)?.path || (file as any)?._path || '')
+  if (!path) return file
+  const cached = (file as any)._realFile
+  if (cached) return cached
+  const fs = req('fs')
+  if (!fs) return file
+  const realFile = new File([fs.readFileSync(path)], file.name || path.split(/[\\/]/).pop() || 'file', {
+    type: file.type || '',
+    lastModified: file.lastModified || Date.now(),
+  }) as File & { path?: string }
+  Object.defineProperty(realFile, 'path', { value: path })
+  ;(file as any)._realFile = realFile
+  return realFile
+}
+
+export const toFileUrl = (value: string | File) => {
+  const path = normalizeNativePath(typeof value === 'string' ? value : ((value as any)?.path || (value as any)?._path || ''))
+  if (!path) return ''
+  return path.startsWith('/') ? `file://${encodeURI(path)}` : `file:///${path.replace(/\\/g, '/').replace(/^\/+/, '')}`
 }
 
 export const getBookFileName = (url: string, ext: string) => `${hash(url)}.${ext}`
@@ -128,6 +165,7 @@ export const getManagedFileExt = (path = '', fallback = 'bin') => {
   return ext && /^[a-z0-9]+$/.test(ext) ? ext : fallback
 }
 export const getCoverFileDataPath = (url: string, ext = 'jpg') => `${PUBLIC_ROOT}/${COVERS_DIR}/${getBookFileName(url, ext)}`
+
 export const normalizeBookTitle = (title = '') => {
   const trimmed = title.trim()
   if (!trimmed) return ''
@@ -153,45 +191,20 @@ export const removeData = async (key: string) => {
 
 export const saveManagedFile = async (blob: Blob, path: string, name?: string) => putPublicFile(blob, path, name)
 
-export const migrateManagedPath = async (path = '', fallbackPath?: string) => {
-  if (!path || path.startsWith('asset://')) return path
-  if (!isManagedPath(path)) return path
-  const bytes = await readFileBytes(path)
-  const target = fallbackPath || toPublicPath(path).replace(OLD_PUBLIC_ROOT, PUBLIC_ROOT).replace(OLD_PUBLIC_DATA_ROOT, PUBLIC_ROOT).replace(LEGACY_ROOT, PUBLIC_ROOT)
-  if (path === target || publicToDataPath(path) === publicToDataPath(target)) return target
-  if (!bytes?.byteLength) {
-    return target
-  }
-  const nextPath = await saveManagedFile(new Blob([bytes]), target, target.split('/').pop())
-  if (path !== nextPath) {
-    try { await removeFile(path.startsWith('/public/') ? publicToDataPath(path) : toLegacyPath(path)) } catch {}
-  }
-  return nextPath
-}
-
-export const readBookRecord = async (url: string): Promise<BookRecord | null> => {
-  const key = getRecordKey(url)
-  return await loadData<BookRecord>(key) || await loadData<BookRecord>(getLegacyRecordKey(url))
-}
-export const writeBookRecord = async (url: string, record: BookRecord) => {
-  const key = getRecordKey(url)
-  await saveData(key, record)
-  await removeData(getLegacyRecordKey(url))
-}
-export const removeBookRecord = async (url: string) => {
-  await Promise.all([removeData(getRecordKey(url)), removeData(getLegacyRecordKey(url))])
-}
+export const readBookRecord = async (url: string): Promise<BookRecord | null> => loadData<BookRecord>(getRecordKey(url))
+export const writeBookRecord = async (url: string, record: BookRecord) => saveData(getRecordKey(url), record)
+export const removeBookRecord = async (url: string) => removeData(getRecordKey(url))
 
 export const removeManagedFile = async (path = '') => {
   if (!path || path.startsWith('asset://') || isRemotePath(path)) return
-  try { await removeFile(isPublicPath(path) ? publicToDataPath(path) : toLegacyPath(path)) } catch {}
+  try { await removeFile(isPublicPath(path) ? publicToDataPath(path) : path) } catch {}
 }
 
 export const cleanupManagedStorage = async (books: StoredBookRef[]) => {
   const keep = new Set(
     books
       .flatMap(book => [book.path || '', book.cover || ''])
-      .filter(path => path.startsWith('/public/siyuan-sireader/'))
+      .filter(path => path.startsWith(PUBLIC_ROOT))
       .map(publicToDataPath),
   )
   for (const dir of [`${PUBLIC_DATA_ROOT}/${BOOKS_DIR}`, `${PUBLIC_DATA_ROOT}/${COVERS_DIR}`]) {
@@ -200,6 +213,55 @@ export const cleanupManagedStorage = async (books: StoredBookRef[]) => {
       if (!file.isDir && !keep.has(path)) try { await removeFile(path) } catch {}
     }
   }
+}
+
+export const saveBookFile = async (file: File, url: string) => {
+  const ext = file.name.split('.').pop() || 'bin'
+  return saveManagedFile(file, getBookFileDataPath(url, ext))
+}
+
+export const saveCoverFile = async (blob: Blob, url: string) => {
+  const ext = getManagedFileExt(blob.type.split('/').pop() || '', 'jpg')
+  return saveManagedFile(blob, getCoverFileDataPath(url, ext))
+}
+
+export const saveOptionalCover = async (blob: Blob | undefined, url: string) => blob ? saveCoverFile(blob, url) : undefined
+
+// 统一读取入口，避免上层重复判断 http / file / public / data 路径。
+export const loadBookFile = async (path: string): Promise<File> => {
+  if (path.startsWith('http://') || path.startsWith('https://')) {
+    const res = await fetch(path)
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+    return new File([await res.arrayBuffer()], path.split('/').pop()?.split('?')[0] || 'book', {
+      type: res.headers.get('content-type') || 'application/octet-stream',
+    })
+  }
+  if (path.startsWith('file://')) {
+    const filePath = decodeURI(path.substring(7)).replace(/^\/([a-zA-Z]:[\\/])/, '$1')
+    const fs = req('fs')
+    if (fs) return new File([fs.readFileSync(filePath)], filePath.split(/[/\\]/).pop() || 'book')
+    throw new Error('本地文件仅支持桌面端')
+  }
+  const publicPath = path.startsWith('/assets/') || path.startsWith('/public/')
+    ? path
+    : path.startsWith('assets/') || path.startsWith('public/')
+      ? `/${path}`
+      : ''
+  if (publicPath) {
+    if (publicPath.startsWith(PUBLIC_ROOT)) {
+      const file = await readManagedFile(publicPath, path.split(/[/\\]/).pop() || 'book')
+      if (!file) throw new Error('文件加载失败')
+      return file
+    }
+    const res = await fetch(publicPath)
+    if (!res.ok) throw new Error('文件加载失败')
+    return new File([await res.arrayBuffer()], path.split(/[/\\]/).pop() || 'book', {
+      type: res.headers.get('content-type') || 'application/octet-stream',
+    })
+  }
+  const blob = await readFileBlob(path)
+  if (!blob) throw new Error('文件加载失败')
+  return new File([blob], path.split(/[/\\]/).pop() || 'book', { type: blob.type || 'application/octet-stream' })
 }
 
 export const clearStoredPluginData = async (books: StoredBookRef[] = []) => {

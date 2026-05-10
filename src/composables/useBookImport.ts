@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import { bookshelfManager } from '@/core/bookshelf'
+import { createLocalFileRef, filterSupportedBookFiles, materializeNativeFile, toFileUrl } from '@/core/bookStore'
 
 export interface BookImportItem {
   id: string
@@ -20,42 +21,31 @@ const asLines = (input: string) => input.split(/\r?\n/).map(line => line.trim())
 const req = (id: string) => { try { return (window as any).require?.(id) } catch { return null } }
 const getElectron = () => req('electron')?.remote || req('@electron/remote')
 const getFs = () => req('fs')
-const getPath = () => req('path')
 const pickByInput = () => new Promise<File[]>((resolve) => {
-  const input = Object.assign(document.createElement('input'), { type: 'file', multiple: true, accept: '.epub,.pdf,.mobi,.azw3,.azw,.fb2,.cbz,.txt' }) as HTMLInputElement
+  const input = Object.assign(document.createElement('input'), {
+    type: 'file',
+    multiple: true,
+    accept: '.epub,.pdf,.mobi,.azw3,.azw,.fb2,.cbz,.txt',
+  }) as HTMLInputElement
   input.onchange = () => resolve(Array.from(input.files || []))
   input.click()
 })
-const normalizeNativePath = (value = '') => {
-  if (!value) return ''
-  const path = getPath()
-  const raw = decodeURI(`${value}`).replace(/^file:\/+/, path?.sep === '\\' ? '' : '/')
-  return path ? path.normalize(raw) : raw
-}
-const toLocalFile = (path: string, size: number, lastModified: number) => ((path = normalizeNativePath(path)), { name: path.split(/[\\/]/).pop() || 'file', size, type: '', lastModified, path } as File)
-const materializeFile = (file: File): File => {
-  const path = normalizeNativePath((file as any)?.path || (file as any)?._path || '')
-  if (!path) return file
-  const cached = (file as any)._realFile
-  if (cached) return cached
-  const fs = getFs()
-  if (!fs) return file
-  const realFile = new File([fs.readFileSync(path)], file.name || path.split(/[\\/]/).pop() || 'file', { type: file.type || '', lastModified: file.lastModified || Date.now() }) as File & { path?: string }
-  Object.defineProperty(realFile, 'path', { value: path })
-  ;(file as any)._realFile = realFile
-  return realFile
-}
-const toFileUrl = (file: File) => {
-  const path = normalizeNativePath((file as any)?.path || (file as any)?._path || '')
-  if (!path) return ''
-  return path.startsWith('/') ? `file://${encodeURI(path)}` : `file:///${path.replace(/\\/g, '/').replace(/^\/+/, '')}`
-}
 const chunked = async <T>(items: T[], limit: number, task: (item: T, index: number) => Promise<void>) => {
   for (let i = 0; i < items.length; i += limit) await Promise.all(items.slice(i, i + limit).map(task))
 }
 const revokeCover = (item: BookImportItem) => item.preview?.cover?.startsWith?.('blob:') && URL.revokeObjectURL(item.preview.cover)
-const getImportFile = (item: BookImportItem) => materializeFile(item.source as File)
-const createItem = (mode: BookImportItem['mode'], source: string | File, label: string, linkSource: string): BookImportItem => ({ id: nextId(), mode, source, linkSource, label, selected: true, loading: true, error: '', preview: null })
+const getImportFile = (item: BookImportItem) => materializeNativeFile(item.source as File)
+const createItem = (mode: BookImportItem['mode'], source: string | File, label: string, linkSource: string): BookImportItem => ({
+  id: nextId(),
+  mode,
+  source,
+  linkSource,
+  label,
+  selected: true,
+  loading: true,
+  error: '',
+  preview: null,
+})
 
 export const useBookImport = () => {
   const items = ref<BookImportItem[]>([])
@@ -73,6 +63,7 @@ export const useBookImport = () => {
     progress.value = 0
   }
 
+  // 统一解析队列，负责预览、错误和进度。
   const parseItems = async (next: BookImportItem[], worker: (item: BookImportItem) => Promise<any>, concurrency = 3) => {
     parsing.value = true
     progress.value = 0
@@ -107,26 +98,38 @@ export const useBookImport = () => {
   }
 
   const parseFiles = async (files: File[]) => {
-    if (!files.length) return
+    const validFiles = filterSupportedBookFiles(files)
+    if (!validFiles.length) return
     await parseItems(
-      files.map(file => createItem('file', file, file.name, toFileUrl(file))),
+      validFiles.map(file => createItem('file', file, file.name, toFileUrl(file))),
       item => bookshelfManager.previewLocalBook(getImportFile(item)),
-      files.length > 8 ? 4 : 2,
+      validFiles.length > 8 ? 4 : 2,
     )
   }
 
   const selectFiles = async () => {
     const electron = getElectron()
-    if (!electron) return await pickByInput()
+    if (!electron) return pickByInput()
     const fs = getFs()
-    if (!fs) return await pickByInput()
-    const result = await electron.dialog.showOpenDialog({ properties: ['openFile', 'multiSelections'], filters: [{ name: 'Books', extensions: ['epub', 'pdf', 'mobi', 'azw3', 'azw', 'fb2', 'cbz', 'txt'] }] })
+    if (!fs) return pickByInput()
+    const result = await electron.dialog.showOpenDialog({
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'Books', extensions: ['epub', 'pdf', 'mobi', 'azw3', 'azw', 'fb2', 'cbz', 'txt'] }],
+    })
     if (result.canceled || !result.filePaths.length) return []
     return result.filePaths.map((path: string) => {
       const stats = fs.statSync(path)
-      return toLocalFile(path, stats.size, stats.mtimeMs)
+      return createLocalFileRef(path, stats.size, stats.mtimeMs)
     })
   }
+
+  const pickAndParseFiles = async () => {
+    const files = await selectFiles()
+    if (files.length) await parseFiles(files)
+    return files
+  }
+
+  const parseDraftUrls = () => parseUrls()
 
   const importSelected = async (mode: ImportMode = 'file') => {
     const selected = items.value.filter(item => item.selected && !item.loading && !item.error)
@@ -139,6 +142,7 @@ export const useBookImport = () => {
       file: (item: BookImportItem) => bookshelfManager.addLocalBook(getImportFile(item), item.preview),
       link: (item: BookImportItem) => bookshelfManager.addLocalLinkBook(getImportFile(item), item.preview),
     } satisfies Record<ImportMode, (item: BookImportItem) => Promise<void>>
+
     await chunked(selected, concurrency, async item => {
       try {
         if (item.mode === 'url') await bookshelfManager.addUrlBook(item.linkSource, undefined, undefined, item.preview)
@@ -149,8 +153,16 @@ export const useBookImport = () => {
         failed++
       }
     })
+
     importing.value = false
     return { success, failed }
+  }
+
+  // 拖拽导入直接入库，不经过预览列表。
+  const importFiles = async (files: File[]) => {
+    const validFiles = filterSupportedBookFiles(files)
+    if (!validFiles.length) return { success: 0, failed: 0 }
+    return bookshelfManager.uploadBooks(validFiles)
   }
 
   const selectedCount = computed(() => items.value.filter(item => item.selected && !item.error).length)
@@ -158,8 +170,23 @@ export const useBookImport = () => {
   const hasItems = computed(() => !!items.value.length)
   const allSelected = computed({
     get: () => !!items.value.length && items.value.every(item => item.error || item.selected),
-    set: (value: boolean) => { items.value.forEach(item => { if (!item.error) item.selected = value }) }
+    set: (value: boolean) => { items.value.forEach(item => { if (!item.error) item.selected = value }) },
   })
 
-  return { items, draft, parsing, importing, progress, hasItems, selectedCount, linkSelectedCount, allSelected, reset, parseUrls, parseFiles, selectFiles, importSelected }
+  return {
+    items,
+    draft,
+    parsing,
+    importing,
+    progress,
+    hasItems,
+    selectedCount,
+    linkSelectedCount,
+    allSelected,
+    reset,
+    pickAndParseFiles,
+    parseDraftUrls,
+    importSelected,
+    importFiles,
+  }
 }

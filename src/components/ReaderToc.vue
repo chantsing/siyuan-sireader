@@ -1,54 +1,29 @@
-<template>
-  <div class="sr-toc" @click="showFilterMenu=false">
-    <!-- 工具栏 -->
-    <div class="sr-toolbar">
-      <input v-model="keyword" :placeholder="placeholders[mode]">
-      <div v-if="mode==='mark'" class="sr-select">
-        <button class="b3-tooltips b3-tooltips__sw" @click.stop="showFilterMenu=!showFilterMenu" :aria-label="filterLabel">
-          <svg><use xlink:href="#lucide-sliders-horizontal"/></svg>
-        </button>
-        <Transition name="menu">
-          <div v-if="showFilterMenu" class="sr-menu" @click.stop>
-            <div class="sr-menu-section">{{ props.i18n?.color||'颜色' }}</div>
-            <div v-for="c in filterOpts.colors" :key="c.value" :class="['sr-menu-item',{active:filter.color===c.value}]" @click="filter.color=c.value">
-              <span v-if="c.bg" class="dot" :style="{background:c.bg}"></span>{{ c.label }}
-            </div>
-            <div class="sr-menu-divider"></div>
-            <div class="sr-menu-section">{{ props.i18n?.sort||'排序' }}</div>
-            <div v-for="s in filterOpts.sorts" :key="s.value" :class="['sr-menu-item',{active:filter.sort===s.value}]" @click="filter.sort=s.value">{{ s.label }}</div>
+﻿<template>
+  <DockShell
+    class="sr-toc"
+    body-class="sr-body-pad-8"
+    v-model:search-value="keyword"
+    :search-placeholder="searchPlaceholder[mode]"
+    :toolbar-menu-action="toolbarMenuAction"
+    :toolbar-actions="toolbarActions"
+    toolbar-tooltip-dir="sw"
+    @click="showFilterMenu=false"
+    @toolbar-action="handleToolbarAction"
+  >
+    <template #toolbar-menu>
+      <Transition name="menu">
+        <div v-if="showFilterMenu" class="sr-toolbar-popover" @click.stop>
+          <div class="sr-toolbar-popover-section">{{ props.i18n?.color||'颜色' }}</div>
+          <div v-for="c in filterOpts.colors" :key="c.value" :class="['sr-toolbar-popover-item',{active:filter.color===c.value}]" @click="filter.color=c.value">
+            <span v-if="c.bg" class="dot" :style="{background:c.bg}"></span>{{ c.label }}
           </div>
-        </Transition>
-      </div>
-      <button v-if="mode==='toc'&&isPdfMode" class="b3-tooltips b3-tooltips__sw" @click="showThumbnail=!showThumbnail" :aria-label="showThumbnail?'目录':'缩略图'">
-        <svg><use :xlink:href="showThumbnail?'#lucide-scroll-text':'#lucide-panels-top-left'"/></svg>
-      </button>
-      <button v-if="mode==='toc'&&!showThumbnail" class="b3-tooltips b3-tooltips__sw" @click="toggleTocTree()" :aria-label="tocAllExpanded?'折叠':'展开'">
-        <svg><use :xlink:href="tocAllExpanded?'#lucide-panel-top-close':'#lucide-panel-top-open'"/></svg>
-      </button>
-      <button v-if="mode==='mark'&&isGroupedMarkMode" class="b3-tooltips b3-tooltips__sw" @click="toggleMarkGroups()" :aria-label="markAllExpanded?'折叠':'展开'">
-        <svg><use :xlink:href="markAllExpanded?'#lucide-panel-top-close':'#lucide-panel-top-open'"/></svg>
-      </button>
-      <button v-if="mode==='deck'" class="b3-tooltips b3-tooltips__sw" @click="deckTab='cards'" :class="{active:deckTab==='cards'}" aria-label="卡片">
-        <svg><use xlink:href="#lucide-square-star"/></svg>
-      </button>
-      <button v-if="mode==='deck'" class="b3-tooltips b3-tooltips__sw" @click="deckTab='packs'" :class="{active:deckTab==='packs'}" aria-label="卡组">
-        <svg><use xlink:href="#lucide-shopping-bag"/></svg>
-      </button>
-      <button v-if="mode==='deck'" class="b3-tooltips b3-tooltips__sw" @click="deckTab='review'" :class="{active:deckTab==='review'}" aria-label="闪卡">
-        <svg><use xlink:href="#lucide-zap"/></svg>
-      </button>
-      <button v-if="mode==='deck'" class="b3-tooltips b3-tooltips__sw" @click="deckTab='stats'" :class="{active:deckTab==='stats'}" aria-label="统计">
-        <svg><use xlink:href="#lucide-chart-pie"/></svg>
-      </button>
-      <button v-if="mode==='deck'" class="b3-tooltips b3-tooltips__sw" @click="deckTab='settings'" :class="{active:deckTab==='settings'}" aria-label="设置">
-        <svg><use xlink:href="#lucide-settings-2"/></svg>
-      </button>
-      <button v-if="mode==='bookmark'||mode==='mark'||mode==='toc'" class="b3-tooltips b3-tooltips__sw" @click="isReverse=!isReverse" :aria-label="isReverse?'倒序':'正序'">
-        <svg><use :xlink:href="isReverse?'#lucide-arrow-up-1-0':'#lucide-arrow-down-0-1'"/></svg>
-      </button>
-    </div>
+          <div class="sr-toolbar-popover-divider"></div>
+          <div class="sr-toolbar-popover-section">{{ props.i18n?.sort||'排序' }}</div>
+          <div v-for="s in filterOpts.sorts" :key="s.value" :class="['sr-toolbar-popover-item',{active:filter.sort===s.value}]" @click="filter.sort=s.value">{{ s.label }}</div>
+        </div>
+      </Transition>
+    </template>
 
-    <!-- 内容区 -->
     <div ref="contentRef" class="sr-content">
       <!-- 目录 -->
       <div v-show="mode==='toc'&&!showThumbnail" ref="tocRef"></div>
@@ -175,13 +150,14 @@
         <DeckHub v-else-if="mode==='deck'" key="deck" :keyword="keyword" :activeTab="deckTab" @update:activeTab="deckTab=$event"/>
       </Transition>
     </div>
-  </div>
+  </DockShell>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { showMessage } from 'siyuan'
 import DeckHub from './deck/DeckHub.vue'
+import DockShell from './ui/DockShell.vue'
 import { COLORS, STYLES, getColorMap, formatTime } from '@/core/MarkManager'
 import { useReaderState } from '@/core/epub'
 import { jump } from '@/utils/jump'
@@ -215,9 +191,18 @@ const getEditColorOptions=(isShape:boolean)=>isShape?shapeColors.map(color=>({ke
 
 // ===== 常量 =====
 const colors=getColorMap()
-const placeholders={toc:'搜索目录...',bookmark:'搜索书签...',mark:'搜索标注和笔记...',deck:'搜索 · 卡组: 标签: 状态: 属性:'}
+const searchPlaceholder={toc:'搜索目录...',bookmark:'搜索书签...',mark:'搜索标注和笔记...',deck:'搜索 · 卡组: 标签: 状态: 属性:'}
+const deckActions = [['cards', '#lucide-square-star', '卡片'], ['packs', '#lucide-shopping-bag', '卡组'], ['review', '#lucide-zap', '闪卡'], ['stats', '#lucide-chart-pie', '统计'], ['settings', '#lucide-settings-2', '设置']] as const
 
 // ===== Computed =====
+const toolbarMenuAction=computed(()=>props.mode==='mark'?{ id: 'filter', icon: '#lucide-sliders-horizontal', label: filterLabel.value, tooltipDir: 'sw' }:null)
+const toolbarActions=computed(()=>[
+  { id: 'thumbnail', icon: showThumbnail.value ? '#lucide-scroll-text' : '#lucide-panels-top-left', label: showThumbnail.value ? '目录' : '缩略图', show: props.mode === 'toc' && isPdfMode.value },
+  { id: 'toc-expand', icon: tocAllExpanded.value ? '#lucide-panel-top-close' : '#lucide-panel-top-open', label: tocAllExpanded.value ? '折叠' : '展开', show: props.mode === 'toc' && !showThumbnail.value },
+  { id: 'mark-expand', icon: markAllExpanded.value ? '#lucide-panel-top-close' : '#lucide-panel-top-open', label: markAllExpanded.value ? '折叠' : '展开', show: props.mode === 'mark' && isGroupedMarkMode.value },
+  ...deckActions.map(([id, icon, label]) => ({ id, icon, label, active: deckTab.value === id, show: props.mode === 'deck' })),
+  { id: 'reverse', icon: isReverse.value ? '#lucide-arrow-up-1-0' : '#lucide-arrow-down-0-1', label: isReverse.value ? '倒序' : '正序', show: ['bookmark', 'mark', 'toc'].includes(props.mode) },
+])
 const filterOpts=computed(()=>({
   colors:[{label:props.i18n?.all||'全部',value:''},...COLORS.map(c=>({label:c.name,value:c.color,bg:c.bg}))],
   sorts:[{label:props.i18n?.sortTime||'时间',value:'time'},{label:props.i18n?.sortDate||'日期',value:'date'},{label:props.i18n?.sortChapter||'章节',value:'chapter'},{label:props.i18n?.sortPage||'页码',value:'page'},{label:props.i18n?.sortCustom||'自定义',value:'custom'}]
@@ -286,7 +271,7 @@ const markGroupKeys=computed(()=>isGroupedMarkMode.value?list.value.map((item:an
 const isCollapsed=(key:string)=>!!collapsed.value[key]
 const getMarkItems=(item:any)=>item?.isGroup?(isCollapsed(item.key)?[]:item.items):[item]
 const markAllExpanded=computed(()=>!!markGroupKeys.value.length&&!markGroupKeys.value.some(isCollapsed))
-const emptyText=computed(()=>`${keyword.value?props.i18n?.notFound||'未找到':props.i18n?.empty||'暂无'}${placeholders[props.mode].replace(/搜索|\.\.\./g,'')}`)
+const emptyText=computed(()=>`${keyword.value?props.i18n?.notFound||'未找到':props.i18n?.empty||'暂无'}${searchPlaceholder[props.mode].replace(/搜索|\.\.\./g,'')}`)
 // ===== 目录 =====
 let tocView:any,relocateHandler:any,tocInteract=0
 
@@ -331,6 +316,14 @@ const toggleTocTree=(expand=!tocAllExpanded.value)=>{
   tocAllExpanded.value=!!items.length&&expand
 }
 const toggleMarkGroups=(expand=!markAllExpanded.value)=>setCollapsed(markGroupKeys.value,!expand)
+const handleToolbarAction = (id: string) => {
+  if (id === 'filter') showFilterMenu.value = !showFilterMenu.value
+  else if (id === 'thumbnail') showThumbnail.value = !showThumbnail.value
+  else if (id === 'toc-expand') toggleTocTree()
+  else if (id === 'mark-expand') toggleMarkGroups()
+  else if (id === 'reverse') isReverse.value = !isReverse.value
+  else if (deckActions.some(([deckId]) => deckId === id)) deckTab.value = id as typeof deckTab.value
+}
 const getDragKey=(m:any)=>m.groupId||m.id||`${m.type}-${m.page||m.section||0}`
 const saveCustomOrder=(item:any,base:number)=>item.type==='ink-group'
   ? Promise.all((item.inks||[]).map((ink:any,offset:number)=>marks.value?.updateMark?.(ink,{customOrder:base+offset})))
@@ -490,7 +483,19 @@ onUnmounted(()=>{cleanupToc();thumbObs?.disconnect();window.removeEventListener(
 
 <style scoped lang="scss">
 @use './deck/deck.scss';
-.sr-toc{display:flex;flex-direction:column;height:100%;overflow:hidden}
+.sr-toc{display:flex;flex-direction:column;height:100%;overflow:hidden;background:var(--b3-theme-background)}
+.sr-toolbar{display:flex;gap:8px;padding:8px 8px 0;align-items:center;border-bottom:1px solid var(--b3-border-color);flex-shrink:0}
+.sr-toolbar input{flex:1;min-width:0;height:28px;padding:0 10px;border:none;border-bottom:1px solid var(--b3-border-color);background:transparent;font-size:12px;outline:none;color:var(--b3-theme-on-background);transition:border-color .2s;box-sizing:border-box}
+.sr-toolbar input:focus{border-color:var(--b3-theme-primary)}
+.sr-toolbar input::placeholder{color:var(--b3-theme-on-surface-variant);opacity:.6}
+.sr-select{position:relative;display:flex;flex:0 0 auto}
+.sr-menu{position:absolute;top:34px;right:0;min-width:180px;padding:6px;background:var(--b3-theme-surface);border:1px solid var(--b3-border-color);border-radius:8px;box-shadow:0 8px 24px #0002;z-index:20}
+.sr-menu-item{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:6px;cursor:pointer;font-size:12px}
+.sr-menu-item:hover,.sr-menu-item.active{background:var(--b3-list-hover);color:var(--b3-theme-primary)}
+.sr-action-btn{display:flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:none;border-radius:4px;background:transparent;color:var(--b3-theme-on-surface);opacity:.5;cursor:pointer;transition:var(--b3-transition)}
+.sr-action-btn svg{width:14px;height:14px}
+.sr-action-btn:hover{opacity:1;background:var(--b3-theme-surface)}
+.sr-action-btn:active,.sr-action-btn.active{opacity:1;color:var(--b3-theme-primary);background:var(--b3-theme-primary-lightest)}
 .dot{width:12px;height:12px;border-radius:50%;flex-shrink:0}
 .sr-menu-section{padding:6px 12px;font-size:11px;font-weight:600;color:var(--b3-theme-on-surface-variant);text-transform:uppercase;letter-spacing:.5px}
 .sr-menu-divider{height:1px;background:var(--b3-border-color);margin:4px 0}
@@ -499,7 +504,7 @@ onUnmounted(()=>{cleanupToc();thumbObs?.disconnect();window.removeEventListener(
 .menu-leave-to{opacity:0;transform:translateY(-4px) scale(.98)}
 .fade-enter-active,.fade-leave-active{transition:opacity .2s}
 .fade-enter-from,.fade-leave-to{opacity:0}
-.sr-content{flex:1;overflow-y:auto;padding:8px;min-height:0;
+.sr-content{flex:1;overflow:auto;min-height:0;
   :deep(ol){list-style:none;padding:0;margin:0}
   :deep(li){margin:0;position:relative}
   :deep(a),:deep(span[role="treeitem"]){display:block;padding:10px 48px 10px 12px;margin:2px 4px;color:var(--b3-theme-on-background);text-decoration:none;border-radius:6px;cursor:pointer;transition:all .25s cubic-bezier(.4,0,.2,1);border-left:3px solid transparent;
@@ -524,7 +529,7 @@ onUnmounted(()=>{cleanupToc();thumbObs?.disconnect();window.removeEventListener(
   :deep(a:hover .toc-export-btn),
   :deep(span[role="treeitem"]:hover .toc-bookmark-btn),
   :deep(span[role="treeitem"]:hover .toc-export-btn){opacity:1}}
-.sr-list{padding:8px}
+.sr-list{padding:0}
 .expand-enter-active,.expand-leave-active{transition:all .3s ease}
 .expand-enter-from,.expand-leave-to{max-height:0;opacity:0;margin-top:0;padding-top:0;padding-bottom:0}
 .expand-enter-to,.expand-leave-from{max-height:400px;opacity:1}

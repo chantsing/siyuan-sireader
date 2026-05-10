@@ -134,102 +134,6 @@ interface IResExportResources {
   path: string;
 }
 
-// ==================== 书源类型定义 ====================
-interface BookSource {
-  bookSourceUrl: string;
-  bookSourceName: string;
-  bookSourceGroup?: string;
-  bookSourceType: 0 | 1 | 2;
-  enabled: boolean;
-  header?: string;
-  concurrentRate?: string;
-  enabledCookieJar?: boolean;
-  searchUrl: string;
-  ruleSearch: SearchRule;
-  ruleBookInfo: BookInfoRule;
-  ruleToc: TocRule;
-  ruleContent: ContentRule;
-  lastUpdateTime?: number;
-  weight?: number;
-}
-
-interface SearchRule {
-  bookList: string;
-  name: string;
-  author: string;
-  bookUrl: string;
-  coverUrl?: string;
-  intro?: string;
-  lastChapter?: string;
-  kind?: string;
-}
-
-interface BookInfoRule {
-  name: string;
-  author: string;
-  intro: string;
-  coverUrl: string;
-  tocUrl: string;
-  lastChapter?: string;
-  kind?: string;
-}
-
-interface TocRule {
-  chapterList: string;
-  chapterName: string;
-  chapterUrl: string;
-  nextTocUrl?: string;
-}
-
-interface ContentRule {
-  content: string;
-  nextContentUrl?: string;
-}
-
-interface SearchResult {
-  name: string;
-  author: string;
-  bookUrl: string;
-  coverUrl?: string;
-  intro?: string;
-  lastChapter?: string;
-  kind?: string;
-  sourceName: string;
-  sourceUrl: string;
-}
-
-interface BookInfo {
-  name: string;
-  author: string;
-  intro: string;
-  coverUrl: string;
-  tocUrl: string;
-  lastChapter?: string;
-  kind?: string;
-  bookUrl: string;
-  sourceName: string;
-  sourceUrl: string;
-}
-
-interface Chapter {
-  name: string;
-  url: string;
-  index: number;
-}
-
-interface ChapterContent {
-  title: string;
-  content: string;
-  url: string;
-}
-
-interface RuleContext {
-  key?: string;
-  page?: number;
-  baseUrl?: string;
-  [key: string]: any;
-}
-
 // 全局类型扩展
 declare global {
   interface Window {
@@ -242,11 +146,6 @@ declare global {
       user: any;
       ws: any;
       languages: any;
-    };
-    siyuanBookSources?: {
-      sources: BookSource[];
-      loaded: boolean;
-      version: string;
     };
   }
 }
