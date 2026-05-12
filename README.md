@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI translation, Anki flashcards
 
-[![Version](https://img.shields.io/badge/version-1.2.1-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-1.2.2-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -19,7 +19,7 @@ Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI tr
 
 ## 📝 Latest Updates
 
-### v1.2.1 (2026.5.12)
+### v1.2.2 (2026.5.12)
 
 **Added**
 
