@@ -26,6 +26,8 @@
         @group-menu="showGroupMenu"
         @clear-delete="clearConfirmDelete"
         @remove-book="removeBook"
+        @move-book-group="moveBookToGroup"
+        @move-book-home="moveBookToHome"
       />
     </Transition>
 
@@ -101,7 +103,7 @@
                       <span class="block__icon block__icon--show sr-icon-btn sr-icon-btn--sm" aria-label="编辑分组" @click="startEditGroup(g)">
                         <svg><use xlink:href="#iconEdit" /></svg>
                       </span>
-                      <span class="block__icon block__icon--show block__icon--warning sr-icon-btn sr-icon-btn--sm" aria-label="删除分组" @click="confirmDelete = { type: 'group', id: g.id, item: g }">
+                      <span class="block__icon block__icon--show block__icon--warning sr-icon-btn sr-icon-btn--sm" aria-label="删除分组" @click="confirmGroupDelete(g)">
                         <svg><use xlink:href="#lucide-trash-2" /></svg>
                       </span>
                     </span>
@@ -254,7 +256,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { showMessage, Menu } from 'siyuan'
-import { bookshelfManager, SORTS, STATUS_OPTIONS, STATUS_MAP, RATING_OPTIONS, VIEW_MODES, VIEW_MODE_ICONS, MODAL_TITLES, createDefaultGroupRules, createDefaultEditForm, getNextViewMode, buildFilterSections, buildEditFields, buildGroupFields, buildDetailFields, type SortType, type Book, type BookStatus, type BookFormat, type GroupConfig, type BookshelfViewMode, type BookshelfModalMode } from '@/core/bookshelf'
+import { bookInGroup, bookshelfManager, SORTS, STATUS_OPTIONS, STATUS_MAP, RATING_OPTIONS, VIEW_MODES, VIEW_MODE_ICONS, MODAL_TITLES, createDefaultGroupRules, createDefaultEditForm, getNextViewMode, buildFilterSections, buildEditFields, buildGroupFields, buildDetailFields, type SortType, type Book, type BookStatus, type BookFormat, type GroupConfig, type BookshelfViewMode, type BookshelfModalMode } from '@/core/bookshelf'
 import View from '@/components/bookshelf/View.vue'
 import DockShell from './ui/DockShell.vue'
 import { isMobile } from '@/utils/mobile'
@@ -327,18 +329,21 @@ const viewProps = computed(() => ({
   statusMap: STATUS_MAP,
   getCoverUrl,
   getProgress,
+  currentGroup: currentGroup.value,
 }))
 
 const getSortKey = (item: any, type: string) => item.type === 'group'
   ? (type === 'name' ? item.data.name : type === 'time' ? (item.data as any).created || 0 : item.data.order)
   : type === 'name' ? item.data.title : type === 'author' ? item.data.author || '' : type === 'progress' ? item.data.progress || 0 : type === 'rating' ? item.data.rating || 0 : type === 'readTime' ? item.data.time || 0 : type === 'update' ? item.data.read || 0 : item.data.added
+const groupedBook = (book: Book) => groups.value.some(g => bookInGroup(book, g))
 
 const displayItems = computed(() => {
   if (currentGroup.value) return books.value.map(b => ({ type: 'book', data: b }))
   const kw = keyword.value.toLowerCase()
+  const rootBooks = (viewMode.value === 'compact' ? books.value : books.value.filter(b => !groupedBook(b)))
   const items = [
     ...(keyword.value ? groups.value.filter(g => g.name.toLowerCase().includes(kw)) : groups.value).map(g => ({ type: 'group', data: g })),
-    ...(keyword.value ? books.value.filter(b => b.title.toLowerCase().includes(kw) || b.author?.toLowerCase().includes(kw) || b.tags.some(t => t.toLowerCase().includes(kw))) : books.value).map(b => ({ type: 'book', data: b })),
+    ...(keyword.value ? rootBooks.filter(b => b.title.toLowerCase().includes(kw) || b.author?.toLowerCase().includes(kw) || b.tags.some(t => t.toLowerCase().includes(kw))) : rootBooks).map(b => ({ type: 'book', data: b })),
   ]
   return items.sort((a, b) => {
     const ka = getSortKey(a, sortType.value)
@@ -353,10 +358,10 @@ const batchRatingOptions = computed(() => [...RATING_OPTIONS, [0, '清除评分'
 const filterMap = { status: filterStatus, rating: filterRating, format: filterFormats, tags: filterTags }
 const setGroup = (id: string | null, close = false) => { currentGroup.value = id; close && closePopups() }
 const clearConfirmDelete = () => { confirmDelete.value = null }
-const toggleViewMode = () => { viewMode.value = getNextViewMode(viewMode.value) }
+const confirmGroupDelete = (group: GroupConfig) => { modalMode.value = 'manage'; confirmDelete.value = { type: 'group', id: group.id, item: group } }
 const handleToolbarAction = (id: string) => {
   if (id === 'back') setGroup(null)
-  else if (id === 'view') toggleViewMode()
+  else if (id === 'view') viewMode.value = getNextViewMode(viewMode.value)
   else if (id === 'organize') modalMode.value = 'organize'
   else if (id === 'manage') { modalMode.value = 'manage'; importMode.value = 'file' }
 }
@@ -403,7 +408,7 @@ const showGroupMenu = (group: GroupConfig, e: MouseEvent) => {
     { icon: 'iconFolder', label: '打开分组', click: () => setGroup(group.id) },
     { icon: 'iconEdit', label: '重命名', click: () => startEditGroup(group) },
     { type: 'separator' },
-    { icon: 'iconTrashcan', label: '删除', click: () => { m.close(); confirmDelete.value = { type: 'group', id: group.id, item: group } } },
+    { icon: 'iconTrashcan', label: '删除', click: () => { m.close(); confirmGroupDelete(group) } },
   ].forEach(item => m.addItem(item))
   m.open({ x: e.clientX, y: e.clientY })
 }
@@ -413,11 +418,22 @@ const updateBookField = async (book: Book, field: string, value: any, msg: strin
   await (field === 'group' ? refresh() : loadBooks())
   showMessage(msg, 2000, 'info')
 }
+const moveBookToGroup = async (url: string, groupId: string) => {
+  await bookshelfManager.updateBookField(url, 'group', groupId)
+  await refresh()
+  const group = folderGroups.value.find(item => item.id === groupId)
+  showMessage(`已移动到：${group?.name || '分组'}`, 2000, 'info')
+}
+const moveBookToHome = async (url: string) => {
+  await bookshelfManager.updateBookField(url, 'group', 'home')
+  await refresh()
+  showMessage('已移出分组', 2000, 'info')
+}
 const readBook = async (book: Book) => {
   const { getBookWithFallback } = await import('@/utils/bookOpen')
   const full = await getBookWithFallback(bookshelfManager, book.url)
   if (!full) return showMessage('加载失败', 3000, 'error')
-  if (isMobile()) window.dispatchEvent(new CustomEvent('reader:open', { detail: { book: full } }))
+  if (isMobile()) window.dispatchEvent(new CustomEvent('reader:mobile-open', { detail: { book: full } }))
   else emit('read', full)
 }
 const removeBook = async (book: Book) => {
@@ -438,7 +454,7 @@ const openBookPanel = async (mode: 'detail' | 'edit', book: Book) => { panelBook
 const showContextMenu = (book: Book, e: MouseEvent) => {
   const hasBinding = !!(book as any).bindDocId
   const ratingMenu = ratingItems(rating => updateBookField(book, 'rating', rating, rating ? `已评 ${rating} 星` : '已清除评分'))
-  const groupMenu = (book.groups.length ? [{ icon: 'iconFiles', label: '首页', click: () => updateBookField(book, 'group', 'home', '已移动到首页') }, ...(folderGroups.value.length ? [{ type: 'separator' }] : [])] : [] as any[]).concat(folderGroups.value.map(g => ({ icon: 'iconFolder', label: g.name, click: () => updateBookField(book, 'group', g.id, `已移动到：${g.name}`) })))
+  const groupMenu = (book.groups.length ? [{ icon: 'iconFiles', label: '首页', click: () => updateBookField(book, 'group', 'home', '已移动到首页') }, ...(folderGroups.value.length ? [{ type: 'separator' }] : [])] : []).concat(folderGroups.value.map(g => ({ icon: 'iconFolder', label: g.name, click: () => updateBookField(book, 'group', g.id, `已移动到：${g.name}`) })))
   const m = new Menu()
   ;[{ icon: 'iconPlay', label: '打开阅读', click: () => readBook(book) }, { icon: 'iconInfo', label: '详细信息', click: () => openBookPanel('detail', book) }, { icon: 'iconStar', label: '评分', type: 'submenu', submenu: ratingMenu }, { icon: 'iconCheck', label: '标记状态', type: 'submenu', submenu: statusItems(status => updateBookField(book, 'status', status, `已标记为${STATUS_MAP[status]}`)) }, { icon: 'iconFolder', label: '移动到', type: 'submenu', submenu: groupMenu }, { icon: hasBinding ? 'iconLinkOff' : 'iconLink', label: hasBinding ? '解除绑定' : '绑定文档', click: () => openBookPanel('edit', book) }, { type: 'separator' }, { icon: 'iconEdit', label: '编辑信息', click: () => openBookPanel('edit', book) }, { icon: 'iconTrashcan', label: '移出书架', click: () => { m.close(); confirmDelete.value = { type: 'book', id: book.url, item: book } } }].forEach(item => m.addItem(item))
   m.open({ x: e.clientX, y: e.clientY })
@@ -474,8 +490,8 @@ const saveEdit = async () => {
 }
 const toggleTag = (tag: string) => { const tags = editForm.value.tags.split(/[,，]/).map(t => t.trim()).filter(Boolean); toggleArrayItem(tags, tag); editForm.value.tags = tags.join(', ') }
 const toggleGroup = (gid: string) => toggleArrayItem(editForm.value.groups, gid)
-const searchBindDoc = async () => { if (!bindSearch.value.trim()) return bindResults.value = []; try { bindResults.value = await searchDocs(bindSearch.value.trim()) } catch { bindResults.value = [] } }
-const selectBindDoc = (d: any) => { const id = d.path?.split('/').pop()?.replace('.sy', '') || d.id; if (!id) return showMessage('文档 ID 无效', 2000, 'error'); editForm.value.bindDocId = id; editForm.value.bindDocName = d.hPath || d.content || '无标题'; bindSearch.value = ''; bindResults.value = [] }
+const searchBindDoc = async () => { const q = bindSearch.value.trim(); if (!q) return bindResults.value = []; try { bindResults.value = await searchDocs(q) } catch { bindResults.value = [] } }
+const selectBindDoc = (d: any) => { const id = d.path?.split('/').pop()?.replace('.sy', '') || d.id; if (!id) return showMessage('文档 ID 无效', 2000, 'error'); Object.assign(editForm.value, { bindDocId: id, bindDocName: d.hPath || d.content || '无标题' }); bindSearch.value = ''; bindResults.value = [] }
 const unbindDoc = () => { editForm.value.bindDocId = ''; editForm.value.bindDocName = '' }
 const detailFields = computed(() => !panelBook.value || modalMode.value !== 'detail' ? [] : buildDetailFields(panelBook.value, groups.value))
 
@@ -529,11 +545,11 @@ button.sr-chip:hover{background:var(--b3-list-hover)}
 .sr-actions-end{justify-content:flex-end}
 .sr-grow{flex:1;min-width:0}
 .sr-inline{display:flex;align-items:center;gap:4px;flex:0 0 auto;flex-wrap:nowrap}
-.sr-group-item{display:flex;align-items:center;gap:8px}
-.sr-group-label{display:flex;align-items:center;justify-content:flex-start;gap:4px;min-width:0}
+.sr-group-item{display:flex;align-items:center;gap:8px;margin-top:8px}
+.sr-group-label{display:flex;align-items:center;justify-content:flex-start;gap:4px;min-width:0;min-height:32px;padding:0 12px}
 .sr-group-label strong,.sr-group-label .sr-entry-meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sr-section-line{padding-top:12px;border-top:1px solid var(--b3-border-color)}
-.sr-confirm{display:flex;align-items:center;gap:var(--sr-gap);padding:var(--sr-gap);border:1px solid var(--b3-border-color);border-radius:var(--b3-border-radius-b);background:var(--b3-theme-background)}
+.sr-confirm{display:flex;align-items:center;gap:var(--sr-gap);margin:6px 0 8px;padding:var(--sr-gap);border:1px solid var(--b3-border-color);border-radius:var(--b3-border-radius-b);background:var(--b3-theme-background)}
 .sr-confirm span{flex:1;min-width:0}
 .sr-editor{display:flex;flex-direction:column;margin-top:12px;padding:12px;background:var(--b3-theme-background);border:1px solid var(--b3-border-color);border-radius:10px}
 .sr-editor-head{padding:0 0 12px;border-bottom:1px solid var(--b3-border-color);font-size:13px;font-weight:600}

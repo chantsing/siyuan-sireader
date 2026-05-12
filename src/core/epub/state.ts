@@ -1,15 +1,5 @@
-/**
- * Foliate 模块统一导出
- */
+import { computed, ref } from 'vue'
 
-import { ref, computed } from 'vue'
-
-// 导出所有模块
-export * from './types'
-export * from './reader'
-export * from './search'
-
-// 全局阅读器状态 - ref响应式 + window全局访问
 const activeView = ref<any>(null)
 const activeReader = ref<any>(null)
 
@@ -32,5 +22,5 @@ export const clearActiveReader = () => {
 export const useReaderState = () => ({
   activeView: computed(() => activeView.value),
   activeReader: computed(() => activeReader.value),
-  canShowToc: computed(() => !!activeView.value)
+  canShowToc: computed(() => !!activeView.value),
 })

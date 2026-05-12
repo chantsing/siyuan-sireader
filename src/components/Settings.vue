@@ -1,25 +1,28 @@
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
 import { showMessage } from 'siyuan'
 import type { ReaderSettings, FontFileInfo } from '@/composables/useSetting'
 import { PRESET_THEMES, UI_CONFIG, useSetting, useConfirm, useDocSearch, useNotebooks, LINK_FORMAT_PRESETS } from '@/composables/useSetting'
-import BookSearch from './BookSearch.vue'
 import BookShelf from './BookShelf.vue'
 import ReaderToc from './ReaderToc.vue'
+import ReaderMarks from './ReaderMarks.vue'
 import DockShell from './ui/DockShell.vue'
 import { bookshelfManager } from '@/core/bookshelf'
 import { offlineDictManager, onlineDictManager } from '@/utils/dictionary'
 import { usePlugin } from '@/main'
-import { useReaderState } from '@/core/epub'
+import { useReaderState } from '@/core/epub/state'
 import { useLicense } from '@/composables/useLicense'
+import { focusMobileEditable } from '@/utils/mobile'
+
+const BookSearch = defineAsyncComponent(() => import('./BookSearch.vue'))
 
 const props = defineProps<{modelValue:ReaderSettings;i18n:any;onSave:()=>Promise<void>}>()
 const emit = defineEmits<{'update:modelValue':[value:ReaderSettings]}>()
 
 // 基础状态
 const settings = ref<ReaderSettings>(props.modelValue)
-const activeTab = ref<'appearance'|'bookshelf'|'search'|'toc'|'bookmark'|'mark'|'deck'>('bookshelf')
+const activeTab = ref<'appearance'|'bookshelf'|'search'|'toc'|'mark'|'deck'>('bookshelf')
 const previewExpanded = ref(localStorage.getItem('sr-preview-expanded')!=='0')
 const activeAccordion = ref('')
 const activeSub = ref('')
@@ -158,8 +161,7 @@ const navItems = computed(() => (settings.value.navItems || [
   { id: 'search', icon: 'lucide-book-search', tip: 'search', enabled: true, order: 1 },
   { id: 'deck', icon: 'lucide-wallet-cards', tip: '卡包', enabled: true, order: 2 },
   { id: 'toc', icon: 'lucide-scroll-text', tip: '目录', enabled: true, order: 3 },
-  { id: 'bookmark', icon: 'lucide-bookmark-check', tip: '书签', enabled: true, order: 4 },
-  { id: 'mark', icon: 'lucide-square-pen', tip: '标注', enabled: true, order: 5 },
+  { id: 'mark', icon: 'lucide-square-pen', tip: '标注', enabled: true, order: 4 },
   { id: 'appearance', icon: 'lucide-settings-2', tip: '设置', enabled: true, order: 7 }
 ]).filter(item => item.id !== 'dictionary').sort((a, b) => a.order - b.order))
 const tooltipDir = computed(() => ({ left: 'e', right: 'w', top: 's', bottom: 'n' }[settings.value.navPosition] || 'n'))
@@ -200,7 +202,7 @@ onMounted(() => {
   offlineDictManager.init(plugin).then(() => {offlineDicts.value=offlineDictManager.getDicts();onlineDicts.value=onlineDictManager.getDicts()}).finally(() => loadingDict.value=false)
   loadLicense()
 })
-watch(canShowToc,(show) => !show&&['toc','bookmark','mark'].includes(activeTab.value)&&(activeTab.value='bookshelf'))
+watch(canShowToc,(show) => !show&&['toc','mark'].includes(activeTab.value)&&(activeTab.value='bookshelf'))
 </script>
 
 <template>
@@ -240,7 +242,7 @@ watch(canShowToc,(show) => !show&&['toc','bookmark','mark'].includes(activeTab.v
                 <template v-else>
                   <div v-if="license" class="license-actions"><button class="b3-button b3-button--text" @click="clearLicense">{{i18n.logout||'退出登录'}}</button><button class="b3-button b3-button--text" @click="openPurchasePage">{{i18n.purchase||'购买'}}</button></div>
                   <div v-else class="license-actions">
-                    <input v-model="activationCode" type="text" class="b3-text-field" :placeholder="i18n.enterActivationCode||'请输入激活码'" :disabled="processing">
+                    <input v-model="activationCode" type="text" class="b3-text-field" :placeholder="i18n.enterActivationCode||'请输入激活码'" :disabled="processing" @mousedown.stop @pointerdown.stop @touchend.stop="focusMobileEditable($event.target)">
                     <div class="license-btn-row"><button class="b3-button b3-button--outline" :disabled="processing||!activationCode.trim()" @click="activateLicense">{{processing?(i18n.processing||'处理中'):(i18n.activate||'激活')}}</button><button class="b3-button b3-button--text" :disabled="processing" @click="recoverLicense">{{i18n.recover||'恢复授权'}}</button></div>
                     <button class="b3-button b3-button--text" @click="openPurchasePage">{{i18n.purchase||'购买'}}</button>
                   </div>
@@ -425,7 +427,8 @@ watch(canShowToc,(show) => !show&&['toc','bookmark','mark'].includes(activeTab.v
       </Transition>
       <BookSearch v-show="activeTab==='search'" :i18n="i18n" />
       <BookShelf v-show="activeTab==='bookshelf'" :i18n="i18n" :cover-size="settings.bookshelfCoverSize" :open-doc-assets="settings.openDocAssets" @read="handleReadOnline"/>
-      <ReaderToc v-if="['toc','bookmark','mark','deck'].includes(activeTab)" v-model:mode="activeTab" :i18n="props.i18n"/>
+      <ReaderToc v-if="['toc','deck'].includes(activeTab)" :mode="activeTab === 'deck' ? 'deck' : 'toc'" :i18n="props.i18n"/>
+      <ReaderMarks v-if="activeTab==='mark'" :i18n="props.i18n"/>
   </DockShell>
 </template>
 

@@ -2,6 +2,7 @@ import { Plugin } from 'siyuan'
 import { createApp } from 'vue'
 import App from './App.vue'
 import { initDictModule } from '@/utils/dictionary'
+import { registerCoreIcons } from '@/utils/icons'
 import { initMobile, isMobile } from '@/utils/mobile'
 import { setPlugin } from '@/utils/copy'
 
@@ -19,22 +20,21 @@ export const setOpenSettingHandler = (handler: () => void) => {
 export function init(p: Plugin) {
   usePlugin(p)
   setPlugin(p)
+  registerCoreIcons(p)
   initDictModule(p)
   initMobile(p)
 
   const div = document.createElement('div')
   div.id = p.name
   div.className = 'plugin-sample-vite-vue-app'
+  document.body.appendChild(div)
   app = createApp(App)
   app.mount(div)
-  document.body.appendChild(div)
 
   import('@/components/deck').then(({ initDatabase, initPack }) => {
     initDatabase()
     initPack(p)
   }).catch(e => console.error('[SiReader] Init failed:', e))
-
-  if (isMobile()) addMobileSidebar(p)
 }
 
 export function destroy() {
@@ -44,55 +44,4 @@ export function destroy() {
   app?.unmount()
   document.getElementById(plugin.name)?.remove()
   plugin = null
-}
-
-async function addMobileSidebar(p: Plugin) {
-  const sidebar = document.querySelector('#sidebar .toolbar')
-  if (!sidebar) return setTimeout(() => addMobileSidebar(p), 500)
-  if (sidebar.querySelector('[data-type="sidebar-sireader-tab"]')) return
-
-  for (let i = 0; i < 10 && !document.querySelector('#siyuan-reader-icon'); i++) {
-    await new Promise(r => setTimeout(r, 200))
-  }
-
-  const template = sidebar.querySelector('[data-type="sidebar-file-tab"]')
-  if (!template) return
-
-  const btn = template.cloneNode(true) as SVGElement
-  btn.setAttribute('data-type', 'sidebar-sireader-tab')
-  btn.classList.remove('toolbar__icon--active')
-  btn.querySelector('use')?.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', '#siyuan-reader-icon')
-
-  const pluginTab = sidebar.querySelector('[data-type="sidebar-plugin-tab"]')
-  if (pluginTab) pluginTab.before(btn)
-  else sidebar.appendChild(btn)
-
-  const content = document.createElement('div')
-  content.className = 'fn__flex-column fn__none'
-  content.setAttribute('data-type', 'sidebar-sireader')
-  content.style.cssText = 'height:100%;overflow:hidden'
-  sidebar.parentElement?.querySelector('.b3-list--mobile')?.appendChild(content)
-
-  const { default: Settings } = await import('./components/Settings.vue')
-  const { useSetting } = await import('./composables/useSetting')
-  const { settings, save } = useSetting(p)
-
-  createApp(Settings, {
-    modelValue: settings.value,
-    i18n: p.i18n,
-    onSave: async () => {
-      await new Promise(resolve => setTimeout(resolve, 0))
-      await save()
-    },
-    'onUpdate:modelValue': (v: any) => { settings.value = v },
-  }).mount(content)
-
-  sidebar.addEventListener('click', (e: MouseEvent) => {
-    const target = (e.target as HTMLElement).closest('[data-type="sidebar-sireader-tab"]')
-    if (!target) return
-    sidebar.querySelectorAll('.toolbar__icon').forEach(i => i.classList.remove('toolbar__icon--active'))
-    target.classList.add('toolbar__icon--active')
-    sidebar.parentElement?.querySelectorAll('.b3-list--mobile > div').forEach(d => d.classList.add('fn__none'))
-    content.classList.remove('fn__none')
-  })
 }

@@ -519,11 +519,13 @@
 // ==================== 标注卡片统一样式 ====================
 .sr-card {
   display: flex; gap: 8px; padding: 10px 12px; margin-bottom: 8px;
-  background: var(--b3-theme-surface); border-radius: 4px; border: 1px solid var(--b3-border-color);
-  cursor: pointer; transition: background .15s;
-  &:hover { background: var(--b3-theme-surface-light); .sr-btns { opacity: 1; } }
+  cursor: pointer;
+  &:hover { .sr-btns { opacity: 1; } }
   // 弹窗模式（fixed定位）
-  &.sr-popup { position: fixed; z-index: 10002!important; max-width: 340px; box-shadow: 0 4px 16px rgba(0,0,0,.15); box-sizing: border-box; pointer-events: auto; margin: 0; cursor: default; }
+  &.sr-popup {
+    position: fixed; z-index: 10002!important; max-width: 340px; margin: 0; cursor: default; box-sizing: border-box; pointer-events: auto;
+    background: var(--b3-theme-surface); border: 1px solid var(--b3-border-color); border-radius: 4px; box-shadow: 0 4px 16px rgba(0,0,0,.15);
+  }
 }
 .sr-bar { width: 3px; height: 1.5em; margin-top: 2px; flex-shrink: 0; border-radius: 2px; }
 .sr-popup .sr-bar { height: auto; align-self: stretch; margin-top: 0; }

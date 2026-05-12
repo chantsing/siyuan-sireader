@@ -73,6 +73,7 @@ export interface Progress {
 // ===== Foliate View 接口 =====
 export interface FoliateView extends HTMLElement {
   open(file: File | string | any): Promise<void>
+  goToTextStart?(): Promise<any>
   goTo(target: string | number | Location): Promise<any>
   goLeft(): Promise<void>
   goRight(): Promise<void>

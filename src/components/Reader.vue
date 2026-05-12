@@ -1,5 +1,6 @@
 <template>
-  <div ref="containerRef" class="reader-container" tabindex="0" :style="{'--toolbar-opacity':1-((currentSettings?.toolbarOpacity??70)/100)}">
+  <div ref="containerRef" class="reader-container" tabindex="0" :style="{'--toolbar-opacity':(1-((currentSettings?.toolbarOpacity??70)/100))*.55}">
+    <ReaderSplash v-if="showOpeningSplash" ref="readerSplashRef" :book-info="props.bookInfo" :file-name="props.file?.name" status="opening" />
     <div v-if="loading" class="reader-loading"><div class="spinner"></div><div>{{ error || '加载中...' }}</div></div>
     
     <!-- 遮罩：捕获外部点击关闭弹窗 -->
@@ -13,7 +14,13 @@
     <!-- 目录弹窗 -->
     <Transition name="toc-popup">
       <div v-if="showToc&&!loading" class="reader-toc-popup" @click.stop>
-        <ReaderToc v-model:mode="tocMode" :i18n="i18n" />
+        <div class="reader-sidebar-tabs">
+          <button class="reader-sidebar-tab" :class="{ active: tocMode === 'toc' }" @click="tocMode = 'toc'">目录</button>
+          <button class="reader-sidebar-tab" :class="{ active: tocMode === 'mark' }" @click="tocMode = 'mark'">标注</button>
+          <button class="reader-sidebar-tab" :class="{ active: tocMode === 'deck' }" @click="tocMode = 'deck'">卡包</button>
+        </div>
+        <ReaderToc v-if="tocMode !== 'mark'" :mode="tocMode === 'deck' ? 'deck' : 'toc'" :i18n="i18n" />
+        <ReaderMarks v-else :i18n="i18n" />
       </div>
     </Transition>
     
@@ -40,7 +47,7 @@
         </div>
       </div>
       
-      <div class="reader-toolbar">
+      <div class="reader-toolbar" :class="{'is-visible':mobileToolbarVisible}">
         <button class="toolbar-btn b3-tooltips b3-tooltips__n" @click.stop="handlePrev" :aria-label="i18n.prevChapter||'上一章'"><svg><use xlink:href="#iconLeft"/></svg></button>
         <div v-if="isPdfMode" class="toolbar-page-nav" @click.stop>
           <input v-model.number="pageInput" @keydown.enter="handlePageJump" type="number" :min="1" :max="totalPages" class="page-input">
@@ -71,7 +78,8 @@ import type { Plugin } from 'siyuan'
 import type { ReaderSettings, PdfToolbarSettings } from '@/composables/useSetting'
 import { settingsManager } from '@/composables/useSetting'
 import { openDict as openDictDialog } from '@/utils/dictionary'
-import { createReader, type FoliateReader, setActiveReader, clearActiveReader } from '@/core/epub'
+import { createReader, type FoliateReader } from '@/core/epub/reader'
+import { setActiveReader, clearActiveReader } from '@/core/epub/state'
 import type { FoliateView } from '@/core/epub/types'
 import { COLORS, STYLES, createMarkManager, type MarkManager } from '@/core/MarkManager'
 import { createInkToolManager, type InkToolManager } from '@/core/pdf/ink'
@@ -81,6 +89,8 @@ import { saveMobilePosition, getMobilePosition, isMobile } from '@/utils/mobile'
 import PdfToolbar from './PdfToolbar.vue'
 import MarkPanel from './MarkPanel.vue'
 import ReaderToc from './ReaderToc.vue'
+import ReaderMarks from './ReaderMarks.vue'
+import ReaderSplash from './ui/ReaderSplash.vue'
 import { gotoPDF, gotoEPUB, restorePosition as restorePos, initJump } from '@/utils/jump'
 import { copyMark as copyMarkUtil } from '@/utils/copy'
 import { createKeyboardHandler, setupEpubKeyboard } from '@/utils/keyboard'
@@ -94,6 +104,7 @@ const { can, showUpgrade } = useLicense(i18n.value)
 const currentSettings = ref(props.settings)
 const getSettings = () => currentSettings.value || props.settings
 const pdfToolbarFixed = computed(() => currentSettings.value?.pdfToolbarStyle === 'fixed')
+const showOpeningSplash = computed(() => !!props.file || !(props.bookInfo?.progress > 0 || props.bookInfo?.pos?.cfi || props.bookInfo?.pos?.page || props.bookInfo?.pos?.chapter))
 let pdfToolbarSaveTimer:any
 const updateSettingsState=(settings:ReaderSettings)=>{
   currentSettings.value=settings
@@ -129,6 +140,7 @@ const handleSettingsUpdate=async(e:Event)=>{
 
 const containerRef = ref<HTMLElement>()
 const viewerContainerRef = ref<HTMLElement>()
+const readerSplashRef = ref<{ dismiss: () => void; cleanup: () => void; isVisible: () => boolean } | null>(null)
 const loading = ref(true)
 const error = ref('')
 const hasBookmark = ref(false)
@@ -137,8 +149,17 @@ let readerFocused = false
 
 // 触摸滑动翻页
 let touchStartX=0,touchStartY=0
-const handleTouchStart=(e:TouchEvent)=>{if(isMobile()&&e.touches.length===1){touchStartX=e.touches[0].clientX;touchStartY=e.touches[0].clientY}}
-const handleTouchEnd=(e:TouchEvent)=>{if(!isMobile()||!touchStartX)return;const dx=e.changedTouches[0].clientX-touchStartX,dy=e.changedTouches[0].clientY-touchStartY;if(Math.abs(dy)>Math.abs(dx)||Math.abs(dx)<50)return;dx>0?handlePrev():handleNext();touchStartX=0}
+const touchTargets = new Set<EventTarget>()
+const canHandleTouchPaging=()=>isMobile()&&isPdfMode.value
+const resetTouch=()=>{touchStartX=0;touchStartY=0}
+const isTouchActionTarget=(target:EventTarget|null)=>target instanceof HTMLElement&&!!target.closest('.reader-toolbar-group,.reader-toc-popup,.mark-menu,.sr-popup-panel,.pdf-toolbar,.pdf-menu,input,textarea,button,select,a,[contenteditable="true"]')
+const toggleMobileToolbar=()=>isMobile()&&(mobileToolbarVisible.value=!mobileToolbarVisible.value)
+const handleTapZone=(x:number)=>{if(!isMobile()||isPdfMode.value||getSettings()?.viewMode==='scroll')return;const third=(containerRef.value?.clientWidth||window.innerWidth)/3;if(x<third)return handlePrev();if(x>third*2)return handleNext();toggleMobileToolbar()}
+const handleTouchStart=(e:TouchEvent)=>{if(canHandleTouchPaging()&&e.touches.length===1){touchStartX=e.touches[0].clientX;touchStartY=e.touches[0].clientY}}
+const handleTouchEnd=(e:TouchEvent)=>{if(!canHandleTouchPaging()||!touchStartX)return;const{clientX:x,clientY:y}=e.changedTouches[0],dx=x-touchStartX,dy=y-touchStartY;resetTouch();if(isTouchActionTarget(e.target))return;if(Math.abs(dx)>=50&&Math.abs(dx)>Math.abs(dy))return dx>0?handlePrev():handleNext();if(Math.abs(dx)<=30&&Math.abs(dy)<=30)handleTapZone(x)}
+const touchPagingEvents:[string,EventListener,AddEventListenerOptions?][]=[['touchstart',handleTouchStart as EventListener,{capture:true,passive:true}],['touchend',handleTouchEnd as EventListener,{capture:true,passive:true}]]
+const bindTouchPaging=(target:EventTarget|null|undefined)=>{if(!isMobile()||!target||touchTargets.has(target))return;touchTargets.add(target);touchPagingEvents.forEach(([type,handler,options])=>target.addEventListener(type,handler,options))}
+const unbindTouchPaging=()=>{touchTargets.forEach(target=>touchPagingEvents.forEach(([type,handler])=>target.removeEventListener(type,handler,true)));touchTargets.clear()}
 
 const pdfViewer = ref<any>(null)
 const pdfSearcher = ref<any>(null)
@@ -148,15 +169,17 @@ const totalPages = ref(0)
 const showSearch = ref(false)
 const showToc = ref(false)
 const showQuickMark = ref(false)
+const mobileToolbarVisible = ref(false)
 const quickMarkMode = ref(false)
 const quickMarkColor = ref(0)
 const quickMarkStyle = ref<'highlight'|'underline'|'outline'|'dotted'|'dashed'|'double'|'squiggly'>('highlight')
-const tocMode = ref<'toc' | 'bookmark' | 'mark' | 'deck'>('toc')
+const tocMode = ref<'toc' | 'mark' | 'deck'>('toc')
 const searchQuery = ref('')
 const searchResults = ref<any[]>([])
 const searchCurrentIndex = ref(0)
 let reader: FoliateReader | null = null
 let pdfSource: ArrayBuffer | null = null
+let pdfBinarySource: Blob | null = null
 let inkToolManager: InkToolManager | null = null
 let shapeToolManager: ShapeToolManager | null = null
 const bindPdfToolManagers=(manager:any,ink:InkToolManager,shape:ShapeToolManager)=>{
@@ -227,11 +250,12 @@ const initPdfMode=async(bookUrl:string,onProgress:()=>Promise<void>,loadFile:()=
   getSettings()&&viewer.applyTheme(getSettings()!)
 
   const file=await loadFile()
+  pdfBinarySource=file||null
   pdfSource=file?await file.arrayBuffer():null as any
   if(!pdfSource)throw new Error('未提供PDF文件')
 
   const searcher=new PDFSearch()
-  await viewer.open(pdfSource)
+  await viewer.open(pdfSource.slice(0))
   await viewer.fitWidth()
   searcher.setPDF(viewer.getPDF()!)
   ;(window as any).__pdfDoc=viewer.getPDF()
@@ -249,7 +273,7 @@ const initPdfMode=async(bookUrl:string,onProgress:()=>Promise<void>,loadFile:()=
   await shape.init()
   bindPdfToolManagers(manager,ink,shape)
 
-  const cleanupEvents=initPdfAnnotationEvents(container,viewer,manager,(data,x,y)=>markPanelRef.value?.showMenu(data,x,y))
+  const cleanupEvents=initPdfAnnotationEvents(container,viewer,manager,(data,anchor)=>markPanelRef.value?.showMenu(data,anchor))
   const cleanupRender=initPdfAnnotationRender(viewer,manager,ink,shape)
   container.addEventListener('keydown',handleKeydown)
 
@@ -297,7 +321,12 @@ const init=async()=>{
       await bookshelfManager.restoreProgress(bookUrl,reader)
       
       reader.on('relocate',onProgress)
-      setupEpubKeyboard(reader,handleKeydown,(doc,e)=>markPanelRef.value?.checkSelection(doc,e))
+      setupEpubKeyboard(
+        reader,
+        handleKeydown,
+        doc=>markPanelRef.value?.checkSelection(doc),
+        x=>handleTapZone(x)
+      )
       currentView.value=view
       setActiveReader(view,reader,getSettings())
       props.onReaderReady?.(reader)
@@ -327,14 +356,17 @@ const handleOpenDict=(text:string,x:number,y:number,selection:any)=>selection&&o
 
 // 导航
 const handlePrev=()=>{ttsController.destroy();isPdfMode.value?currentView.value?.nav?.prev?.():reader?reader.prev():currentView.value?.prev?.()||currentView.value?.goLeft?.()}
-const handleNext=()=>{ttsController.destroy();isPdfMode.value?currentView.value?.nav?.next?.():reader?reader.next():currentView.value?.next?.()||currentView.value?.goRight?.()}
+const handleNext=()=>{
+  if(readerSplashRef.value?.isVisible())return readerSplashRef.value.dismiss()
+  ttsController.destroy();isPdfMode.value?currentView.value?.nav?.next?.():reader?reader.next():currentView.value?.next?.()||currentView.value?.goRight?.()
+}
 const handlePageJump=()=>{ttsController.destroy();const p=Math.max(1,Math.min(totalPages.value,pageInput.value||1));pageInput.value=p;pdfViewer.value?.goToPage(p)}
 const updatePageInfo=()=>pdfViewer.value&&(totalPages.value=pdfViewer.value.getPageCount(),pageInput.value=pdfViewer.value.getCurrentPage())
 
 // 搜索
 const searchInputRef=ref<HTMLInputElement>()
-const toggleSearch=()=>{showSearch.value=!showSearch.value;showSearch.value&&(showQuickMark.value=quickMarkMode.value=false,setTimeout(()=>searchInputRef.value?.focus(),100))}
-const toggleQuickMark=()=>{if(!can.value('quick-mark'))return showUpgrade('快速标注');showQuickMark.value=!showQuickMark.value;showQuickMark.value&&(showSearch.value=false);quickMarkMode.value=showQuickMark.value}
+const toggleSearch=()=>{showSearch.value=!showSearch.value;showSearch.value&&(showQuickMark.value=quickMarkMode.value=false,mobileToolbarVisible.value=true,setTimeout(()=>searchInputRef.value?.focus(),100))}
+const toggleQuickMark=()=>{if(!can.value('quick-mark'))return showUpgrade('快速标注');showQuickMark.value=!showQuickMark.value;showQuickMark.value&&(showSearch.value=false);quickMarkMode.value=showQuickMark.value;showQuickMark.value&&(mobileToolbarVisible.value=true)}
 const handleSearch=async()=>{
   if(!searchQuery.value.trim())return
   if(isPdfMode.value&&pdfSearcher.value){
@@ -352,8 +384,8 @@ const handleSearchPrev=()=>{const r=isPdfMode.value?pdfSearcher.value?.prev():re
 const handleSearchClear=()=>{searchQuery.value='';searchResults.value=[];searchCurrentIndex.value=0;pdfSearcher.value?.clear();reader?.clearSearch();showSearch.value=false}
 
 // PDF 工具栏
-const handlePrint=async()=>pdfViewer.value&&(await import('@/core/pdf')).printPDF(pdfViewer.value.getPDF()!)
-const handleDownload=async()=>pdfSource&&(await import('@/core/pdf')).downloadPDF(pdfSource,props.file?.name||props.bookInfo?.title||'document.pdf')
+const handlePrint=async()=>pdfBinarySource&&(await import('@/core/pdf')).printPDF(pdfBinarySource)
+const handleDownload=async()=>pdfBinarySource&&(await import('@/core/pdf')).downloadPDF(pdfBinarySource,props.file?.name||props.bookInfo?.title||'document.pdf')
 const handleExportImages=async()=>pdfViewer.value&&(await import('@/core/pdf')).exportAsImages(pdfViewer.value.getPDF()!)
 
 // 墨迹工具
@@ -389,8 +421,8 @@ const handleWindowFocus=()=>syncReaderFocus(hasReaderFocus())
 const handleVisibilityChange=()=>syncReaderFocus(!document.hidden&&hasReaderFocus())
 
 // 打开目录/关闭
-const openToc=()=>showToc.value=!showToc.value
-const handleClose=()=>{savePosition();window.dispatchEvent(new CustomEvent('reader:close'))}
+const openToc=()=>{showToc.value=!showToc.value;showToc.value&&(mobileToolbarVisible.value=true)}
+const handleClose=()=>{savePosition();window.dispatchEvent(new CustomEvent('reader:mobile-close'))}
 
 // 快捷键处理
 const handlePdfZoomIn=()=>pdfViewer.value?.setScale(pdfViewer.value.getScale()+.25)
@@ -416,7 +448,7 @@ const handleGoto=(e:CustomEvent)=>{
 
 // 快捷键
 const handleUndo=()=>markManager.value?.undo()
-const handleKeydown=createKeyboardHandler({handlePrev,handleNext,handleUndo,handlePdfFirstPage,handlePdfLastPage,handlePdfPageUp,handlePdfPageDown,handlePdfRotate,handlePdfZoomIn,handlePdfZoomOut,handlePdfZoomReset,handlePdfSearch,handlePrint},()=>isPdfMode.value)
+const handleKeydown=createKeyboardHandler({handlePrev,handleNext,handleUndo,handlePdfFirstPage,handlePdfLastPage,handlePdfPageUp,handlePdfPageDown,handlePdfRotate,handlePdfZoomIn,handlePdfZoomOut,handlePdfZoomReset,handlePdfSearch,handlePrint},()=>isPdfMode.value,()=>hasReaderFocus())
 
 // 生命周期
 const events=[['sireaderSettingsUpdated',handleSettingsUpdate],['sireader:goto',handleGoto],['sireader:toggleBookmark',toggleBookmark],['sireader:prevPage',handlePrev],['sireader:nextPage',handleNext],['sireader:pdfZoomIn',handlePdfZoomIn],['sireader:pdfZoomOut',handlePdfZoomOut],['sireader:pdfZoomReset',handlePdfZoomReset],['sireader:pdfRotate',handlePdfRotate],['sireader:pdfSearch',handlePdfSearch],['sireader:pdfPrint',handlePrint],['sireader:pdfFirstPage',handlePdfFirstPage],['sireader:pdfLastPage',handlePdfLastPage],['sireader:pdfPageUp',handlePdfPageUp],['sireader:pdfPageDown',handlePdfPageDown]]as const
@@ -429,9 +461,9 @@ const setupTabObserver=()=>{if(isMobile())return;let el=containerRef.value?.pare
 const handleShapeCreated=async(e:CustomEvent)=>{const{shape,x,y,edit}=e.detail;await finishPdfAnnotation(shape,x,y,edit)}
 const handleInkCreated=async(e:CustomEvent)=>{const{ink,x,y,edit}=e.detail||{};await finishPdfAnnotation(ink,x,y,edit)}
 
-onMounted(()=>{init();containerRef.value?.focus();events.forEach(([e,h])=>window.addEventListener(e,h as any));window.addEventListener('keydown',handleKeydown);window.addEventListener('unhandledrejection',suppressError);window.addEventListener('shape-created',handleShapeCreated as any);window.addEventListener('ink-created',handleInkCreated as any);window.addEventListener('blur',handleWindowBlur);window.addEventListener('focus',handleWindowFocus);document.addEventListener('visibilitychange',handleVisibilityChange);setupTabObserver();const c=containerRef.value;c&&(c.addEventListener('focusin',handleFocusIn),c.addEventListener('focusout',handleFocusOut));isMobile()&&c&&(c.addEventListener('touchstart',handleTouchStart),c.addEventListener('touchend',handleTouchEnd));window.dispatchEvent(new CustomEvent('reader:open',{detail:{bookUrl:getBookUrl()}}));syncReaderFocus(true)})
+onMounted(()=>{init();containerRef.value?.focus();events.forEach(([e,h])=>window.addEventListener(e,h as any));window.addEventListener('keydown',handleKeydown);window.addEventListener('unhandledrejection',suppressError);window.addEventListener('shape-created',handleShapeCreated as any);window.addEventListener('ink-created',handleInkCreated as any);window.addEventListener('blur',handleWindowBlur);window.addEventListener('focus',handleWindowFocus);document.addEventListener('visibilitychange',handleVisibilityChange);setupTabObserver();const c=containerRef.value;c&&(c.addEventListener('focusin',handleFocusIn),c.addEventListener('focusout',handleFocusOut));bindTouchPaging(c);bindTouchPaging(viewerContainerRef.value);window.dispatchEvent(new CustomEvent('reader:open',{detail:{bookUrl:getBookUrl()}}));syncReaderFocus(true)})
 
-onUnmounted(async()=>{syncReaderFocus(false);window.dispatchEvent(new CustomEvent('reader:close'));savePosition();clearTimeout(pdfToolbarSaveTimer);clearActiveReader();await markManager.value?.destroy();try{reader?.destroy();currentView.value?.cleanup?.();currentView.value?.viewer?.destroy?.()}catch{};inkToolManager?.destroy?.();shapeToolManager?.destroy?.();ttsController.destroy();setTimeout(()=>viewerContainerRef.value&&(viewerContainerRef.value.innerHTML=''),50);events.forEach(([e,h])=>window.removeEventListener(e,h as any));window.removeEventListener('keydown',handleKeydown);window.removeEventListener('unhandledrejection',suppressError);window.removeEventListener('shape-created',handleShapeCreated as any);window.removeEventListener('ink-created',handleInkCreated as any);window.removeEventListener('blur',handleWindowBlur);window.removeEventListener('focus',handleWindowFocus);document.removeEventListener('visibilitychange',handleVisibilityChange);(containerRef.value as any)?.__observer?.disconnect();const c=containerRef.value;c&&(c.removeEventListener('focusin',handleFocusIn),c.removeEventListener('focusout',handleFocusOut));isMobile()&&c&&(c.removeEventListener('touchstart',handleTouchStart),c.removeEventListener('touchend',handleTouchEnd));const{bookshelfManager}=await import('@/core/bookshelf');await bookshelfManager.flush();bookshelfManager.cleanup()})
+onUnmounted(async()=>{syncReaderFocus(false);window.dispatchEvent(new CustomEvent('reader:close'));savePosition();clearTimeout(pdfToolbarSaveTimer);readerSplashRef.value?.cleanup();clearActiveReader();await markManager.value?.destroy();try{reader?.destroy();currentView.value?.cleanup?.();currentView.value?.viewer?.destroy?.()}catch{};inkToolManager?.destroy?.();shapeToolManager?.destroy?.();ttsController.destroy();setTimeout(()=>viewerContainerRef.value&&(viewerContainerRef.value.innerHTML=''),50);events.forEach(([e,h])=>window.removeEventListener(e,h as any));window.removeEventListener('keydown',handleKeydown);window.removeEventListener('unhandledrejection',suppressError);window.removeEventListener('shape-created',handleShapeCreated as any);window.removeEventListener('ink-created',handleInkCreated as any);window.removeEventListener('blur',handleWindowBlur);window.removeEventListener('focus',handleWindowFocus);document.removeEventListener('visibilitychange',handleVisibilityChange);(containerRef.value as any)?.__observer?.disconnect();const c=containerRef.value;c&&(c.removeEventListener('focusin',handleFocusIn),c.removeEventListener('focusout',handleFocusOut));unbindTouchPaging();const{bookshelfManager}=await import('@/core/bookshelf');await bookshelfManager.flush();bookshelfManager.cleanup()})
 </script>
 
 <style scoped lang="scss">
@@ -445,6 +477,7 @@ onUnmounted(async()=>{syncReaderFocus(false);window.dispatchEvent(new CustomEven
 @keyframes spin{to{transform:rotate(360deg)}}
 .reader-toolbar-group{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:8px;z-index:1001;&:hover>*{opacity:1}}
 .reader-toolbar,.reader-panel{display:flex;align-items:center;gap:2px;padding:3px 4px;background:var(--b3-theme-surface);border:1px solid var(--b3-border-color);border-radius:6px;box-shadow:0 2px 8px #0002;opacity:var(--toolbar-opacity);transition:opacity .2s}
+.reader-toolbar.is-visible,.reader-panel.is-visible{opacity:1}
 .toolbar-btn{width:28px;height:28px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;border-radius:4px;cursor:pointer;transition:all .15s;svg{width:14px;height:14px}&:hover{background:var(--b3-list-hover)}&.active{background:var(--b3-theme-primary-lightest);color:var(--b3-theme-primary)}}
 .toolbar-mark-btn{position:relative;.mark-indicator{position:absolute;right:2px;bottom:2px;width:8px;height:8px;border-radius:50%;border:1.5px solid var(--b3-theme-surface);box-shadow:0 0 0 .5px var(--b3-border-color)}}
 .toolbar-page-nav{display:flex;align-items:center;gap:3px;padding:0 4px;font-size:11px;color:var(--b3-theme-on-surface)}
@@ -457,6 +490,10 @@ onUnmounted(async()=>{syncReaderFocus(false);window.dispatchEvent(new CustomEven
 .mark-color-btn{width:24px;height:24px;border:2px solid transparent;border-radius:50%;cursor:pointer;transition:all .15s;padding:0;&.active{border-color:var(--b3-theme-on-surface);transform:scale(1.1)}&:hover{transform:scale(1.05)}}
 .mark-style-btn{width:28px;height:24px;display:flex;align-items:center;justify-content:center;border:1px solid var(--b3-border-color);background:transparent;border-radius:4px;cursor:pointer;transition:all .15s;color:var(--b3-theme-on-surface);font-size:12px;font-weight:600;&.active{background:var(--b3-theme-primary-lightest);border-color:var(--b3-theme-primary);color:var(--b3-theme-primary)}&:hover{background:var(--b3-list-hover)}span[data-type="underline"]{text-decoration:underline}span[data-type="outline"]{border:1px solid currentColor;padding:0 2px}span[data-type="dotted"]{border-bottom:2px dotted currentColor}span[data-type="dashed"]{border-bottom:2px dashed currentColor}span[data-type="double"]{border-bottom:3px double currentColor}span[data-type="squiggly"]{text-decoration:underline wavy}}
 .reader-toc-popup{position:absolute;bottom:60px;left:50%;transform:translateX(-50%);width:min(360px,90vw);max-height:min(480px,70vh);background:var(--b3-theme-surface);border:1px solid var(--b3-border-color);border-radius:8px;box-shadow:0 4px 20px #0003;z-index:1002;overflow:hidden;display:flex;flex-direction:column}
+.reader-sidebar-tabs{display:flex;gap:6px;padding:8px 8px 0;border-bottom:1px solid var(--b3-border-color);background:var(--b3-theme-surface)}
+.reader-sidebar-tab{height:28px;padding:0 10px;border:1px solid var(--b3-border-color);border-radius:999px;background:var(--b3-theme-background);font-size:12px;font-weight:600;color:var(--b3-theme-on-surface);cursor:pointer}
+.reader-sidebar-tab:hover{background:var(--b3-list-hover)}
+.reader-sidebar-tab.active{border-color:var(--b3-theme-primary);background:var(--b3-theme-primary-lightest);color:var(--b3-theme-primary)}
 .toc-popup-enter-active,.toc-popup-leave-active{transition:all .2s}
 .toc-popup-enter-from,.toc-popup-leave-to{opacity:0;transform:translate(-50%,10px)}
 </style>

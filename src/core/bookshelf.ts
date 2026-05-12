@@ -45,6 +45,14 @@ export const STATUS_SELECT_OPTIONS = STATUS_OPTIONS.map(([value, label]) => ({ v
 export const FORMAT_SELECT_OPTIONS = FORMAT_OPTIONS.map(value => ({ value, label: value.toUpperCase() }));
 export const createDefaultGroupRules = () => ({ tags: [] as string[], format: [] as BookFormat[], status: [] as BookStatus[], rating: 0 });
 export const createDefaultEditForm = (): BookshelfEditForm => ({ title: '', author: '', tags: '', rating: 0, status: 'unread', cover: '', groups: [], bindDocId: '', bindDocName: '', autoSync: false, syncDelete: false });
+export const bookInGroup = (book: Pick<any, 'tags' | 'format' | 'status' | 'rating' | 'groups'>, group: GroupConfig) => {
+  if (group.type === 'folder') return book.groups?.includes(group.id)
+  const { tags = [], format = [], status = [], rating = 0 } = group.rules || {}
+  return (!tags.length || tags.some(t => book.tags?.includes(t))) &&
+    (!format.length || format.includes(book.format)) &&
+    (!status.length || status.includes(book.status)) &&
+    (!rating || (book.rating || 0) >= rating)
+}
 export const getNextViewMode = (mode: BookshelfViewMode): BookshelfViewMode => {
   const values = VIEW_MODES.map(({ value }) => value);
   return values[(values.indexOf(mode) + 1) % values.length];
@@ -238,7 +246,10 @@ class BookshelfManager {
     clearTimeout(this.progressTimer)
     this.progressTimer=setTimeout(async()=>{
       try{
-        if(pdfViewer){const p=pdfViewer.getCurrentPage()||1,t=pdfViewer.getPageCount()||1;return this.updateProgress(url,Math.round(p/t*100),p,`#page-${p}`)}
+        if(pdfViewer){
+          const loc=pdfViewer.getLocation?.(),p=loc?.page||pdfViewer.getCurrentPage?.()||1
+          return this.updateProgress(url,Math.round((loc?.fraction||0)*100),p,`#page-${p}`)
+        }
         const loc=reader?.getLocation?.()??view?.lastLocation;if(!loc)return
         loc.fraction!==undefined&&this.updateProgress(url,Math.round(loc.fraction*100),loc.index,loc.cfi)
       }catch{}
@@ -248,16 +259,18 @@ class BookshelfManager {
   // 恢复阅读进度
   async restoreProgress(url:string,reader?:any,pdfViewer?:any,view?:any){
     try{
-      const b=await this.getBook(url);if(!b?.pos&&!b?.chapter)return
+      const b=await this.getBook(url),cfi=b?.pos?.cfi,chapter=b?.chapter||0
+      if(!b)return
       if(pdfViewer){
-        const p=b.chapter||0,t=pdfViewer.getPageCount()
-        if(p>=1&&p<=t)return pdfViewer.goToPage(p)
-        const cfi=b.pos?.cfi;if(cfi?.startsWith('#page-')){const pg=parseInt(cfi.slice(6));pg>=1&&pg<=t&&pdfViewer.goToPage(pg)}
-      }else{
-        const tgt=reader||view,loc=b.pos?.cfi||b.chapter;if(!tgt||!loc)return
-        await new Promise(r=>setTimeout(r,300))
-        try{await tgt.goTo(loc)}catch{b.chapter&&tgt.goTo(b.chapter).catch(()=>{})}
+        const t=pdfViewer.getPageCount(),page=chapter>=1&&chapter<=t?chapter:cfi?.startsWith('#page-')?parseInt(cfi.slice(6)):0
+        if(page>=1&&page<=t)pdfViewer.goToPage(page)
+        return
       }
+      const tgt=reader||view,loc=cfi||chapter
+      if(!tgt)return
+      if(!loc)return void ((b.progress||0)<=0&&await reader?.goToTextStart?.())
+      await new Promise(r=>setTimeout(r,300))
+      try{await tgt.goTo(loc)}catch{chapter&&tgt.goTo(chapter).catch(()=>{})}
     }catch{}
   }
   
@@ -282,14 +295,7 @@ class BookshelfManager {
   
   // ===== 分组管理 =====
   private writeGroups = async (groups: GroupConfig[]) => { await this.useDb(db => db.saveGroups(groups)); this.notify() }
-  private matchGroup = (book: any, group: GroupConfig) => {
-    if (group.type === 'folder') return book.groups?.includes(group.id)
-    const { tags = [], format = [], status = [], rating = 0 } = group.rules || {}
-    return (!tags.length || tags.some(t => book.tags?.includes(t))) &&
-      (!format.length || format.includes(book.format)) &&
-      (!status.length || status.includes(book.status)) &&
-      (!rating || (book.rating || 0) >= rating)
-  }
+  private matchGroup = (book: any, group: GroupConfig) => bookInGroup(book, group)
   getGroups = async () => this.useDb(db => db.getGroups());
   saveGroups = async (groups: GroupConfig[]) => this.writeGroups(groups);
   async upsertGroup(group: GroupConfig) {
@@ -470,12 +476,13 @@ class BookshelfManager {
     if (!['epub', 'mobi', 'azw3', 'txt'].includes(format)) return def
     try {
       const view = document.createElement('foliate-view') as any
+      const coverTask = (format === 'epub' || format === 'txt') ? this.extractCover(file).catch(() => undefined) : Promise.resolve(undefined)
       await Promise.race([view.open(file), new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 10000))])
       const { metadata = {} } = view.book || {}
       const norm = (v: any) => typeof v === 'string' ? v : (v?.['zh-CN'] || v?.['zh'] || v?.['en'] || Object.values(v || {})[0] || '')
       const arr = (v: any) => v ? (Array.isArray(v) ? v : [v]) : []
       const contrib = (v: any) => arr(v).map((c: any) => typeof c === 'string' ? c : norm(c?.name)).filter(Boolean).join(', ') || undefined
-      const coverBlob = (format === 'epub' || format === 'txt') ? await this.extractCover(file).catch(() => undefined) : undefined
+      const coverBlob = await coverTask
       view.remove()
       return {
         title: normalizeBookTitle(norm(metadata.title) || defaultName) || defaultName, subtitle: norm(metadata.subtitle), author: contrib(metadata.author) || '未知作者',

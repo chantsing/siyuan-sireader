@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI translation, Anki flashcards
 
-[![Version](https://img.shields.io/badge/version-1.1.3-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-1.2.1-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,48 @@ Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI tr
 ---
 
 ## 📝 Latest Updates
+
+### v1.2.1 (2026.5.12)
+
+**Added**
+
+- Added a tree view for the bookshelf with expand/collapse support.
+- Added drag-and-drop grouping for books, including moving books out of groups.
+- Added a first-open "Start Reading" welcome effect for newly opened books.
+- Added quick annotation-type switches for All, Highlights, Notes, and Bookmarks.
+- Added a standalone annotation panel for centralized review and management.
+
+**Improved**
+
+- Improved the overall interaction across the three bookshelf views and refactored the related structure.
+- Improved batch import flow and presentation so the import process is clearer.
+- Improved bookshelf cover rendering stability and performance.
+- Improved smart-grouping conditions to make organization easier.
+- Improved the PDF toolbar layout and styling for a more compact, consistent UI.
+- Refactored popup structures for bookshelf, search, and annotations to unify interaction patterns.
+- Refactored the table of contents and annotation panel structure with clearer responsibility boundaries.
+- Refactored annotation filtering to support type filters, combined filters, and sorting.
+- Merged bookmarks into the annotation system for unified display and filtering across highlights, notes, and bookmarks.
+- Added filtering support for text highlights, notes, bookmarks, ink, shapes, and other annotation types.
+- Improved annotation card styling and interaction feedback for a cleaner interface.
+- Improved the settings page and related UI structure for better stability.
+- Improved book opening and reader-view mounting to reduce initialization coupling.
+- Improved import, book storage, and migration code structure for better version compatibility.
+- Added full mobile support, including both tap-to-turn and swipe page turning.
+- Added full feature support for Docker deployments.
+
+**Fixed**
+
+- Fixed a shortcut conflict between PDF printing and SiYuan global search.
+- Fixed an intermittent blank screen when opening a book for the first time.
+- Fixed incorrect progress display caused by PDF reading-progress save failures.
+- Fixed incomplete background rendering after resizing the EPUB reading window.
+- Fixed misplaced toolbar positioning after selecting text in PDF.
+- Fixed the repeated display of the "Start Reading" effect for books that already had reading progress.
+- Fixed the mobile-side reading open event chain to improve entry stability.
+- Fixed compatibility issues in some book import, storage, and migration scenarios.
+
+---
 
 ### v1.1.3 (2026.4.30)
 

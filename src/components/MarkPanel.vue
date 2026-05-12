@@ -1,6 +1,6 @@
 <template>
   <Teleport to="body">
-    <div v-if="state.showMenu || state.showCard || state.showSendMenu" class="mark-overlay" @click="closeAll" />
+    <div v-if="state.showMenu || state.showPanel || state.showSendMenu" class="mark-overlay" @click="closeAll" />
 
     <div v-if="state.showMenu" class="mark-menu" :style="menuPosition" @click.stop>
       <button @click="openSelectionEditor" class="b3-tooltips b3-tooltips__s" :aria-label="i18n?.note || '笔记'"><svg><use xlink:href="#lucide-square-pen" /></svg></button>
@@ -20,11 +20,10 @@
       <button v-for="doc in sendDocs" :key="doc.id" class="send-item" @click="() => handleSendToDoc(doc.path?.split('/').pop()?.replace('.sy', '') || doc.id)">{{ doc.hPath || doc.content || '无标题' }}</button>
     </div>
 
-    <Translate :show="state.showTranslate" :text="state.selection?.text || ''" :x="state.x" :y="state.y" @close="state.showTranslate = false" />
-
-    <div v-if="state.showCard" v-motion :initial="{ opacity: 0, y: 5 }" :enter="{ opacity: 1, y: 0 }" class="sr-card sr-popup sr-popup-panel" :style="cardPosition" @click.stop>
-      <div class="sr-main" :style="{ borderLeftColor: currentColor }">
-        <template v-if="!state.isEditing">
+    <div v-if="state.showPanel" v-motion :initial="{ opacity: 0, y: 5 }" :enter="{ opacity: 1, y: 0 }" class="sr-card sr-popup sr-popup-panel" :style="cardPosition" @click.stop>
+      <div class="sr-main">
+        <Translate v-if="state.panel === 'translate'" :text="state.selection?.text || ''" />
+        <template v-else-if="!state.isEditing">
           <div class="sr-title" @click="goToMark">{{ state.text || '无内容' }}</div>
           <div v-if="state.note" class="sr-note" @click.stop="handleEdit">{{ state.note }}</div>
           <div class="sr-btns">
@@ -43,6 +42,9 @@
             ref="noteRef"
             v-model="state.text"
             class="sr-note-input"
+            @mousedown.stop
+            @pointerdown.stop
+            @touchend.stop="focusMobileEditable($event.target)"
             placeholder="输入文本框内容..."
           />
           <textarea
@@ -50,6 +52,9 @@
             ref="noteRef"
             v-model="state.note"
             class="sr-note-input"
+            @mousedown.stop
+            @pointerdown.stop
+            @touchend.stop="focusMobileEditable($event.target)"
             placeholder="添加笔记..."
           />
           <div class="sr-options">
@@ -82,15 +87,21 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { showMessage } from 'siyuan'
 import type { HighlightColor, Mark, MarkManager } from '@/core/MarkManager'
-import { COLORS, STYLES, getColorMap } from '@/core/MarkManager'
+import { COLORS, STYLES } from '@/core/MarkManager'
 import { PDF_SHAPE_COLORS, PDF_SHAPE_OPTIONS } from '@/core/pdf/shape'
 import { hideFloat, openBlock, showFloat } from '@/utils/copy'
 import { jump } from '@/utils/jump'
+import { focusMobileEditable, isMobile } from '@/utils/mobile'
 import Translate from './Translate.vue'
 
 interface MarkSelection {
   text: string
   location: { format: 'pdf' | 'epub'; cfi?: string; section?: number; page?: number; rects?: any[] }
+}
+interface SelectionAnchor {
+  x: number
+  y: number
+  panelY?: number
 }
 
 const props = defineProps<{
@@ -115,7 +126,6 @@ const emit = defineEmits<{
 }>()
 
 const SHAPES = PDF_SHAPE_OPTIONS
-const colors = getColorMap()
 const shapeColors = PDF_SHAPE_COLORS
 const noteRef = ref<HTMLTextAreaElement>()
 const sendSearch = ref('')
@@ -124,12 +134,13 @@ let quickMarkCooldown = false
 
 const state = reactive({
   showMenu: false,
-  showCard: false,
-  showTranslate: false,
+  showPanel: false,
   showSendMenu: false,
+  panel: '' as '' | 'card' | 'translate',
   isEditing: false,
   x: 0,
   y: 0,
+  panelY: 0,
   selection: null as MarkSelection | null,
   currentMark: null as Mark | null,
   text: '',
@@ -140,47 +151,59 @@ const state = reactive({
   shapeFilled: false,
 })
 
-const selectionPos = computed(() => state.selection?.location?.cfi || state.selection?.location?.page || state.selection?.location?.section)
 const isPdf = computed(() => (state.selection?.location.format || state.currentMark?.format) === 'pdf')
 const isShapeMark = computed(() => state.currentMark?.type === 'shape')
 const isInkMark = computed(() => state.currentMark?.type === 'ink')
 const isTextboxMark = computed(() => isShapeMark.value && state.shapeType === 'textbox')
 const quickDocs = computed(() => (window as any).__sireader_settings?.quickSendDocs || [])
-const currentColor = computed(() => state.currentMark?.type === 'shape' || state.currentMark?.type === 'ink' || state.color.startsWith('#') ? state.color : colors[state.color] || '#ffeb3b')
 const colorOptions = computed(() => (state.currentMark?.type === 'shape' || state.currentMark?.type === 'ink')
   ? shapeColors.map(color => ({ key: color, value: color, bg: color }))
   : COLORS.map(color => ({ key: color.color, value: color.color, bg: color.bg })))
 
-const clampPos = (x: number, y: number, w: number, h: number) => {
+const placePopup = (x: number, y: number, w: number, h: number, preferAbove = false, clampBelow = false) => {
   const rect = document.querySelector('.reader-container')?.getBoundingClientRect()
   const box = rect
     ? { left: rect.left + 16, right: rect.right - 16, top: rect.top + 16, bottom: rect.bottom - 16 }
     : { left: 16, right: innerWidth - 16, top: 16, bottom: innerHeight - 16 }
-  const pad = 10
+  const pad = 6
+  const belowY = y + pad
+  const aboveY = y - h - pad
+  const availableBelow = Math.max(0, box.bottom - belowY - pad)
+  const availableAbove = Math.max(0, y - box.top - pad * 2)
+  const preferAboveHit = preferAbove && aboveY >= box.top
+  const overflowBottom = y + h + pad * 2 > box.bottom
+  if (clampBelow && overflowBottom) {
+    const placeAbove = availableAbove > availableBelow
+    const maxHeight = Math.max(0, placeAbove ? availableAbove : availableBelow)
+    return {
+      x: Math.max(box.left + w / 2 + pad, Math.min(x, box.right - w / 2 - pad)),
+      y: placeAbove ? Math.max(box.top + pad, y - Math.min(h, maxHeight) - pad) : belowY,
+      maxHeight,
+    }
+  }
   return {
     x: Math.max(box.left + w / 2 + pad, Math.min(x, box.right - w / 2 - pad)),
-    y: y + h + pad * 2 > box.bottom ? Math.max(box.top + pad * 2, y - h - pad) : y + pad,
+    y: preferAboveHit ? aboveY : overflowBottom ? Math.max(box.top + pad * 2, aboveY) : belowY,
   }
 }
-const menuPosition = computed(() => {
-  const { x, y } = clampPos(state.x, state.y, 240, 50)
-  return { left: `${x}px`, top: `${y}px`, transform: 'translate(-50%,0)' }
+const popupStyle = ({ x, y, maxHeight }: { x: number; y: number; maxHeight?: number }) => ({
+  left: `${x}px`,
+  top: `${y}px`,
+  transform: 'translate(-50%,0)',
+  maxHeight: maxHeight ? `${maxHeight}px` : undefined,
 })
-const cardPosition = computed(() => {
-  const { x, y } = clampPos(state.x, state.y, 340, state.isEditing ? 420 : 180)
-  return { left: `${x}px`, top: `${y}px`, transform: 'translate(-50%,0)' }
-})
+const cardPlacement = computed(() => placePopup(state.x, state.panelY || state.y + 24, 340, state.panel === 'translate' || state.isEditing ? 420 : 180, false, true))
+const menuPosition = computed(() => popupStyle(placePopup(state.x, state.y, 240, 50, true)))
+const cardPosition = computed(() => popupStyle(cardPlacement.value))
 const sendMenuPosition = computed(() => {
   const quickHeight = quickDocs.value.length * 40
   const searchHeight = sendDocs.value.length ? Math.min(sendDocs.value.length, 5) * 40 : 60
-  const { x, y } = clampPos(state.x, state.y + 60, 280, quickHeight + searchHeight + 40)
-  return { left: `${x}px`, top: `${y}px`, transform: 'translate(-50%,0)' }
+  return popupStyle(placePopup(state.x, state.panelY || state.y + 24, 280, quickHeight + searchHeight + 40, false, true))
 })
 
-const markText = (mark: any) => mark.text || (mark.type === 'shape' ? (mark.shapeType === 'textbox' ? '' : '形状标注') : mark.type === 'ink' ? '墨迹标注' : '')
 const markData = (mark: any, extra: Record<string, any> = {}) => ({
   currentMark: mark,
-  text: markText(mark),
+  text: mark.text || (mark.type === 'shape' ? (mark.shapeType === 'textbox' ? '' : '形状标注') : mark.type === 'ink' ? '墨迹标注' : ''),
   note: mark.note || '',
   color: mark.color || (mark.type === 'ink' ? '#ff0000' : 'yellow'),
   style: mark.style || 'highlight',
@@ -190,7 +213,8 @@ const markData = (mark: any, extra: Record<string, any> = {}) => ({
 })
 const selectionArgs = () => {
   const loc = state.selection?.location
-  return selectionPos.value && loc ? [selectionPos.value, state.text.trim(), state.color, state.style, loc.rects, (loc as any).textOffset] as const : null
+  const pos = loc?.cfi || loc?.page || loc?.section
+  return pos && loc ? [pos, state.text.trim(), state.color, state.style, loc.rects, (loc as any).textOffset] as const : null
 }
 const addSelectionMark = async (text: string, color: HighlightColor, style: typeof state.style) => {
   const args = selectionArgs()
@@ -200,31 +224,50 @@ const focusNote = () => nextTick(() => {
   noteRef.value?.focus()
   noteRef.value?.setSelectionRange?.(noteRef.value.value.length, noteRef.value.value.length)
 })
-const hideMenus = () => {
+const focusNoteIfNeeded = () => { if (!isMobile()) focusNote() }
+const resetSendState = () => {
+  sendSearch.value = ''
+  sendDocs.value = []
+}
+const closeMenus = () => {
   state.showMenu = false
   state.showSendMenu = false
 }
-const openCard = (extra: Record<string, any>) => Object.assign(state, { showCard: true, showMenu: false, showSendMenu: false, ...extra })
+const closePanel = (clearSelection = false) => {
+  Object.assign(state, {
+    showPanel: false,
+    panel: '',
+    isEditing: false,
+    currentMark: null,
+    ...(clearSelection ? { selection: null } : {}),
+  })
+}
+const setPanelState = (panel: '' | 'card' | 'translate', extra: Record<string, any> = {}) => {
+  closeMenus()
+  Object.assign(state, { showPanel: !!panel, panel, ...extra })
+}
 const openSelectionEditor = () => {
   if (!state.selection) return
-  openCard({ currentMark: null, text: state.selection.text, note: '', isEditing: true })
-  focusNote()
+  setPanelState('card', { currentMark: null, text: state.selection.text, note: '', isEditing: true })
+  focusNoteIfNeeded()
 }
 const closeAll = () => {
   props.ttsController?.cancelLoop()
-  sendSearch.value = ''
-  sendDocs.value = []
-  Object.assign(state, { showMenu: false, showCard: false, showTranslate: false, showSendMenu: false, isEditing: false, selection: null, currentMark: null })
+  resetSendState()
+  closeMenus()
+  closePanel(true)
 }
-
-const openSelectionPanel = async (selection: MarkSelection, x: number, y: number) => {
-  Object.assign(state, { selection, x, y })
+const openSelectionPanel = async (selection: MarkSelection, anchor: SelectionAnchor) => {
+  const sameSelection = state.selection && getSelectionKey(state.selection) === getSelectionKey(selection)
+  Object.assign(state, { selection, x: anchor.x, y: anchor.y, panelY: anchor.panelY || 0 })
   if (props.quickMarkMode) return await handleCopy(props.quickMarkColor, props.quickMarkStyle)
-  Object.assign(state, { showMenu: true, showCard: false, showSendMenu: false, currentMark: null, isEditing: false, text: selection.text, note: '' })
+  if (sameSelection && state.showMenu && !state.showPanel && !state.showSendMenu) return
+  closePanel()
+  Object.assign(state, { currentMark: null, isEditing: false, text: selection.text, note: '', showMenu: true, showSendMenu: false })
 }
 const openMarkPanel = (mark: Mark, x: number, y: number, edit = false) => {
-  openCard({ ...markData(mark, { x, y, isEditing: edit }) })
-  if (edit) focusNote()
+  setPanelState('card', { ...markData(mark, { x, y, panelY: y, isEditing: edit }) })
+  if (edit) focusNoteIfNeeded()
 }
 
 const showShapeCard = (shape: any, pdfViewer: any) => {
@@ -243,18 +286,22 @@ const showAnnotationCard = (mark: any) => {
   if (quickMarkCooldown) return
   const el = document.querySelector(`[data-id="${mark.id}"]`) as HTMLElement | null
   if (!el) return
-  const rect = el.getBoundingClientRect()
-  openMarkPanel(mark, rect.left + rect.width / 2, rect.bottom)
+  openMarkAtRect(mark, el.getBoundingClientRect(), document)
 }
 
-const getCoords = (rect: DOMRect, doc: Document) => {
+const getSelectionAnchor = (rect: DOMRect, doc: Document, center = true): SelectionAnchor => {
   const iframe = doc.defaultView?.frameElement as HTMLIFrameElement | null
-  if (!iframe) return { x: rect.left, y: rect.top }
-  const box = iframe.getBoundingClientRect()
-  return { x: (rect.left > box.width ? rect.left % box.width : rect.left) + box.left, y: rect.top + box.top }
+  const box = iframe?.getBoundingClientRect()
+  const x = box ? (rect.left > box.width ? rect.left % box.width : rect.left) + box.left : rect.left
+  const y = box ? rect.top + box.top : rect.top
+  return { x: x + (center ? rect.width / 2 : 0), y, panelY: y + rect.height + 8 }
 }
-const checkSelection = (doc?: Document, e?: MouseEvent) => {
-  if (e && (e.target as HTMLElement).closest('.sr-popup-panel,.mark-menu,[data-note-marker]')) return
+const getSelectionKey = (selection: MarkSelection) => `${selection.location.format}:${selection.location.cfi || selection.location.page || selection.location.section || ''}:${selection.text}`
+const openMarkAtRect = (mark: Mark, rect: DOMRect, doc: Document, center = true, edit = false) => {
+  const anchor = getSelectionAnchor(rect, doc, center)
+  openMarkPanel(mark, anchor.x, anchor.panelY || anchor.y, edit)
+}
+const checkSelection = (doc?: Document, _e?: MouseEvent) => {
   const process = (targetDoc: Document, index?: number) => {
     const selection = targetDoc.defaultView?.getSelection()
     if (!selection || selection.isCollapsed || !selection.toString().trim()) {
@@ -262,14 +309,14 @@ const checkSelection = (doc?: Document, e?: MouseEvent) => {
         props.ttsController?.cancelLoop()
         state.selection = null
       }
+      if (state.showMenu && !state.showPanel && !state.showSendMenu) closeAll()
       return false
     }
     try {
       const range = selection.getRangeAt(0)
       const rect = range.getBoundingClientRect()
       const cfi = index !== undefined ? props.reader?.getView().getCFI(index, range) : undefined
-      const { x, y } = getCoords(rect, targetDoc)
-      openSelectionPanel({ text: selection.toString().trim(), location: { format: props.pdfViewer ? 'pdf' : 'epub', cfi } }, x + (index === undefined ? rect.width / 2 : 0), y)
+      openSelectionPanel({ text: selection.toString().trim(), location: { format: props.pdfViewer ? 'pdf' : 'epub', cfi } }, getSelectionAnchor(rect, targetDoc, index === undefined))
       return true
     } catch {
       return false
@@ -290,9 +337,7 @@ const setupAnnotationListeners = () => {
     const mark = props.manager?.getAll().find(item => item.cfi === value)
     if (!mark) return
     try {
-      const rect = range.getBoundingClientRect()
-      const { x, y } = getCoords(rect, range.startContainer.ownerDocument)
-      openMarkPanel(mark, x, y + rect.height + 10)
+      openMarkAtRect(mark, range.getBoundingClientRect(), range.startContainer.ownerDocument, false)
     } catch {}
   }) as EventListener)
 }
@@ -304,12 +349,27 @@ const handleGlobalEdit = (e: Event) => {
 onMounted(() => {
   setupAnnotationListeners()
   window.addEventListener('sireader:edit-mark', handleGlobalEdit)
+  if (!isMobile()) window.addEventListener('resize', closeAll)
+  window.addEventListener('scroll', closeAll, true)
 })
 onUnmounted(() => {
   window.removeEventListener('sireader:edit-mark', handleGlobalEdit)
+  if (!isMobile()) window.removeEventListener('resize', closeAll)
+  window.removeEventListener('scroll', closeAll, true)
 })
 
-defineExpose({ openSelectionPanel, openMarkPanel, closeAll, showShapeCard, showAnnotationCard, checkSelection, setupAnnotationListeners, showMenu: openSelectionPanel, showCard: openMarkPanel })
+defineExpose({
+  openSelectionPanel,
+  openMarkPanel,
+  closeAll,
+  showShapeCard,
+  showAnnotationCard,
+  checkSelection,
+  setupAnnotationListeners,
+  showSelectionMenu: openSelectionPanel,
+  showMenu: (selection: MarkSelection, anchor: SelectionAnchor | number, y?: number) => openSelectionPanel(selection, typeof anchor === 'number' ? { x: anchor, y: y || 0, panelY: (y || 0) + 24 } : anchor),
+  showCard: openMarkPanel,
+})
 
 const handleCopy = async (color?: HighlightColor, style?: typeof state.style) => {
   if (!state.selection) return
@@ -322,23 +382,17 @@ const handleCopy = async (color?: HighlightColor, style?: typeof state.style) =>
 }
 const toggleSendMenu = () => {
   state.showSendMenu = !state.showSendMenu
-  if (state.showSendMenu) {
-    sendSearch.value = ''
-    sendDocs.value = []
-  }
+  if (state.showSendMenu) resetSendState()
 }
 const searchSendDocs = async () => {
   const keyword = sendSearch.value.trim()
   if (!keyword) return sendDocs.value = []
   try { sendDocs.value = await (await import('@/composables/useSetting')).searchDocs(keyword) } catch { sendDocs.value = [] }
 }
-const createMark = async () => {
-  return state.selection ? await addSelectionMark(state.selection.text, props.quickMarkColor || 'blue', props.quickMarkStyle || 'highlight') : null
-}
 const handleSendToDoc = async (docId: string) => {
   if (props.can && !props.can('quick-send')) return props.showUpgrade?.('快捷发送')
   if (!docId) return
-  const mark = await createMark()
+  const mark = state.selection ? await addSelectionMark(state.selection.text, props.quickMarkColor || 'blue', props.quickMarkStyle || 'highlight') : null
   if (mark) await (await import('@/utils/copy')).sendMarkToDoc(mark, docId, { bookUrl: (window as any).__currentBookUrl || '', isPdf: isPdf.value, showMsg: (msg: string, type?: string) => showMessage(msg, type === 'error' ? 2000 : 1500, type as any), i18n: props.i18n, marks: props.manager })
   closeAll()
 }
@@ -351,22 +405,21 @@ const handleSpeak = () => {
   if (!state.selection || !props.ttsController) return
   if (props.can && !props.can('tts')) return props.showUpgrade?.('TTS朗读')
   props.ttsController.speak(state.selection.text, props.ttsConfig)
-  hideMenus()
+  closeMenus()
 }
 const handleDict = async () => {
   if (!state.selection) return
   const { openDict } = await import('@/utils/dictionary')
-  openDict(state.selection.text, state.x, state.y, { text: state.selection.text, cfi: state.selection.location?.cfi, section: state.selection.location?.section, page: state.selection.location?.page, rects: state.selection.location?.rects })
-  hideMenus()
+  openDict(state.selection.text, cardPlacement.value.x, cardPlacement.value.y, { text: state.selection.text, cfi: state.selection.location?.cfi, section: state.selection.location?.section, page: state.selection.location?.page, rects: state.selection.location?.rects })
+  closeMenus()
 }
 const handleTranslate = () => {
   if (props.can && !props.can('translate')) return props.showUpgrade?.('翻译')
-  hideMenus()
-  state.showTranslate = true
+  setPanelState('translate')
 }
 const handleEdit = () => {
   state.isEditing = true
-  focusNote()
+  focusNoteIfNeeded()
 }
 const handleCopyMark = () => state.currentMark ? emit('copyMark', state.currentMark) : emit('copy', state.text)
 const handleOpenBlock = () => state.currentMark?.blockId && openBlock(state.currentMark.blockId)
@@ -413,7 +466,7 @@ const handleDelete = async () => {
     showMessage(props.i18n?.deleteError || '删除失败', 2000, 'error')
   }
 }
-const handleCancel = () => state.currentMark ? openCard({ ...markData(state.currentMark, { isEditing: false }) }) : closeAll()
+const handleCancel = () => state.currentMark ? setPanelState('card', { ...markData(state.currentMark, { isEditing: false }) }) : closeAll()
 const handleImport = async () => {
   if (!state.currentMark) return
   const { importMark } = await import('@/utils/copy')
@@ -428,8 +481,8 @@ const handleImport = async () => {
 .send-input{margin:8px;width:calc(100% - 16px)}
 .send-empty{padding:16px 8px;text-align:center;color:var(--b3-theme-on-surface-variant);font-size:12px;opacity:.6}
 .send-item:hover{background:var(--b3-list-hover)}
-.sr-popup-panel{position:fixed;z-index:10002!important;width:340px;max-width:340px;pointer-events:auto;cursor:default}
-.sr-popup-panel .sr-main{padding:12px;border-left:4px solid;border-radius:8px}
+.sr-popup-panel{position:fixed;z-index:10002!important;width:340px;max-width:340px;pointer-events:auto;cursor:default;overflow:auto;box-sizing:border-box}
+.sr-popup-panel .sr-main{padding:12px;border-radius:8px;box-sizing:border-box;min-height:100%}
 .sr-popup-panel .sr-note{margin-bottom:8px;cursor:text}
 .sr-popup-panel .sr-btns{position:static;opacity:1;gap:8px}
 .sr-popup-panel .sr-btns button{display:flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:1px solid var(--b3-border-color);border-radius:4px;background:transparent}

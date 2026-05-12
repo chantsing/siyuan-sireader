@@ -291,7 +291,7 @@ const PDF_DRAG_KEY = 'pdfDragAnnotation'
 type DragState = { type: 'mark' | 'shape' | 'ink'; id: string; item: any; page: number; x: number; y: number; moved: boolean }
 
 // 处理 PDF 文本选择，显示标注菜单
-export const handlePdfSelection = (viewer: any, mgr: any, show: (d: any, x: number, y: number) => void) => {
+export const handlePdfSelection = (viewer: any, mgr: any, show: (d: any, anchor: { x: number; y: number }) => void) => {
   const sel = window.getSelection()
   if (!sel?.toString().trim()) return
 
@@ -320,11 +320,7 @@ export const handlePdfSelection = (viewer: any, mgr: any, show: (d: any, x: numb
       })
     }
 
-    show(
-      { text: sel.toString().trim(), location: { format: 'pdf', page: pg, rects: data } },
-      rects[0].left + rects[0].width / 2,
-      rects[0].top
-    )
+    show({ text: sel.toString().trim(), location: { format: 'pdf', page: pg, rects: data } }, { x: rects[0].left + rects[0].width / 2, y: rects[0].top, panelY: rects[0].bottom + 8 })
   } catch (e) {
     console.error('[PDF] Selection error:', e)
   }
@@ -335,7 +331,7 @@ export const initPdfAnnotationEvents = (
   container: HTMLElement,
   viewer: any,
   mgr: any,
-  showMenu: (d: any, x: number, y: number) => void
+  showSelectionMenu: (d: any, anchor: { x: number; y: number }) => void
 ) => {
   let dragState: DragState | null = null
   let pendingDx = 0
@@ -457,7 +453,7 @@ export const initPdfAnnotationEvents = (
     setTimeout(() => {
       const sel = window.getSelection()
       if (sel?.rangeCount && !sel.isCollapsed && !isTextDown) sel.removeAllRanges()
-      else if (!(e && tryOpenTargetEditor(e))) handlePdfSelection(viewer, mgr, showMenu)
+      else if (!(e && tryOpenTargetEditor(e))) handlePdfSelection(viewer, mgr, showSelectionMenu)
     }, 100)
   }
 

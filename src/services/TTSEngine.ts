@@ -1,10 +1,16 @@
 // TTS 引擎：WebSocket 通信 + 语音管理 + Edge TTS 核心
 declare const window: any
-const { randomBytes, createHash } = window.require('crypto')
-const { URL } = window.require('url')
-const net = window.require('net')
-const tls = window.require('tls')
-const stream = window.require('stream')
+const req = (id: string) => {
+  try { return typeof window?.require === 'function' ? window.require(id) : null } catch { return null }
+}
+const crypto = req('crypto')
+const urlMod = req('url')
+const net = req('net')
+const tls = req('tls')
+const stream = req('stream')
+const randomBytes = crypto?.randomBytes
+const createHash = crypto?.createHash
+const NodeURL = urlMod?.URL
 
 const CHROMIUM_VERSION = '143.0.3650.75'
 const TRUSTED_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4'
@@ -12,9 +18,15 @@ const WINDOWS_EPOCH = 11644473600n
 const OUTPUT_FORMAT = 'webm-24khz-16bit-mono-opus'
 const VOICES_URL = `https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list?trustedclienttoken=${TRUSTED_TOKEN}`
 const CACHE_TTL = 24 * 60 * 60 * 1000
+const ensureNodeEnv = () => {
+  if (!randomBytes || !createHash || !NodeURL || !net || !tls || !stream) {
+    throw new Error('Node runtime is unavailable in current environment')
+  }
+}
 
 // 生成令牌
 const generateToken = () => {
+  ensureNodeEnv()
   const ticks = BigInt(Math.floor(Date.now() / 1000 + Number(WINDOWS_EPOCH))) * 10000000n
   return createHash('sha256').update(`${ticks - (ticks % 3000000000n)}${TRUSTED_TOKEN}`, 'ascii').digest('hex').toUpperCase()
 }
@@ -45,7 +57,8 @@ class NodeWebSocket {
   public onclose?: () => void
 
   constructor(url: string, options: any = {}) {
-    this.url = new URL(url)
+    ensureNodeEnv()
+    this.url = new NodeURL(url)
     this.options = options
   }
 

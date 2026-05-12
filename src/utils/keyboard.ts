@@ -17,52 +17,76 @@ export interface KeyboardHandlers {
 
 export const createKeyboardHandler = (handlers: KeyboardHandlers, isPdfMode: () => boolean, isActive?: () => boolean) => {
   return (e: KeyboardEvent) => {
-    if(isActive&&!isActive())return
+    if (isActive && !isActive()) return
     const t = e.target as HTMLElement
     if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return
-    
-    const k = e.key, c = e.ctrlKey || e.metaKey
-    
+
+    const consume = () => {
+      e.preventDefault()
+      e.stopPropagation()
+    }
+
+    const k = e.key
+    const c = e.ctrlKey || e.metaKey
+
     // 通用快捷键
-    if (c && k === 'z') return handlers.handleUndo?.(), e.preventDefault()
-    
+    if (c && k === 'z') return handlers.handleUndo?.(), consume()
+
     // 通用导航
-    if (['ArrowLeft', 'ArrowUp'].includes(k) || k === ' ' && e.shiftKey) return handlers.handlePrev(), e.preventDefault()
-    if (['ArrowRight', 'ArrowDown', ' '].includes(k)) return handlers.handleNext(), e.preventDefault()
-    
+    if (['ArrowLeft', 'ArrowUp'].includes(k) || (k === ' ' && e.shiftKey)) return handlers.handlePrev(), consume()
+    if (['ArrowRight', 'ArrowDown', ' '].includes(k)) return handlers.handleNext(), consume()
+
     // PDF 专用快捷键
     if (!isPdfMode()) return
-    
-    const pdfKeys = {
-      'Home': handlers.handlePdfFirstPage,
-      'End': handlers.handlePdfLastPage,
-      'PageUp': handlers.handlePdfPageUp,
-      'PageDown': handlers.handlePdfPageDown,
-      'r': handlers.handlePdfRotate,
-      'R': handlers.handlePdfRotate
+
+    const pdfKeys: Record<string, (() => void) | undefined> = {
+      Home: handlers.handlePdfFirstPage,
+      End: handlers.handlePdfLastPage,
+      PageUp: handlers.handlePdfPageUp,
+      PageDown: handlers.handlePdfPageDown,
+      r: handlers.handlePdfRotate,
+      R: handlers.handlePdfRotate,
     }
-    
-    if (pdfKeys[k]) return pdfKeys[k]?.(), e.preventDefault()
-    
+
+    if (pdfKeys[k]) return pdfKeys[k]?.(), consume()
+
     if (c) {
-      if (k === '+' || k === '=') handlers.handlePdfZoomIn?.(), e.preventDefault()
-      else if (k === '-') handlers.handlePdfZoomOut?.(), e.preventDefault()
-      else if (k === '0') handlers.handlePdfZoomReset?.(), e.preventDefault()
-      else if (k === 'f') handlers.handlePdfSearch?.(), e.preventDefault()
-      else if (k === 'p') handlers.handlePrint?.(), e.preventDefault()
+      if (k === '+' || k === '=') handlers.handlePdfZoomIn?.(), consume()
+      else if (k === '-') handlers.handlePdfZoomOut?.(), consume()
+      else if (k === '0') handlers.handlePdfZoomReset?.(), consume()
+      else if (k === 'f') handlers.handlePdfSearch?.(), consume()
+      else if (k === 'p') handlers.handlePrint?.(), consume()
     }
   }
 }
 
-// EPUB 键盘监听初始化
-export const setupEpubKeyboard = (reader: any, handler: (e: KeyboardEvent) => void, onMouseup?: (doc: Document, e: MouseEvent) => void) => {
+// EPUB 键盘与选区监听初始化
+export const setupEpubKeyboard = (reader: any, handler: (e: KeyboardEvent) => void, onSelectionChange?: (doc: Document) => void, onTapZone?: (x: number, doc: Document, target: EventTarget | null) => void) => {
   const setup = (doc: Document) => {
-    if (!doc) return
-    onMouseup && doc.addEventListener('mouseup', (e: MouseEvent) => onMouseup(doc, e))
+    if (!doc || (doc as any).__sireaderKeyboardSetup) return
+    ;(doc as any).__sireaderKeyboardSetup = true
+    let selectionTimer: any
+    const triggerSelection = () => {
+      if (!onSelectionChange) return
+      clearTimeout(selectionTimer)
+      selectionTimer = setTimeout(() => onSelectionChange(doc), 120)
+    }
+    const isInteractive = (target: EventTarget | null) =>
+      target instanceof HTMLElement &&
+      !!target.closest('input,textarea,button,select,a,[contenteditable="true"],.mark-menu,.sr-popup-panel,.reader-toolbar-group,.reader-toc-popup,[data-footnote-tooltip]')
+    onSelectionChange && doc.addEventListener('selectionchange', triggerSelection)
+    onSelectionChange && doc.addEventListener('mouseup', triggerSelection)
+    onSelectionChange && doc.addEventListener('touchend', triggerSelection)
+    onSelectionChange && doc.addEventListener('contextmenu', e => e.preventDefault())
+    onTapZone && doc.addEventListener('tap', e => {
+      const detail = (e as CustomEvent).detail || {}
+      if (isInteractive(detail.target)) return
+      if (!doc.getSelection()?.isCollapsed) return
+      onTapZone(detail.x, doc, detail.target ?? null)
+    })
     doc.addEventListener('keydown', handler)
-    // 注意：不需要设置 tabindex，keydown 事件在 document 级别触发
   }
-  
-  reader.on('load', ({doc}: any) => setup(doc))
-  setTimeout(() => reader.getView().renderer?.getContents?.()?.forEach(({doc}: any) => setup(doc)), 500)
+
+  reader.on('load', ({ doc }: any) => setup(doc))
+  setTimeout(() => reader.getView().renderer?.getContents?.()?.forEach(({ doc }: any) => setup(doc)), 500)
 }

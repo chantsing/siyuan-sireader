@@ -88,7 +88,7 @@ export const getOrAddAssetBook = async (manager: typeof bookshelfManager, assetP
 // 打开或激活书籍
 export const openOrActivateBook = (plugin: Plugin, book: Book, settings: ReaderSettings, onReady?: () => void) => {
   if (isMobile()) {
-    window.dispatchEvent(new CustomEvent('reader:open', { detail: { book } }))
+    window.dispatchEvent(new CustomEvent('reader:mobile-open', { detail: { book } }))
     onReady?.()
     return
   }

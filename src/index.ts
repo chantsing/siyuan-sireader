@@ -22,21 +22,26 @@ export default class PluginSample extends Plugin {
     this.isLocal = location.href.includes('127.0.0.1') || location.href.includes('localhost')
     this.isInWindow = location.href.includes('window.html')
     try {
-      require('@electron/remote').require('@electron/remote/main')
-      this.isElectron = true
+      const req = typeof window !== 'undefined' && typeof (window as any).require === 'function'
+        ? (window as any).require
+        : null
+      req?.('@electron/remote')?.require?.('@electron/remote/main')
+      this.isElectron = !!req
     } catch {
       this.isElectron = false
     }
 
     usePlugin(this)
-    const { ensureMigrationCompleted } = await import('@/utils/migration')
-    if (!await ensureMigrationCompleted()) return
-
     init(this)
     this.addHotkeys()
 
-    const { enableAutoSync } = await import('@/components/deck/siyuan-card')
-    enableAutoSync()
+    import('@/utils/migration')
+      .then(({ ensureMigrationCompleted }) => ensureMigrationCompleted())
+      .catch(error => console.error('[SiReader] Migration init failed:', error))
+
+    import('@/components/deck/siyuan-card')
+      .then(({ enableAutoSync }) => enableAutoSync())
+      .catch(error => console.error('[SiReader] Deck autosync init failed:', error))
   }
 
   private addHotkeys() {

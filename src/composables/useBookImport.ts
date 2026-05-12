@@ -69,8 +69,9 @@ export const useBookImport = () => {
     progress.value = 0
     items.value.forEach(revokeCover)
     items.value = next
+    const queue = items.value
     let done = 0
-    await chunked(next, concurrency, async item => {
+    await chunked(queue, concurrency, async item => {
       try {
         item.preview = await worker(item)
         item.error = ''
@@ -83,6 +84,7 @@ export const useBookImport = () => {
         progress.value = Math.round((++done / next.length) * 100)
       }
     })
+    queue.forEach(item => { item.loading = false })
     parsing.value = false
   }
 
@@ -103,7 +105,7 @@ export const useBookImport = () => {
     await parseItems(
       validFiles.map(file => createItem('file', file, file.name, toFileUrl(file))),
       item => bookshelfManager.previewLocalBook(getImportFile(item)),
-      validFiles.length > 8 ? 4 : 2,
+      validFiles.length > 8 ? 5 : 3,
     )
   }
 
