@@ -325,7 +325,9 @@ const init=async()=>{
         reader,
         handleKeydown,
         doc=>markPanelRef.value?.checkSelection(doc),
-        x=>handleTapZone(x)
+        x=>handleTapZone(x),
+        ()=>reader?.goLeft(),
+        ()=>reader?.goRight()
       )
       currentView.value=view
       setActiveReader(view,reader,getSettings())
@@ -355,11 +357,9 @@ const handleCopy=(item:any)=>{
 const handleOpenDict=(text:string,x:number,y:number,selection:any)=>selection&&openDictDialog(text,x,y,selection)
 
 // 导航
-const handlePrev=()=>{ttsController.destroy();isPdfMode.value?currentView.value?.nav?.prev?.():reader?reader.prev():currentView.value?.prev?.()||currentView.value?.goLeft?.()}
-const handleNext=()=>{
-  if(readerSplashRef.value?.isVisible())return readerSplashRef.value.dismiss()
-  ttsController.destroy();isPdfMode.value?currentView.value?.nav?.next?.():reader?reader.next():currentView.value?.next?.()||currentView.value?.goRight?.()
-}
+const isEpubScrollMode=()=>getSettings()?.viewMode==='scroll'
+const handlePrev=()=>{ttsController.destroy();isPdfMode.value?currentView.value?.nav?.prev?.():reader?(isEpubScrollMode()?reader.prev():reader.goLeft()):currentView.value?.prev?.()||currentView.value?.goLeft?.()}
+const handleNext=()=>{if(readerSplashRef.value?.isVisible())return readerSplashRef.value.dismiss();ttsController.destroy();isPdfMode.value?currentView.value?.nav?.next?.():reader?(isEpubScrollMode()?reader.next():reader.goRight()):currentView.value?.next?.()||currentView.value?.goRight?.()}
 const handlePageJump=()=>{ttsController.destroy();const p=Math.max(1,Math.min(totalPages.value,pageInput.value||1));pageInput.value=p;pdfViewer.value?.goToPage(p)}
 const updatePageInfo=()=>pdfViewer.value&&(totalPages.value=pdfViewer.value.getPageCount(),pageInput.value=pdfViewer.value.getCurrentPage())
 
@@ -461,9 +461,9 @@ const setupTabObserver=()=>{if(isMobile())return;let el=containerRef.value?.pare
 const handleShapeCreated=async(e:CustomEvent)=>{const{shape,x,y,edit}=e.detail;await finishPdfAnnotation(shape,x,y,edit)}
 const handleInkCreated=async(e:CustomEvent)=>{const{ink,x,y,edit}=e.detail||{};await finishPdfAnnotation(ink,x,y,edit)}
 
-onMounted(()=>{init();containerRef.value?.focus();events.forEach(([e,h])=>window.addEventListener(e,h as any));window.addEventListener('keydown',handleKeydown);window.addEventListener('unhandledrejection',suppressError);window.addEventListener('shape-created',handleShapeCreated as any);window.addEventListener('ink-created',handleInkCreated as any);window.addEventListener('blur',handleWindowBlur);window.addEventListener('focus',handleWindowFocus);document.addEventListener('visibilitychange',handleVisibilityChange);setupTabObserver();const c=containerRef.value;c&&(c.addEventListener('focusin',handleFocusIn),c.addEventListener('focusout',handleFocusOut));bindTouchPaging(c);bindTouchPaging(viewerContainerRef.value);window.dispatchEvent(new CustomEvent('reader:open',{detail:{bookUrl:getBookUrl()}}));syncReaderFocus(true)})
+onMounted(()=>{init();containerRef.value?.focus();events.forEach(([e,h])=>window.addEventListener(e,h as any));window.addEventListener('unhandledrejection',suppressError);window.addEventListener('shape-created',handleShapeCreated as any);window.addEventListener('ink-created',handleInkCreated as any);window.addEventListener('blur',handleWindowBlur);window.addEventListener('focus',handleWindowFocus);document.addEventListener('visibilitychange',handleVisibilityChange);setupTabObserver();const c=containerRef.value;c&&(c.addEventListener('focusin',handleFocusIn),c.addEventListener('focusout',handleFocusOut),c.addEventListener('keydown',handleKeydown));bindTouchPaging(c);bindTouchPaging(viewerContainerRef.value);window.dispatchEvent(new CustomEvent('reader:open',{detail:{bookUrl:getBookUrl()}}));syncReaderFocus(true)})
 
-onUnmounted(async()=>{syncReaderFocus(false);window.dispatchEvent(new CustomEvent('reader:close'));savePosition();clearTimeout(pdfToolbarSaveTimer);readerSplashRef.value?.cleanup();clearActiveReader();await markManager.value?.destroy();try{reader?.destroy();currentView.value?.cleanup?.();currentView.value?.viewer?.destroy?.()}catch{};inkToolManager?.destroy?.();shapeToolManager?.destroy?.();ttsController.destroy();setTimeout(()=>viewerContainerRef.value&&(viewerContainerRef.value.innerHTML=''),50);events.forEach(([e,h])=>window.removeEventListener(e,h as any));window.removeEventListener('keydown',handleKeydown);window.removeEventListener('unhandledrejection',suppressError);window.removeEventListener('shape-created',handleShapeCreated as any);window.removeEventListener('ink-created',handleInkCreated as any);window.removeEventListener('blur',handleWindowBlur);window.removeEventListener('focus',handleWindowFocus);document.removeEventListener('visibilitychange',handleVisibilityChange);(containerRef.value as any)?.__observer?.disconnect();const c=containerRef.value;c&&(c.removeEventListener('focusin',handleFocusIn),c.removeEventListener('focusout',handleFocusOut));unbindTouchPaging();const{bookshelfManager}=await import('@/core/bookshelf');await bookshelfManager.flush();bookshelfManager.cleanup()})
+onUnmounted(async()=>{syncReaderFocus(false);window.dispatchEvent(new CustomEvent('reader:close'));savePosition();clearTimeout(pdfToolbarSaveTimer);readerSplashRef.value?.cleanup();clearActiveReader();await markManager.value?.destroy();try{reader?.destroy();currentView.value?.cleanup?.();currentView.value?.viewer?.destroy?.()}catch{};inkToolManager?.destroy?.();shapeToolManager?.destroy?.();ttsController.destroy();setTimeout(()=>viewerContainerRef.value&&(viewerContainerRef.value.innerHTML=''),50);events.forEach(([e,h])=>window.removeEventListener(e,h as any));window.removeEventListener('unhandledrejection',suppressError);window.removeEventListener('shape-created',handleShapeCreated as any);window.removeEventListener('ink-created',handleInkCreated as any);window.removeEventListener('blur',handleWindowBlur);window.removeEventListener('focus',handleWindowFocus);document.removeEventListener('visibilitychange',handleVisibilityChange);(containerRef.value as any)?.__observer?.disconnect();const c=containerRef.value;c&&(c.removeEventListener('focusin',handleFocusIn),c.removeEventListener('focusout',handleFocusOut),c.removeEventListener('keydown',handleKeydown));unbindTouchPaging();const{bookshelfManager}=await import('@/core/bookshelf');await bookshelfManager.flush();bookshelfManager.cleanup()})
 </script>
 
 <style scoped lang="scss">
@@ -490,10 +490,9 @@ onUnmounted(async()=>{syncReaderFocus(false);window.dispatchEvent(new CustomEven
 .mark-color-btn{width:24px;height:24px;border:2px solid transparent;border-radius:50%;cursor:pointer;transition:all .15s;padding:0;&.active{border-color:var(--b3-theme-on-surface);transform:scale(1.1)}&:hover{transform:scale(1.05)}}
 .mark-style-btn{width:28px;height:24px;display:flex;align-items:center;justify-content:center;border:1px solid var(--b3-border-color);background:transparent;border-radius:4px;cursor:pointer;transition:all .15s;color:var(--b3-theme-on-surface);font-size:12px;font-weight:600;&.active{background:var(--b3-theme-primary-lightest);border-color:var(--b3-theme-primary);color:var(--b3-theme-primary)}&:hover{background:var(--b3-list-hover)}span[data-type="underline"]{text-decoration:underline}span[data-type="outline"]{border:1px solid currentColor;padding:0 2px}span[data-type="dotted"]{border-bottom:2px dotted currentColor}span[data-type="dashed"]{border-bottom:2px dashed currentColor}span[data-type="double"]{border-bottom:3px double currentColor}span[data-type="squiggly"]{text-decoration:underline wavy}}
 .reader-toc-popup{position:absolute;bottom:60px;left:50%;transform:translateX(-50%);width:min(360px,90vw);max-height:min(480px,70vh);background:var(--b3-theme-surface);border:1px solid var(--b3-border-color);border-radius:8px;box-shadow:0 4px 20px #0003;z-index:1002;overflow:hidden;display:flex;flex-direction:column}
-.reader-sidebar-tabs{display:flex;gap:6px;padding:8px 8px 0;border-bottom:1px solid var(--b3-border-color);background:var(--b3-theme-surface)}
-.reader-sidebar-tab{height:28px;padding:0 10px;border:1px solid var(--b3-border-color);border-radius:999px;background:var(--b3-theme-background);font-size:12px;font-weight:600;color:var(--b3-theme-on-surface);cursor:pointer}
-.reader-sidebar-tab:hover{background:var(--b3-list-hover)}
-.reader-sidebar-tab.active{border-color:var(--b3-theme-primary);background:var(--b3-theme-primary-lightest);color:var(--b3-theme-primary)}
+.reader-sidebar-tabs{display:flex;gap:6px;padding:8px;border-bottom:1px solid var(--b3-border-color);background:var(--b3-theme-surface)}
+.reader-sidebar-tab{flex:1;min-width:0;height:28px;padding:0 10px;border:1px solid var(--b3-border-color);border-radius:var(--b3-border-radius);background:var(--b3-theme-background);font-size:12px;color:var(--b3-theme-on-surface);cursor:pointer}
+.reader-sidebar-tab.active{color:var(--b3-theme-primary);background:var(--b3-theme-primary-lightest)}
 .toc-popup-enter-active,.toc-popup-leave-active{transition:all .2s}
 .toc-popup-enter-from,.toc-popup-leave-to{opacity:0;transform:translate(-50%,10px)}
 </style>

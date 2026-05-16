@@ -195,10 +195,9 @@ export async function createDailyNote(notebook: NotebookId): Promise<{id: Docume
 }
 
 
-export async function renameDoc(notebook: NotebookId, path: string, title: string): Promise<DocumentId> {
+export async function renameDoc(docId: DocumentId, title: string): Promise<DocumentId> {
     let data = {
-        doc: notebook,
-        path: path,
+        doc: docId,
         title: title
     };
     let url = '/api/filetree/renameDoc';
@@ -245,6 +244,13 @@ export async function getHPathByID(id: BlockId): Promise<string> {
     return request(url, data);
 }
 
+export async function getPathByID(id: BlockId): Promise<{ path: string; notebook: NotebookId }> {
+    let data = {
+        id: id
+    };
+    let url = '/api/filetree/getPathByID';
+    return request(url, data);
+}
 
 export async function getIDsByHPath(notebook: NotebookId, path: string): Promise<BlockId[]> {
     let data = {

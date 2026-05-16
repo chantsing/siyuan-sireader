@@ -109,7 +109,7 @@ export interface MediaItem {
     album?: string;        // 专辑名
     year?: number;         // 发行年份
     genre?: string[];      // 流派
-    lyrics?: string;       // 歌词内容
+    lyrics?: string;       // 歌词链接或路径
     coverDataUrl?: string; // 临时封面base64（用于即时显示）
 }
 
@@ -145,7 +145,13 @@ export interface Config {
         /** 媒体笔记创建方式：光标/笔记本/文档/日记 */
         mediaNotesMode?: string;
         /** 是否显示字幕 */
-        showSubtitles: boolean;
+        showSubtitles?: boolean;
+        /** 字幕偏移量 */
+        subtitleOffset?: number;
+        /** 字幕默认语言 */
+        subtitleLang?: string;
+        /** 字幕样式 */
+        subtitleStyle?: string;
         /** 是否启用弹幕 */
         enableDanmaku: boolean;
         /** 弹幕速度 (1-10) */

@@ -61,7 +61,14 @@ export const createKeyboardHandler = (handlers: KeyboardHandlers, isPdfMode: () 
 }
 
 // EPUB 键盘与选区监听初始化
-export const setupEpubKeyboard = (reader: any, handler: (e: KeyboardEvent) => void, onSelectionChange?: (doc: Document) => void, onTapZone?: (x: number, doc: Document, target: EventTarget | null) => void) => {
+export const setupEpubKeyboard = (
+  reader: any,
+  handler: (e: KeyboardEvent) => void,
+  onSelectionChange?: (doc: Document) => void,
+  onTapZone?: (x: number, doc: Document, target: EventTarget | null) => void,
+  prev?: () => void,
+  next?: () => void
+) => {
   const setup = (doc: Document) => {
     if (!doc || (doc as any).__sireaderKeyboardSetup) return
     ;(doc as any).__sireaderKeyboardSetup = true
@@ -83,6 +90,20 @@ export const setupEpubKeyboard = (reader: any, handler: (e: KeyboardEvent) => vo
       if (isInteractive(detail.target)) return
       if (!doc.getSelection()?.isCollapsed) return
       onTapZone(detail.x, doc, detail.target ?? null)
+    })
+    doc.addEventListener('wheel', e => {
+      if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return
+      if (isInteractive(e.target) || !prev || !next || reader?.getView?.()?.renderer?.getAttribute?.('flow') === 'scrolled') return
+      const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
+      if (Math.abs(delta) < 12) return
+      e.preventDefault()
+      e.stopPropagation()
+      delta > 0 ? next() : prev()
+    }, { passive: false })
+    doc.addEventListener('mouseup', e => {
+      if (isInteractive(e.target) || !prev || !next || reader?.getView?.()?.renderer?.getAttribute?.('flow') === 'scrolled') return
+      if (e.button === 3) next()
+      else if (e.button === 4) prev()
     })
     doc.addEventListener('keydown', handler)
   }

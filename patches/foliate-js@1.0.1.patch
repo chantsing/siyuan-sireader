@@ -124,54 +124,54 @@ index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..01fa66916657dc1fbc6246f1f3de5426
              'margin': 'auto',
          })
          this.setImageSize()
-+@@ -877,10 +903,16 @@ class Paginator extends HTMLElement {
-+    #onTouchStart(e) {
+@@ -877,10 +903,16 @@ export class Paginator extends HTMLElement {
+     #onTouchStart(e) {
+         const touch = e.changedTouches[0]
+         this.#touchState = {
+             x: touch?.screenX, y: touch?.screenY,
++            startX: touch?.screenX, startY: touch?.screenY,
++            clientX: touch?.clientX, clientY: touch?.clientY,
+             t: e.timeStamp,
+             vx: 0, xy: 0,
++            target: e.target,
+         }
+     }
+     #onTouchMove(e) {
+         const state = this.#touchState
+@@ -910,6 +942,8 @@ export class Paginator extends HTMLElement {
+         const dt = e.timeStamp - state.t
+         state.x = x
+         state.y = y
++        state.clientX = touch.clientX
++        state.clientY = touch.clientY
+         state.t = e.timeStamp
+         state.vx = dx / dt
+         state.vy = dy / dt
+@@ -919,7 +953,22 @@ export class Paginator extends HTMLElement {
+             this.scrollBy(0, dy)
+         }
+     }
+-    #onTouchEnd() {
++    #onTouchEnd(e) {
 +        const touch = e.changedTouches[0]
-+        this.#touchState = {
-+            x: touch?.screenX, y: touch?.screenY,
-++            startX: touch?.screenX, startY: touch?.screenY,
-++            clientX: touch?.clientX, clientY: touch?.clientY,
-+            t: e.timeStamp,
-+            vx: 0, xy: 0,
-++            target: e.target,
-+        }
-+    }
-+    #onTouchMove(e) {
 +        const state = this.#touchState
-+@@ -910,6 +942,8 @@ class Paginator extends HTMLElement {
-+        const dt = e.timeStamp - state.t
-+        state.x = x
-+        state.y = y
-++        state.clientX = touch.clientX
-++        state.clientY = touch.clientY
-+        state.t = e.timeStamp
-+        state.vx = dx / dt
-+        state.vy = dy / dt
-+@@ -919,7 +953,22 @@ class Paginator extends HTMLElement {
-+            this.scrollBy(0, dy)
++        if (!this.scrolled && state && !this.#touchScrolled && touch) {
++            const dx = touch.screenX - state.startX
++            const dy = touch.screenY - state.startY
++            const dt = e.timeStamp - state.t
++            if (dt <= 300 && Math.abs(dx) <= 20 && Math.abs(dy) <= 20) {
++                this.#view?.document?.dispatchEvent(new CustomEvent('tap', {
++                    detail: {
++                        x: touch.clientX,
++                        y: touch.clientY,
++                        target: state.target ?? e.target,
++                    },
++                }))
++                this.#touchState = null
++                this.#touchScrolled = false
++                return
++            }
 +        }
-+    }
-+-    #onTouchEnd() {
-++    #onTouchEnd(e) {
-++        const touch = e.changedTouches[0]
-++        const state = this.#touchState
-++        if (!this.scrolled && state && !this.#touchScrolled && touch) {
-++            const dx = touch.screenX - state.startX
-++            const dy = touch.screenY - state.startY
-++            const dt = e.timeStamp - state.t
-++            if (dt <= 300 && Math.abs(dx) <= 20 && Math.abs(dy) <= 20) {
-++                this.#view?.document?.dispatchEvent(new CustomEvent('tap', {
-++                    detail: {
-++                        x: touch.clientX,
-++                        y: touch.clientY,
-++                        target: state.target ?? e.target,
-++                    },
-++                }))
-++                this.#touchState = null
-++                this.#touchScrolled = false
-++                return
-++            }
-++        }
-++        this.#touchState = null
-+        this.#touchScrolled = false
-+        if (this.scrolled) return
++        this.#touchState = null
+         this.#touchScrolled = false
+         if (this.scrolled) return

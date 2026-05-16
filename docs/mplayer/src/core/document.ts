@@ -1,294 +1,319 @@
-// 思源笔记文档工具模块 - 处理文档、块、媒体笔记等操作
-import { showMessage, openTab } from "siyuan";
-import type { MediaItem } from './types';
-import * as api from '../api';
-import { Media } from './player';
+import { showMessage } from 'siyuan'
+import * as api from '@/api'
 
-// ===== 类型定义 =====
-type Block = { id?: string; root_id?: string; [key: string]: any; };
-type ReplacePattern = Record<string, string>;
+export type MediaItem = Record<string, any>
+export type ClipboardPayload = { text: string; image?: Blob }
+export const humanizeText = (v = '') => { try { return decodeURIComponent(String(v || '')) } catch { return String(v || '') } }
+export const humanizeUrl = (v = '') => { try { const s = String(v || '').trim(), u = new URL(s, location.origin), r = `${humanizeText(u.pathname)}${u.search}${u.hash}`; return /^\/(?:assets|public|data|plugins|stage)(?:\/|$)/i.test(u.pathname) ? r : /^[a-z]+:\/\//i.test(s) ? `${u.origin}${r}` : r } catch { const s = String(v || '').trim(), i = s.search(/[?#]/); return `${humanizeText(i < 0 ? s : s.slice(0, i))}${i < 0 ? '' : s.slice(i)}` } }
+const imageToAsset = async (image: string | Blob, prefix = 'image') => (await import('@/core/player')).imageToAsset(image, prefix)
 
-// ===== 文档操作 =====
-export const doc = {
-    getBlockID: async (i18n?: any): Promise<string> => {
-        try {
-            const selection = window.getSelection();
-            if (selection?.focusNode) {
-                let el = selection.focusNode as HTMLElement;
-                while (el && !el.dataset?.nodeId) el = el.parentElement as HTMLElement;
-                if (el?.dataset.nodeId) return el.dataset.nodeId;
-            }
-        } catch {}
-        return (window as any).__activeDocumentId || (() => { throw new Error(i18n?.mediaPlayerTab?.block?.cursorNotFound || "未找到光标"); })();
+type Block = { id?: string; root_id?: string }
+type InsertMode = 'insertBlock' | 'prependBlock' | 'appendBlock' | 'updateBlock' | 'prependDoc' | 'appendDoc' | 'clipboard'
+type ProtyleLike = {
+  element?: HTMLElement
+  lute?: { Md2BlockDOM: (markdown: string) => string }
+  toolbar?: { range?: Range | null }
+  getInstance?: () => { insert?: (html: string, isBlock?: boolean, useProtyleRange?: boolean) => void }
+}
+
+const notify = (text: string, type: 'info' | 'error' = 'info') => showMessage(text, type === 'error' ? 3000 : 2000, type)
+const isWindowPlayer = () => /\/window\.html$/i.test(location.pathname)
+const pickId = (value: any) => typeof value === 'string' ? value : value?.id || ''
+const pickNotebookId = (settings: Record<string, any>, fallback?: any) => pickId(fallback) || pickId(settings.notebook) || pickId(settings.targetNotebook)
+const sanitizeTitle = (title: string, fallback: string) => ((title || fallback).replace(/[\\/:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || fallback)
+const createDocName = (title: string) => `${sanitizeTitle(title, '媒体')}的媒体笔记`
+const escapeSql = (value = '') => String(value).replace(/'/g, "''")
+const getSelectionRange = () => window.getSelection()?.rangeCount ? window.getSelection()!.getRangeAt(0) : null
+const getBroadcastUrl = (channel: string) => `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/broadcast?channel=${encodeURIComponent(channel)}`
+
+const createBroadcast = (channel: string) => {
+  let socket: WebSocket | null = null
+  const listeners = new Set<(payload: Record<string, any>) => void>()
+  const connect = () => {
+    if (socket && socket.readyState < WebSocket.CLOSING) return
+    socket = new WebSocket(getBroadcastUrl(channel))
+    socket.onmessage = (event) => {
+      try { listeners.forEach(listener => listener(JSON.parse(String(event.data || '{}')))) } catch {}
+    }
+    socket.onclose = () => { socket = null }
+  }
+  return {
+    post: (payload: Record<string, any>) => api.request('/api/broadcast/postMessage', { channel, message: JSON.stringify(payload) }),
+    on: (callback: (payload: Record<string, any>) => void) => {
+      listeners.add(callback)
+      connect()
+      return () => {
+        listeners.delete(callback)
+        if (!listeners.size && socket) socket.close(), socket = null
+      }
     },
-    
-    getDocID: async (blockId?: string, i18n?: any): Promise<string> => {
-        try {
-            const block = await api.getBlockByID(blockId || await doc.getBlockID(i18n)) as Block;
-            return block?.root_id || block?.id?.split('/')[0] || '';
-        } catch { throw new Error(i18n?.mediaPlayerTab?.block?.docIdNotFound || "无法获取文档ID"); }
-    },
-    
-    insert: async (content: string, config: any, i18n?: any): Promise<string | null> => {
-        const mode = config?.settings?.insertMode || 'insertBlock';
-        if (mode === 'clipboard') {
-            await navigator.clipboard.writeText(content);
-            showMessage(i18n?.mediaPlayerTab?.block?.copiedToClipboard || "已复制到剪贴板");
-            return null;
-        }
-        const currentBlockId = await doc.getBlockID(i18n);
-        const isDocTarget = mode.includes('Doc');
-        const method = mode.replace('Block', '').replace('Doc', ''); // 'insert' | 'append' | 'prepend'
+  }
+}
 
-        let result: any;
-        if (isDocTarget) {
-            // 目标为文档根：按方法在文档下插入
-            const docId = await doc.getDocID(currentBlockId, i18n);
-            if (method === 'append') {
-                result = await (api as any).appendBlock("markdown", content, docId);
-            } else if (method === 'prepend') {
-                result = await (api as any).prependBlock("markdown", content, docId);
-            } else {
-                // insert 到文档作为子块（末尾）
-                result = await (api as any).insertBlock("markdown", content, undefined, undefined, docId);
-            }
-        } else {
-            // 目标为当前块：使用 insertBlock 的 nextID/previousID 作为兄弟插入，避免把段落等叶子块当作父级
-            if (method === 'prepend') {
-                // 在当前块之前插入
-                result = await (api as any).insertBlock("markdown", content, currentBlockId, undefined, undefined);
-            } else {
-                // insert/append：在当前块之后插入
-                result = await (api as any).insertBlock("markdown", content, undefined, currentBlockId, undefined);
-            }
-        }
-        return result?.[0]?.doOperations?.[0]?.id || null;
+const documentBroadcast = createBroadcast('siyuan-media-player-document')
+const shouldBridgeCurrentInsert = (mode: string, settings: Record<string, any>) => mode === 'current' && (settings?.insertMode || 'clipboard') !== 'clipboard' && isWindowPlayer()
+
+const requestDocumentInsert = (text: string, settings: Record<string, any>) => {
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => { off(); reject(new Error('未找到当前编辑器')) }, 1200)
+    const off = documentBroadcast.on((payload) => {
+      if (payload.type !== 'document-insert-ack' || payload.requestId !== requestId) return
+      clearTimeout(timer)
+      off()
+      payload.ok ? resolve() : reject(new Error(payload.message || '插入失败'))
+    })
+    void documentBroadcast.post({ type: 'document-insert', requestId, text, settings })
+  })
+}
+
+const toClipboardImage = async (image?: Blob) => {
+  if (!image) return null
+  if (image.type === 'image/png') return image
+  try {
+    const bitmap = await createImageBitmap(image)
+    const canvas = Object.assign(document.createElement('canvas'), { width: bitmap.width, height: bitmap.height })
+    canvas.getContext('2d')?.drawImage(bitmap, 0, 0)
+    bitmap.close?.()
+    return await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'))
+  } catch {
+    return null
+  }
+}
+
+export const copyToClipboard = async (payload: ClipboardPayload | string) => {
+  const data = typeof payload === 'string' ? { text: payload } : payload
+  const writeText = () => navigator.clipboard.writeText(data.text).then(() => notify('已复制到剪贴板'))
+  if (!data.image) return writeText()
+  const image = await toClipboardImage(data.image)
+  if (!image) return writeText()
+  await navigator.clipboard.write([new ClipboardItem({
+    'image/png': image,
+    'text/plain': new Blob([data.text], { type: 'text/plain' }),
+  })])
+  notify('已复制到剪贴板')
+}
+
+const getNodeId = (node?: Node | null) => {
+  let element = (node instanceof HTMLElement ? node : node?.parentElement) as HTMLElement | null
+  while (element && !element.dataset?.nodeId) element = element.parentElement
+  return element?.dataset?.nodeId || ''
+}
+
+const findProtyle = (range = getSelectionRange()): ProtyleLike | null => {
+  const editor = (range?.startContainer instanceof Element ? range.startContainer : range?.startContainer?.parentElement)?.closest('.protyle') as HTMLElement | null
+  if (!editor) return null
+  const seen = new Set<any>()
+  const visit = (value: any): ProtyleLike | null => {
+    if (!value) return null
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const hit = visit(item)
+        if (hit) return hit
+      }
+      return null
     }
-};
+    if (seen.has(value)) return null
+    seen.add(value)
+    if (value?.protyle?.element === editor) return value.protyle
+    return visit([
+      value?.model?.editor,
+      value?.model?.editors?.edit,
+      value?.model?.editors?.unRefEdit,
+      ...(Array.isArray(value?.model?.editors) ? value.model.editors : []),
+      ...(Array.isArray(value?.children) ? value.children : []),
+      ...(Array.isArray(value?.editors) ? value.editors : []),
+      ...Object.values(value?.editors || {}),
+    ])
+  }
+  const siyuan = (window as any).siyuan
+  return visit([siyuan?.layout?.layout, siyuan?.dialogs, siyuan?.blockPanels])
+}
 
-// ===== 工具函数 =====
-// 模板替换
-const applyTemplate = (template: string, replacements: ReplacePattern): string =>
-    Object.entries(replacements).reduce((text, [pattern, value]) => text.replace(new RegExp(pattern, 'g'), value), template);
+const insertAtCursor = (content: string) => {
+  const protyle = findProtyle()
+  const instance = protyle?.getInstance?.()
+  if (typeof instance?.insert !== 'function' || !protyle?.lute) return false
+  instance.insert(protyle.lute.Md2BlockDOM(content), false, true)
+  return true
+}
 
-// 获取媒体项的链接URL - 统一URL获取逻辑
-const getMediaUrl = (item: MediaItem): string => {
-    // B站视频特殊处理
-    if (item.bvid) {
-        const page = item.originalUrl?.match(/[?&]p=(\d+)/)?.[1];
-        return `https://www.bilibili.com/video/${item.bvid}${page && page !== '1' ? `?p=${page}` : ''}`;
-    }
-    // TVBox 协议处理
-    if ((item.source === 'tvbox' || (item as any).site) && item.originalUrl?.startsWith('tvbox://')) return item.originalUrl;
-    if ((item as any).site) try { return require('./tvbox').generateTvboxProtocol(item.title); } catch {}
-    // 优先使用原始URL（WebDAV、阿里云盘等）
-    if (item.originalUrl) return item.originalUrl;
-    return item.url;
-};
+const findActiveDocId = () => {
+  for (const selector of [
+    '.layout__wnd--active .protyle-background',
+    '.layout__wnd--active .protyle-title',
+    '.layout__wnd--active [data-node-id]',
+    '.protyle.fn__flex-1:not(.fn__none) .protyle-background',
+    '.protyle.fn__flex-1:not(.fn__none) .protyle-title',
+  ]) {
+    const id = (document.querySelector(selector) as HTMLElement | null)?.dataset?.nodeId || ''
+    if (id) return id
+  }
+  return String((window as any).__activeDocumentId || '')
+}
 
-// 时间参数处理 - 使用统一的时分秒格式
-export const withTime = (url: string, startTime?: number, endTime?: number): string =>
-    startTime ? Media.withTime(url, startTime, endTime) : url;
+const getCurrentBlockId = (range = getSelectionRange()) =>
+  getNodeId(range?.startContainer || null)
+  || getNodeId(findProtyle(range)?.toolbar?.range?.startContainer || null)
+  || getNodeId(document.activeElement)
+  || ''
 
-// ===== 媒体链接生成 =====
-// 创建媒体链接 - 统一链接生成逻辑
-export const link = async (item: MediaItem, config: any, time: number, endTime?: number, subtitle?: string): Promise<string> => {
-    if (!item) return '';
-    try {
-        const timeText = endTime ? `${Media.fmt(time)}-${Media.fmt(endTime)}` : Media.fmt(time), baseUrl = getMediaUrl(item);
-        const format = (config?.settings?.linkFormat || "- [时间 字幕](链接)").replace(/!?\[截图\]\(截图\)/g, '').replace(/!?\[.*?\]\(截图\)/g, '').trim();
-        return applyTemplate(format, { '时间|{{time}}': timeText, '字幕|{{subtitle}}': subtitle || '', '标题|{{title}}': item.title || '', '艺术家|{{artist}}': item.artist || '', '链接|{{url}}': withTime(baseUrl, time, endTime) });
-    } catch {
-        return `- [${subtitle ? `${Media.fmt(time)} ${subtitle}` : Media.fmt(time)}](${item.url})`;
-    }
-};
+const getCurrentDocId = async (blockId = '') => {
+  if (!blockId) return findActiveDocId()
+  const block = await api.getBlockByID(blockId) as Block
+  return block?.root_id || block?.id?.split('/')[0] || findActiveDocId()
+}
 
-export const linkPlain = async (item: MediaItem, config: any): Promise<string> => {
-    if (!item) return '';
-    try {
-        const baseUrl = getMediaUrl(item);
-        // 移除截图段与 时间/字幕 占位符，收敛多余空格
-        const raw = (config?.settings?.linkFormat || "- [标题](链接)")
-            .replace(/!?\[截图\]\(截图\)/g, '')
-            .replace(/!?\[.*?\]\(截图\)/g, '')
-            .replace(/(时间|\{\{time\}\})/g, '')
-            .replace(/(字幕|\{\{subtitle\}\})/g, '')
-            .replace(/\s{2,}/g, ' ')
-            .trim();
-        const out = applyTemplate(raw, {
-            '标题|{{title}}': item.title || '',
-            '艺术家|{{artist}}': item.artist || '',
-            '链接|{{url}}': baseUrl
-        });
-        return out.replace(/^\s*[-*+]\s+/, '').replace(/^\s*\d+\.\s+/, '');
-    } catch {
-        return `- [${item.title || '未命名'}](${item.url})`;
-    }
-};
-// ===== 刷新机制 =====
-const refresh = () => window.dispatchEvent(new CustomEvent('refreshNotesFilter'));
+const writeBlock = (mode: InsertMode, content: string, blockId: string, docId: string) => ({
+  updateBlock: () => api.updateBlock('markdown', content, blockId),
+  prependBlock: () => api.insertBlock('markdown', content, blockId),
+  appendBlock: () => api.insertBlock('markdown', content, undefined, blockId),
+  prependDoc: () => api.prependBlock('markdown', content, docId),
+  appendDoc: () => api.appendBlock('markdown', content, docId),
+  insertBlock: () => api.insertBlock('markdown', content, undefined, blockId),
+}[mode] || (() => api.insertBlock('markdown', content, undefined, blockId)))()
 
-// ===== 自定义属性设置 =====
-const setAttrs = async (blockId: string, type: string, item: MediaItem, time?: number, endTime?: number, screenshot?: string) => {
-    if (!blockId) return;
-    const baseUrl = getMediaUrl(item);
-    const website = item.source || 'local';
-    const attrs: Record<string, string> = { 'custom-media': type, 'custom-url': baseUrl };
+export const insertByMode = async (content: ClipboardPayload | string, settings: Record<string, any>) => {
+  const mode = (settings?.insertMode || 'clipboard') as InsertMode
+  if (mode === 'clipboard') return copyToClipboard(content)
+  const text = typeof content === 'string' ? content : content.image && !content.text ? `![截图](${await imageToAsset(content.image, 'screenshot')})` : content.text || ''
+  if (mode === 'insertBlock' && insertAtCursor(text)) return
+  const blockId = getCurrentBlockId()
+  const docId = await getCurrentDocId(blockId)
+  if (!docId) throw new Error('未找到当前文档')
+  if (!blockId) return mode === 'prependBlock' ? api.prependBlock('markdown', text, docId) : api.appendBlock('markdown', text, docId)
+  await writeBlock(mode, text, blockId, docId)
+}
 
-    if (type === 'timestamp') {
-        attrs['custom-url'] = withTime(baseUrl, time);
-        attrs['custom-timestamp'] = Media.fmt(time);
-        attrs['custom-thumbnail'] = item.thumbnail ? await imageToLocalAsset(item.thumbnail) : '';
-    } else if (type === 'loop') {
-        attrs['custom-url'] = withTime(baseUrl, time, endTime);
-        attrs['custom-loop'] = `${Media.fmt(time || 0)}-${Media.fmt(endTime || 0)}`;
-        attrs['custom-thumbnail'] = item.thumbnail ? await imageToLocalAsset(item.thumbnail) : '';
-    } else if (type === 'screenshot') {
-        attrs['custom-url'] = withTime(baseUrl, time);
-        attrs['custom-screenshot'] = screenshot || '';
-    } else if (type === 'mediacard') {
-        attrs['custom-url'] = withTime(baseUrl, time);
-        attrs['custom-timestamp'] = Media.fmt(time);
-        attrs['custom-screenshot'] = screenshot || '';
-        attrs['custom-website'] = website;
-    } else if (type === 'medianote') {
-        attrs['custom-thumbnail'] = item.thumbnail ? await imageToLocalAsset(item.thumbnail) : '';
-    }
+export const getMediaNoteKey = (item?: MediaItem) => {
+  const source = item?.source || 'media'
+  const url = String(item?.originalUrl || item?.url || '').replace(/[?#].*$/, '')
+  return item?.bvid
+    ? `bili:${item.bvid}:${item?.cid || ''}`
+    : item?.epid || item?.seasonId
+      ? `pgc:${item?.epid || item?.seasonId}`
+      : [source, item?.id, item?.sourcePath, item?.localPath, item?.cloudPath, item?.path, url, item?.title || item?.name || 'media'].filter(Boolean).join('|')
+}
 
-    api.setBlockAttrs(blockId, attrs).then(refresh).catch(() => {});
-};
+export const getDocIdByAttr = async (name: string, value: string) => !name || !value ? '' : (await api.sql(`
+  SELECT b.id
+  FROM blocks b
+  JOIN attributes a ON a.block_id = b.id
+  WHERE b.type = 'd' AND a.name = '${escapeSql(name)}' AND a.value = '${escapeSql(value)}'
+  LIMIT 1
+`).catch(() => []))?.[0]?.id || ''
 
-// ===== 播放器工具 =====
-export const player = {
-    timestamp: async (player: any, item: MediaItem, config: any, i18n?: any) => {
-        if (!player || !item) return showMessage(i18n?.controlBar?.timestamp?.hint || "请先播放媒体");
-        const time = player.getCurrentTime(), result = await link(item, config, time);
-        result && setAttrs(await doc.insert(result, config, i18n), 'timestamp', item, time);
-    },
+const getTargetNotebookId = (settings: Record<string, any>) => {
+  const id = pickNotebookId(settings, settings.parentDoc?.notebook)
+  if (!id) throw new Error('未设置目标笔记本')
+  return id
+}
 
-    loop: async (player: any, item: MediaItem, config: any, i18n?: any, loopStart: number | null = null) => {
-        if (!player || !item) return (showMessage(i18n?.controlBar?.loopSegment?.hint || "请先播放媒体"), null);
-        const now = player.getCurrentTime();
-        if (loopStart === null) return now;
-        const result = await link(item, config, loopStart, now);
-        result && setAttrs(await doc.insert(result, config, i18n), 'loop', item, loopStart, now);
-        return null;
-    },
+const openCreatedDoc = (id?: string, settings?: Record<string, any>) => id && settings?.openAfterInsert !== false && setTimeout(() => (window as any).siyuanMediaPlayer?.openDocumentTab?.(id), 600)
+const getParentHPath = async (settings: Record<string, any>, parentID?: string) =>
+  !parentID ? '' : await api.getHPathByPath(getTargetNotebookId(settings), (await api.getPathByID(parentID).catch(() => null))?.path || '').catch(() => '')
 
-    screenshot: async (player: any, item: MediaItem, config: any, i18n?: any) => {
-        if (!player) return showMessage(i18n?.controlBar?.screenshot?.hint || "请先播放媒体");
-        try {
-            const format = config?.settings?.screenshotFormat || 'png', quality = (config?.settings?.screenshotQuality || 92) / 100;
-            const imageUrl = await imageToLocalAsset(await player.getScreenshotDataURL(format, quality));
-            if (!imageUrl) throw new Error("截图上传失败");
-            const time = player.getCurrentTime(), withTime = config?.settings?.screenshotWithTimestamp;
-            if (withTime) {
-                const blockId = await doc.insert(`${await link(item, config, time)}\n\n  ![截图](${imageUrl})`, config, i18n);
-                blockId && (setAttrs(blockId, 'mediacard', item, time, undefined, imageUrl),
-                api.getChildBlocks(blockId).then(blocks => (blocks?.[0] && setAttrs(blocks[0].id, 'timestamp', item, time), blocks?.[1] && setAttrs(blocks[1].id, 'screenshot', item, time, undefined, imageUrl))));
-            } else setAttrs(await doc.insert(`![截图](${imageUrl})`, config, i18n), 'screenshot', item, time, undefined, imageUrl);
-        } catch { showMessage(i18n?.mediaPlayerTab?.screenshot?.errorHint || "截图保存失败"); }
-    }
-};
+export const appendToNoteDoc = async (
+  title: string,
+  settings: Record<string, any>,
+  text: string,
+  key: string,
+  parentID?: string,
+  attr = 'custom-media-note-key',
+  docName = createDocName(title),
+  extraAttrs: Record<string, string> = {},
+  appendOnReuse = true,
+) => {
+  const id = await getDocIdByAttr(attr, key)
+  if (id) {
+    if (appendOnReuse) await api.appendBlock('markdown', text, id)
+    return { id, reused: true }
+  }
+  const path = `${(await getParentHPath(settings, parentID)) || ''}/${docName}`.replace(/\/+/g, '/')
+  const created = String(await api.createDocWithMd(getTargetNotebookId(settings), path, text, parentID) || '')
+  if (!created) return { id: '', reused: false }
+  await api.setBlockAttrs(created, { [attr]: key, ...extraAttrs })
+  notify(attr === 'custom-ai-summary-key' ? '已创建 AI 总结文档' : '已创建媒体笔记')
+  openCreatedDoc(created, settings)
+  return { id: created, reused: false }
+}
 
-// ===== 笔记本管理 =====
+export const createAiSummaryDoc = async (
+  text: string,
+  settings: Record<string, any>,
+  options: { title?: string; summaryKey?: string; sourcePath?: string } = {},
+) => {
+  const title = humanizeText(String(options.title || 'AI总结'))
+  const summaryKey = String(options.summaryKey || '').trim() || title
+  const extraAttrs = options.sourcePath ? { 'custom-media-source-path': String(options.sourcePath || '') } : {}
+  const docName = `${sanitizeTitle(title, 'AI总结')}的AI总结`
+  const mode = settings?.aiSummaryInsertMode === 'document' || settings?.aiSummaryInsertMode === 'dailynote'
+    ? String(settings.aiSummaryInsertMode)
+    : 'notebook'
+  if (mode === 'dailynote') {
+    const daily = await api.createDailyNote(getTargetNotebookId(settings))
+    await api.appendBlock('markdown', text, daily.id)
+    await api.setBlockAttrs(daily.id, { 'custom-ai-summary-key': summaryKey, ...extraAttrs })
+    notify('已创建 AI 总结文档')
+    openCreatedDoc(daily.id, settings)
+    return { id: String(daily?.id || ''), reused: false }
+  }
+  return appendToNoteDoc(title, settings, text, summaryKey, mode === 'document' ? getParentDocId(settings) : undefined, 'custom-ai-summary-key', docName, extraAttrs)
+}
+
+export const getParentDocId = (settings: Record<string, any>) => {
+  const id = pickId(settings.parentDoc)
+  if (!id) throw new Error('未设置目标文档')
+  return id
+}
+
+export const insertByTarget = async (content: ClipboardPayload | string, settings: Record<string, any>, title = '媒体', key = title) => {
+  const mode = settings.mediaNotesMode || 'current'
+  const text = typeof content === 'string' ? content : content.image && !content.text ? `![截图](${await imageToAsset(content.image, 'screenshot')})` : content.text || ''
+  if (shouldBridgeCurrentInsert(mode, settings)) return requestDocumentInsert(text, settings)
+  return (
+    {
+      current: () => insertByMode(content, settings),
+      dailynote: async () => {
+        const daily = await api.createDailyNote(getTargetNotebookId(settings))
+        await api.appendBlock('markdown', text, daily.id)
+        openCreatedDoc(daily.id, settings)
+      },
+      document: () => appendToNoteDoc(title, settings, text, key, getParentDocId(settings)),
+      notebook: () => appendToNoteDoc(title, settings, text, key),
+    }[mode] || (() => copyToClipboard(content))
+  )()
+}
+
+export const createMediaNote = async (item: MediaItem, settings: Record<string, any>, payload: ClipboardPayload) =>
+  insertByTarget(payload, settings, humanizeText(String(item?.title || item?.name || '媒体')), getMediaNoteKey(item))
+
 export const notebook = {
-    getPreferredId: (): string => localStorage.getItem('notebookId') || '',
-    savePreferredId: (id: string): void => localStorage.setItem('notebookId', id),
-    getList: async (): Promise<any[]> => {
-        try { return (await api.lsNotebooks())?.notebooks?.filter((nb: any) => !nb.closed) || []; } catch { return []; }
-    },
-    getOptions: async (): Promise<{label: string, value: string}[]> => {
-        return (await notebook.getList()).map(nb => ({label: nb.name || "未命名笔记本", value: nb.id || ""}));
-    },
-    initSettingItem: async (items: any[], selectedId: string = ''): Promise<{items: any[], selectedId: string}> => {
-        try {
-            const options = await notebook.getOptions();
-            if (!options.length) return {items, selectedId};
-            const index = items.findIndex(item => item.key === "targetNotebook");
-            if (index === -1) return {items, selectedId};
-            items[index].options = options;
-            const validId = (!selectedId || !options.some(opt => opt.value === selectedId)) ? options[0].value : selectedId;
-            items[index].value = validId;
-            return {items: [...items], selectedId: validId};
-        } catch { return {items, selectedId}; }
-    },
+  getList: async () => ((await api.lsNotebooks())?.notebooks || []).filter((item: any) => !item.closed),
+  selectNotebook: (state: Record<string, any>, id: string, items: any[] = []) => state.notebook = ((current: any) => current ? { id: current.id, name: current.name } : { id, name: '' })(items.find((item: any) => item.id === id)),
+  selectDocument: (state: Record<string, any>, value: string, items: any[] = []) => {
+    const current = items.find((item: any) => item.value === value)
+    if (!current) return
+    state.parentDoc = { id: String(current.path || current.value).split('/').pop() || '', name: current.label, path: current.path || current.value, notebook: current.notebook }
+    state.targetDocumentSearch = current.label
+  },
+  searchAndUpdate: async (keyword: string, state?: Record<string, any>) => {
+    if (!keyword.trim()) return { success: false, docs: [] }
+    const docs = (await api.searchDocs(keyword.trim()).catch(() => [])).map((doc: any) => ({
+      label: doc.hPath || '无标题',
+      value: (doc.path || '').replace(/^\/+|\.sy$/g, ''),
+      path: (doc.path || '').replace(/^\/+|\.sy$/g, ''),
+      notebook: doc.box,
+    })).filter((doc: any) => doc.value)
+    if (state && docs[0]) notebook.selectDocument(Object.assign(state, { notebook: { id: docs[0].notebook, name: '' } }), docs[0].value, docs)
+    return { success: !!docs.length, docs }
+  },
+}
 
-    // 文档搜索 - 极简版
-    searchAndUpdate: async (searchKey: string, state: any, saveConfig?: any) => {
-        if (!searchKey.trim()) return {success: false};
-        try {
-            const results = await api.searchDocs(searchKey.trim());
-            if (results?.length) {
-                const doc = results[0];
-                Object.assign(state, {
-                    notebook: { id: doc.box, name: '' },
-                    parentDoc: { id: doc.path?.split('/').pop()?.replace('.sy', '') || doc.id, path: doc.path?.replace('.sy', '') || '', name: doc.hPath || '无标题' }
-                });
-                if (saveConfig?.getConfig && saveConfig?.saveConfig) {
-                    const cfg = await saveConfig.getConfig();
-                    cfg.settings = state;
-                    await saveConfig.saveConfig(cfg);
-                }
-                return {success: true, docs: results};
-            }
-        } catch {}
-        return {success: false};
-    }
-}; 
-
-
-
-// ===== 媒体笔记 =====
-export const mediaNotes = {
-    // 极简媒体笔记创建
-    create: async (item: MediaItem, config: any, player: any, i18n?: any, plugin?: any): Promise<string | null> => {
-        const content = applyTemplate(config.settings.mediaNotesTemplate || "# 标题的媒体笔记\n- 日期\n- 时长：时长\n- 艺术家：艺术家\n- 类型：类型\n- 链接：[链接](链接)\n- ![封面](封面)\n- 笔记内容：", {
-            '标题|{{title}}': item.title || '未命名媒体', '时间|{{time}}': Media.fmt(player.getCurrentTime()), '艺术家|{{artist}}': item.artist || '', '链接|{{url}}': getMediaUrl(item),
-            '时长|{{duration}}': item.duration || '', '封面|{{thumbnail}}': item.thumbnail ? await imageToLocalAsset(item.thumbnail) : '', '类型|{{type}}': item.type || 'video',
-            'ID|{{id}}': item.id || '', '日期|{{date}}': new Date().toLocaleDateString(), '时间戳|{{timestamp}}': new Date().toISOString().replace('T', ' ').slice(0, 19)
-        });
-
-        const genDocId = () => `${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}-${Math.random().toString(36).slice(2, 9)}`;
-        const mode = config.settings?.mediaNotesMode || 'current';
-
-        const docId = await ({
-            current: () => doc.insert(content, config, i18n),
-            document: async () => {
-                const { id: parentId, notebook } = config.settings.parentDoc || {};
-                return parentId && notebook ? (await api.createDoc(notebook, `/${parentId}/${genDocId()}.sy`, item.title || 'Media Note', content))?.id : null;
-            },
-            dailynote: async () => {
-                const notebook = config.settings?.notebook?.id;
-                if (!notebook) return null;
-                const d = await api.createDailyNote(notebook);
-                d?.id && await api.appendBlock("markdown", content, d.id);
-                return d?.id;
-            },
-            notebook: async () => {
-                const notebookId = config.settings?.notebook?.id;
-                return notebookId ? (await api.createDoc(notebookId, `/${genDocId()}.sy`, item.title || 'Media Note', content))?.id : null;
-            }
-        }[mode]?.() || null);
-
-        docId && (
-            api.setBlockAttrs(docId, { 'custom-media': 'medianote', 'custom-url': getMediaUrl(item), 'custom-thumbnail': item.thumbnail ? await imageToLocalAsset(item.thumbnail) : '' }),
-            plugin?.app && openTab({ app: plugin.app, doc: { id: docId }, position: 'right' }),
-            plugin?.loadData('config.json').then((cfg: any) => {
-                const notes = { notesTabs: [], activeNoteTab: '', ...(cfg?.notes || {}) };
-                if (!notes.notesTabs.some((tab: any) => tab.blockId === docId)) {
-                    const newTab = { id: Date.now().toString(), name: (item.title || '媒体笔记').slice(0, 4), blockId: docId, createTime: Date.now(), isDocument: mode !== 'current' };
-                    notes.notesTabs.push(newTab), notes.activeNoteTab = newTab.id, cfg.notes = notes;
-                    plugin.saveData('config.json', cfg, 2).then(() => window.dispatchEvent(new CustomEvent('configUpdated', { detail: cfg })));
-                }
-            })
-        );
-        return docId;
-    }
-};
-
-// ===== 图片处理 =====
-const fetchImage = async (url: string): Promise<Blob> => { if (/biliimg\.com|hdslb\.com/i.test(url)) try { const res = await fetch('/api/network/forwardProxy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url, method: 'GET', timeout: 7000, responseEncoding: 'base64', headers: [{ Referer: 'https://www.bilibili.com' }] }) }).then(r => r.json()); if (res.code === 0 && res.data?.body) return new Blob([new Uint8Array([...atob(res.data.body)].map(c => c.charCodeAt(0)))], { type: res.data.contentType || 'image/jpeg' }); } catch {}; return await (await fetch(url)).blob(); };
-
-export const imageToLocalAsset = async (imageUrl: string): Promise<string> => { if (!imageUrl || imageUrl.startsWith('/assets/')) return imageUrl; try { const form = new FormData(); let file: File; if (imageUrl.startsWith('http') || imageUrl.startsWith('//')) { const url = imageUrl.startsWith('//') ? `https:${imageUrl}` : imageUrl, blob = await fetchImage(url); file = new File([blob], `img_${Date.now()}.${blob.type.split('/')[1] || 'png'}`, { type: blob.type }); } else if (imageUrl.startsWith('data:image')) { const [header, data] = imageUrl.split(','), mime = header.match(/:(.*?);/)?.[1] || 'image/png', bytes = atob(data), array = new Uint8Array(bytes.length); for (let i = 0; i < bytes.length; i++) array[i] = bytes.charCodeAt(i); file = new File([new Blob([array], { type: mime })], `img_${Date.now()}.${mime.split('/')[1]?.replace('jpeg', 'jpg') || 'png'}`, { type: mime }); } else return imageUrl; form.append('file[]', file); const result = await (await fetch('/api/asset/upload', { method: 'POST', body: form })).json(); return result.code === 0 ? Object.values(result.data.succMap)[0] as string : ''; } catch { return imageUrl; } };
-
+documentBroadcast.on(async (payload) => {
+  if (isWindowPlayer() || payload.type !== 'document-insert' || !payload.requestId) return
+  try { await insertByMode(payload.text || '', payload.settings || {}) } catch (error: any) {
+    return void await documentBroadcast.post({ type: 'document-insert-ack', requestId: payload.requestId, ok: false, message: error?.message || '插入失败' })
+  }
+  await documentBroadcast.post({ type: 'document-insert-ack', requestId: payload.requestId, ok: true })
+})

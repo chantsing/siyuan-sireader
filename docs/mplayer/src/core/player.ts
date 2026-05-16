@@ -1,504 +1,514 @@
-import { MediaItem, PlayerType } from "./types";
-import { BilibiliParser } from "./bilibili";
-import { OpenListManager } from './openlist';
-import { imageToLocalAsset } from './document';
-import { SubtitleManager } from './subtitle';
-import * as mm from 'music-metadata-browser';
-import { showMessage } from 'siyuan';
+import { showMessage } from 'siyuan'
+import * as api from '@/api'
+import { createMediaNote, getMediaNoteKey, humanizeText, humanizeUrl, insertByTarget, type ClipboardPayload } from '@/core/document'
+import { getStorage, getPlayerSettings } from '@/composables/storage'
+import { BaseDriver } from '@/drivers/base/BaseDriver'
+import { SubtitleManager } from '@/core/subtitle'
+import { LicenseManager } from '@/core/license'
+import { forwardProxyBlob } from '@/utils/webdav-proxy'
 
-// ===== 常量定义 =====
-const AUDIO_EXTS = ['.mp3', '.wav', '.aac', '.m4a', '.flac', '.ogg'];
-const VIDEO_EXTS = ['.mp4', '.webm', '.ogg', '.mov', '.m4v', '.mkv', '.avi', '.flv', '.wmv'];
-const PDF_EXTS = ['.pdf'];
-const MEDIA_EXTS = [...AUDIO_EXTS, ...VIDEO_EXTS];
-const BILIBILI_REGEX = /bilibili\.com\/video\/|bilibili\.com\/cheese\/play\/|\/BV[a-zA-Z0-9]+/;
-const BV_REGEX = /BV[a-zA-Z0-9]+/;
-const TIME_REGEX = /[?&]t=([^&]+)/;
-
-// ===== 工具函数 =====
-export const EXT = { AUDIO: AUDIO_EXTS, VIDEO: VIDEO_EXTS, PDF: PDF_EXTS, MEDIA: MEDIA_EXTS };
-export const detectMediaType = (url: string) => AUDIO_EXTS.some(ext => url.toLowerCase().split('?')[0].endsWith(ext)) ? 'audio' : 'video';
-export const isMedia = (url: string) => MEDIA_EXTS.some(ext => url.toLowerCase().split('?')[0].endsWith(ext));
-export const isPdf = (url: string) => PDF_EXTS.some(ext => url.toLowerCase().split('?')[0].endsWith(ext));
-export const isBilibili = (url: string) => BILIBILI_REGEX.test(url);
-export const isAlidrive = (url: string) => url.startsWith('alipan://file/');
-export const isBaidudrive = (url: string) => url.startsWith('bdpan://file/') || url.startsWith('bdpan://path/');
-export const isPan123 = (url: string) => url.startsWith('pan123://file/');
-export const isQuarktv = (url: string) => url.startsWith('quarktv://file/');
-export const isS3 = (url: string) => url.startsWith('s3://file');
-export const isTvbox = (url: string) => url.startsWith('tvbox://video/');
-export const isRecognizedMediaLink = (url?: string | null) => !!url && (
-    isBilibili(url) || isMedia(url) || isAlidrive(url) || isBaidudrive(url) || isPan123(url) || isQuarktv(url) || isS3(url) || isTvbox(url));
-const error = (msg: string, ctx = '') => { console.error(`[Player] ${ctx}:`, msg); showMessage(msg); return msg; };
-
-// ===== 媒体处理核心类 =====
-export class Media {
-    // URL解析 - 统一解析入口
-    static parse(url: string) {
-        if (!url) return { url: '', type: 'video', source: 'standard' };
-
-        // 提取时间参数 - 兼容时分秒和秒数格式
-        const timeMatch = url.match(TIME_REGEX);
-        let startTime: number | undefined, endTime: number | undefined;
-        if (timeMatch) {
-            const timeStr = timeMatch[1];
-            if (timeStr.includes('-')) {
-                [startTime, endTime] = timeStr.split('-').map(Media.parseTime);
-            } else {
-                startTime = Media.parseTime(timeStr);
-            }
-        }
-
-        const cleanUrl = url.replace(/[?&]t=[^&]+/, '').replace(/[?&]$/, '');
-        const type = detectMediaType(url);
-
-        // 来源判断
-        if (isBilibili(url)) {
-            // 课程URL检测
-            const courseMatch = url.match(/\/cheese\/play\/(ss|ep)(\d+)/);
-            if (courseMatch) {
-                return { url: cleanUrl, type: 'bilibili', source: 'bilibili', isCourse: true, startTime, endTime };
-            }
-            
-            const bv = url.match(BV_REGEX)?.[0];
-            const page = url.match(/[?&]p=(\d+)/)?.[1];
-            return { url: bv ? `https://www.bilibili.com/video/${bv}${page ? `?p=${page}` : ''}` : cleanUrl, type: 'bilibili', source: 'bilibili', bv, page, startTime, endTime };
-        }
-
-        // 阿里云盘协议检测
-        if (url.startsWith('alipan://file/')) {
-            const fileId = (url.split('/').pop() || '').split('?')[0];
-            return { url: cleanUrl, type, source: 'alidrive', fileId, startTime, endTime };
-        }
-        // 百度网盘协议检测
-        if (url.startsWith('bdpan://path/')) {
-            const pathPart = url.substring('bdpan://path'.length);
-            const path = decodeURIComponent(pathPart.split('?')[0]);
-            return { url: cleanUrl, type, source: 'baidudrive', path, startTime, endTime };
-        }
-        // 123云盘伪协议检测
-        if (url.startsWith('pan123://file/')) {
-            const fileId = (url.split('/').pop() || '').split('?')[0];
-            return { url: cleanUrl, type, source: 'pan123', fileId, startTime, endTime };
-        }
-        // 夸克TV伪协议检测
-        if (url.startsWith('quarktv://file/')) {
-            const fileId = (url.split('/').pop() || '').split('?')[0];
-            return { url: cleanUrl, type, source: 'quarktv', fileId, startTime, endTime };
-        }
-        // S3伪协议检测
-        if (url.startsWith('s3://file')) {
-            const pathPart = url.substring('s3://file'.length);
-            const path = decodeURIComponent(pathPart.split('?')[0]);
-            return { url: cleanUrl, type, source: 's3', path, startTime, endTime };
-        }
-        // TVBox伪协议检测
-        if (url.startsWith('tvbox://video/')) {
-            const urlPart = url.substring('tvbox://video/'.length);
-            let title = urlPart.split('?')[0];
-            try { title = decodeURIComponent(title); } catch {}
-            const ep = urlPart.includes('?') ? parseInt(new URLSearchParams(urlPart.split('?')[1]).get('ep') || '0') : 0;
-            return { url: cleanUrl, type: 'video', source: 'tvbox', tvboxTitle: title, tvboxEpisode: ep || undefined, startTime, endTime };
-        }
-
-        // WebDAV协议检测
-        if (url.startsWith('webdav://path')) {
-            const pathPart = url.substring('webdav://path'.length);
-            const path = decodeURIComponent(pathPart.split('?')[0]);
-            return { url: cleanUrl, type, source: 'webdav', path, startTime, endTime };
-        }
-
-        // Blob URL检测 - 优先处理，避免被其他规则误判
-        if (url.startsWith('blob:')) { return { url: cleanUrl, type, source: 'blob', startTime, endTime }; }
-        // OpenList/AList检测（常见端口/路由，首启不依赖配置）
-        try {
-            const u = new URL(cleanUrl);
-            const cfgHost = (() => { try { return new URL(OpenListManager.getConfig?.()?.server || '').host; } catch { return ''; } })();
-            const isOpenList = url.includes('/#/') || /:52(44|45|46)$/.test(u.host) || (cfgHost && u.host === cfgHost);
-            if (isOpenList) {
-                const path = url.includes('/#/') ? `/${url.split('/#/')[1]?.split('?')[0] || ''}` : u.pathname;
-                return { url: cleanUrl, type, source: 'openlist', path: decodeURIComponent(path), startTime, endTime };
-            }
-        } catch {}
-        if (url.startsWith('file://')) return { url: cleanUrl, type, source: 'local', path: url.substring(7), startTime, endTime };
-        if (!url.includes('://') && !url.startsWith('/') && window.siyuan?.config?.system?.workspaceDir) return { url: `file://${window.siyuan.config.system.workspaceDir}/data/${cleanUrl}`, type, source: 'local', path: `${window.siyuan.config.system.workspaceDir}/data/${cleanUrl}`, startTime, endTime };
-
-        // WebDAV检测（明确路径特征）
-        if (/(\/(webdav|dav|remote\.php\/(dav|webdav))\/|https?:\/\/.*?jianguoyun\.com\/dav\/)/i.test(url)) {
-            return { url: cleanUrl, type, source: 'webdav', startTime, endTime };
-        }
-
-        return { url: cleanUrl, type, source: 'standard', startTime, endTime };
-    }
-
-    // 获取播放URL - 统一播放URL获取
-    static async getPlayUrl(parsed: any, config?: any, item?: any): Promise<string> {
-        if (parsed.source === 'bilibili' && (parsed.bv || parsed.isCourse || item?.isCourse)) {
-            const info = item?.cid ? item : await BilibiliParser.getVideoInfo(parsed.url, config) as any;
-            if (info?.cid) return await BilibiliParser.getProcessedVideoStream(info.bvid || parsed.bv, info.cid, 0, config, info.aid, info.isCourse, info.epid);
-        }
-        // AliDrive 使用伪协议或签名直链，统一在播放阶段解析
-        try {
-            const { AliDriveManager } = await import('./alidrive');
-            if (parsed.url.startsWith('alipan://')) return parsed.url;
-            if (AliDriveManager.isAliPreviewOrDownloadUrl(parsed.url)) {
-                const fid = AliDriveManager.parseFileIdFromUrl(parsed.url);
-                if (fid) return `alipan://file/${fid}`;
-            }
-       } catch {}
-
-        if (parsed.source === 'webdav' && parsed.path) {
-            const { WebDAVManager } = await import('./webdav');
-            return await WebDAVManager.getFileLink(parsed.path);
-        }
-
-        return await this.handleCloud(parsed, config, 'url') || parsed.url;
-    }
-
-    // 超级统一云盘处理 - 自动回退（OpenList → WebDAV）
-    static async handleCloud(parsed: any, config?: any, type = 'url', url?: string, timeParams?: any, item?: any, getConfig?: () => Promise<any>): Promise<any> {
-        const managers = {
-            openlist: () => import('./openlist').then(m => m.OpenListManager),
-            webdav: () => import('./webdav').then(m => m.WebDAVManager),
-            alidrive: () => import('./alidrive').then(m => m.AliDriveManager),
-            baidudrive: () => import('./baidudrive').then(m => m.BaiduDriveManager),
-            pan123: () => import('./123pan').then(m => m.Pan123Manager),
-            quarktv: () => import('./quarktv').then(m => m.QuarkTVManager),
-            s3: () => import('./s3').then(m => m.S3Manager)
-        } as const;
-        const tryOrder = parsed?.source === 'openlist' ? ['openlist', 'webdav'] : [parsed?.source || item?.source];
-        for (const src of tryOrder) {
-            const m: any = await managers[src as keyof typeof managers]?.();
-            if (!m) continue;
-            try {
-                const cfg = config || (getConfig ? await getConfig() : null);
-                if (!m.getConfig?.()?.connected && cfg) await (async () => { const A = cfg?.settings?.[`${src}Accounts`] || []; for (const a of A) { try { if ((await m.checkConnection(a)).connected) { m.setConfig(a); break; } } catch {} } })();
-                const r = type === 'url' ? (
-                    src === 'openlist' ? m.getFileLink(parsed.path.replace(/^\/p\//, '/')) :
-                    src === 'webdav' ? m.getFileLink(new URL(parsed.url).pathname) :
-                    src === 'alidrive' ? m.getFileLink(parsed.fileId || parsed.file_id || parsed.path || '') :
-                    src === 'baidudrive' ? m.getFileLink(parsed.path || '') :
-                    src === 'pan123' ? m.getFileLink(parsed.fileId || parsed.path || '') :
-                    src === 'quarktv' ? m.getFileLink(parsed.fileId || parsed.path || '') :
-                    src === 's3' ? m.getFileLink(parsed.path || '') : null
-                ) : type === 'media' ? (
-                    src === 'openlist' && parsed.path ? m.handleOpenListMediaLink(url, timeParams) :
-                    src === 'webdav' ? m.handleWebDAVMediaLink(url, timeParams) : null
-                ) : (item?.sourcePath && !item.is_dir ? m.createMediaItemFromPath(item.sourcePath, { startTime: item.startTime, endTime: item.endTime }) : null);
-                if (r !== null && r !== undefined) return r;
-            } catch {}
-        }
-        return null;
-    }
-
-
-    // 获取媒体信息 - 统一媒体信息获取
-    static async getMediaInfo(url: string, config?: any): Promise<{ success: boolean; mediaItem?: MediaItem; error?: string }> {
-        try {
-            const parsed = this.parse(url);
-            const timeParams = { startTime: parsed.startTime, endTime: parsed.endTime };
-            const cloudResult = await this.handleCloud(parsed, config, 'media', url, timeParams);
-            if (cloudResult?.success) return cloudResult;
-
-            // 基础信息构建
-            let info: any = { ...parsed, title: this.getTitle(url) };
-
-            // B站信息获取
-            if (parsed.source === 'bilibili' && (parsed.bv || parsed.isCourse)) {
-                const biliInfo = await BilibiliParser.getVideoInfo(url, config);
-                if (biliInfo) { info = { ...info, ...biliInfo }; info.originalUrl = url; }
-            }
-
-            // 本地及（安全可控）源生成缩略图和时长（避免云盘直链/自定义协议导致报错或卡死）
-            if (parsed.type === 'video' && ['local', 'webdav', 'openlist'].includes(parsed.source)) {
-                try {
-                    // 关键改动：先获取可播放链接
-                    const playUrl = await this.getPlayUrl(parsed, config);
-                    if (playUrl) {
-                        Object.assign(info, await this.generateThumbnail(playUrl));
-                    }
-                } catch (e) {
-                    console.warn(`[Player] Thumbnail generation failed for ${parsed.source} URL: ${url}`, e);
-                }
-            }
-
-            // 音频元数据解析（本地和思源空间）
-            if (parsed.type === 'audio' && ['local', 'siyuan'].includes(parsed.source)) {
-                try {
-                    if (window.navigator.userAgent.includes('Electron') && url.startsWith('file://')) {
-                        const fp = parsed.url.replace('file://', '').replace(/\//g, '\\');
-                        const fs = window.require('fs');
-                        const meta = await mm.parseBlob(new Blob([fs.readFileSync(fp)]));
-                        const lrc = await SubtitleManager.loadLocalLRC(fp);
-                        Object.assign(info, {
-                            title: meta.common.title || info.title,
-                            artist: meta.common.artist || meta.common.artists?.join(', ') || info.artist,
-                            album: meta.common.album,
-                            year: meta.common.year,
-                            genre: meta.common.genre,
-                            duration: meta.format.duration ? this.fmt(meta.format.duration) : info.duration,
-                            lyrics: lrc || meta.common.lyrics?.[0]
-                        });
-                        if (meta.common.picture?.length) {
-                            const pic = meta.common.picture[0];
-                            const cover = `data:${pic.format};base64,${Buffer.from(pic.data).toString('base64')}`;
-                            const asset = await imageToLocalAsset(cover);
-                            if (asset) { info.thumbnail = asset; info.coverDataUrl = asset; }
-                        }
-                    }
-                } catch (e) { console.warn('音频元数据解析失败:', e); }
-            }
-
-            return { success: true, mediaItem: this.create({ ...info, ...parsed }) };
-        } catch (e) {
-            return { success: false, error: error(String(e), 'getMediaInfo') };
-        }
-    }
-
-    // 创建媒体项
-    static create(data: any): MediaItem {
-        // 音频缩略图优先级：coverDataUrl > thumbnail > 默认图标
-        const audioThumbnail = data.type === 'audio' 
-            ? (data.coverDataUrl || data.thumbnail || this.getThumbnail(data))
-            : (data.thumbnail || this.getThumbnail(data));
-            
-        return {
-            ...data,  // 保留所有原始属性（包括 tvboxTitle 等）
-            id: data.id || `media-${Date.now()}`,
-            title: data.title || this.getTitle(data.url),
-            url: data.url,
-            originalUrl: data.originalUrl || data.url,
-            type: data.type || 'video',
-            thumbnail: audioThumbnail,
-            duration: data.duration || '',
-            artist: data.artist || '',
-            artistIcon: data.artistIcon || '',
-            bvid: data.bv || data.bvid,
-            source: data.source || (data.url?.startsWith('bdpan://') ? 'baidudrive' : 'standard'),
-        };
-    }
-
-    // 工具方法
-    static getTitle(url: string): string {
-        try {
-            const filename = decodeURIComponent(url.split('/').pop()?.split('?')[0] || '');
-            const lastDot = filename.lastIndexOf('.');
-            return lastDot > 0 ? filename.slice(0, lastDot) : filename || '未知';
-        } catch {
-            const filename = url.split(/[/\\]/).pop() || '';
-            const lastDot = filename.lastIndexOf('.');
-            return lastDot > 0 ? filename.slice(0, lastDot) : filename || '未知';
-        }
-    }
-
-    static fmt = (seconds: number): string => isNaN(seconds) || seconds < 0 ? '0:00' : ((h, m, s) => h > 0 ? `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}` : `${m}:${s.toString().padStart(2, '0')}`)(Math.floor(seconds / 3600), Math.floor((seconds % 3600) / 60), Math.floor(seconds % 60));
-    static parseTime = (timeStr: string): number => { const parts = timeStr.split(':').map(Number); return parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : parts.length === 2 ? parts[0] * 60 + parts[1] : Number(timeStr) || 0; };
-    static withTime = (url: string, start: number, end?: number): string => `${url}${url.includes('?') ? '&' : '?'}t=${end ? `${Media.fmt(start)}-${Media.fmt(end)}` : Media.fmt(start)}`;
-    static getThumbnail = (item: any): string => {
-        const typeKey = (item?.is_dir || item?.type === 'folder') ? 'folder' : (item?.type === 'audio' ? 'audio' : (item?.type === 'pdf' ? 'pdf' : 'video')) as 'folder'|'audio'|'pdf'|'video';
-        const defaults: Record<typeof typeKey, string> = {
-            folder: '/plugins/siyuan-media-player/assets/images/folder.svg',
-            video: '/plugins/siyuan-media-player/assets/images/video.png',
-            audio: '/plugins/siyuan-media-player/assets/images/audio.png',
-            pdf: '/plugins/siyuan-media-player/assets/images/video.png'
-        } as any;
-        const cfg = (window as any).__smp_cfg || {};
-        const override = typeKey === 'folder' ? cfg.defaultThumbFolder : typeKey === 'audio' ? cfg.defaultThumbAudio : typeKey === 'pdf' ? cfg.defaultThumbPdf : cfg.defaultThumbVideo;
-        const cur = item?.thumbnail;
-        if (cur) return cur === defaults[typeKey] ? (override || cur) : cur;
-        return override || defaults[typeKey];
-    };
-
-    // 生成缩略图和获取时长
-    private static generateThumbnail(url: string): Promise<{thumbnail: string, duration: string}> {
-        return new Promise(resolve => {
-            const video = document.createElement('video');
-            video.style.display = 'none';
-            video.src = url;
-            document.body.appendChild(video);
-            video.onloadedmetadata = () => video.currentTime = Math.min(5, video.duration / 2);
-            video.onseeked = async () => {
-                const canvas = document.createElement('canvas');
-                [canvas.width, canvas.height] = [video.videoWidth, video.videoHeight];
-                canvas.getContext('2d')?.drawImage(video, 0, 0);
-                document.body.removeChild(video);
-                resolve({
-                    thumbnail: canvas.toDataURL('image/jpeg', 0.7),
-                    duration: this.fmt(video.duration)
-                });
-            };
-            video.load();
-        });
-    }
+export type MediaItem = Record<string, any>
+export type RuntimeAPI = {
+  openMediaListTab?: (folderPath: string, folderName: string, cloudItem?: any) => void
+  openDocumentTab?: (id: string) => void
+  openPlayerTab?: (mediaItem?: Record<string, any> | null) => Promise<void> | void
+  playMediaItem?: (mediaItem: Record<string, any>) => Promise<void> | void
+  playPrev?: () => Promise<void> | void
+  playNext?: () => Promise<void> | void
+  toBackground?: () => Promise<void> | void
+  toBackgroundFromMedia?: (mediaItem: Record<string, any>) => Promise<void> | void
+  closeActivePlayerTab?: () => Promise<void> | void
+  playLink?: (url: string) => Promise<boolean> | boolean
+  controller?: any
+  player?: any
+  config?: Record<string, any>
+  settings?: Record<string, any>
+  pendingMedia?: Record<string, any> | null
+  toggle?: () => void
+  seek?: (offset: number) => void
+  triggerAction?: (action: string) => void
+  increaseSpeed?: () => void
+  decreaseSpeed?: () => void
+  toggleCustomSpeed?: () => void
+  getConfig?: () => Promise<any>
+  createTimestampLink?: (time?: number) => Promise<string>
+  runAiSummary?: (item?: Record<string, any>) => Promise<void> | void
 }
 
-// ===== 播放器操作 =====
-// 外部播放器
-export async function openPlayer(url: string, type: PlayerType, path?: string): Promise<string | void> {
-    try {
-        const parsed = Media.parse(url);
-        const playUrl = parsed.startTime ? Media.withTime(parsed.url, parsed.startTime) : parsed.url;
-
-        if (type === PlayerType.BROWSER) {
-            window.navigator.userAgent.includes('Electron') && typeof require === 'function' ? require('electron').shell.openExternal(playUrl) : window.open(playUrl, '_blank');
-            return;
-        }
-
-        if (!path) return "请配置播放器路径";
-
-        const cleanPath = path.replace(/^["']|["']$/g, '');
-        const timeParam = parsed.startTime ? ` /seek=${Media.fmt(parsed.startTime)}` : '';
-        const fileUrl = parsed.url.startsWith('file://') ? parsed.url.substring(7).replace(/\//g, '\\') : parsed.url;
-        const command = `"${cleanPath}" "${fileUrl}"${timeParam}`;
-
-        if (window.navigator.userAgent.includes('Electron') && typeof require === 'function') {
-            require('child_process').exec(command);
-        } else {
-            await fetch('/api/system/execCommand', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command }) });
-        }
-    } catch (e) {
-        return error(String(e), 'openPlayer');
-    }
+type MediaAction = 'screenshot' | 'timestamp' | 'mediaNotes' | 'loopSegment' | 'prev' | 'next' | 'background' | 'aiSummary'
+type ParsedLink = {
+  rawUrl: string
+  cleanUrl: string
+  source: string
+  sourcePath?: string
+  cloudAccountId?: string
+  type: 'audio' | 'video'
+  startTime?: number
+  endTime?: number
+  bvid?: string
+  page?: number
 }
 
-// 播放媒体 - 统一播放入口
-export async function play(options: any, player: any, config: any, setItem: (item: any) => void): Promise<void> {
-    if (!options?.url) { error('无效播放选项', 'play'); return; }
-
-    try {
-        const item = Media.create(options);
-        setItem(item);
-
-        const isEmbeddedPlayer = config.settings.playerType === PlayerType.BUILT_IN || config.settings.playerType === PlayerType.MPV;
-        if (!isEmbeddedPlayer) {
-            const originalUrl = options.originalUrl || options.url;
-            const playUrl = options.startTime ? Media.withTime(originalUrl, options.startTime, options.endTime) : originalUrl;
-            const err = await openPlayer(playUrl, config.settings.playerType, config.settings.playerPath);
-            if (err) showMessage(err);
-        } else {
-            // B站视频流是 blob: URL，无需解析，直接播放
-            if (options.url.startsWith('blob:')) {
-                await player.play(options.url, item);
-                return;
-            }
-            const parsed = Media.parse(options.url);
-            const playUrl = await Media.getPlayUrl(parsed, config, item);
-            if (!playUrl) throw new Error('无法获取播放URL');
-            // 保留 item 的所有元数据，只补充必要的播放参数
-            const finalOptions = { ...item, source: item.source || parsed.source, startTime: options.startTime, endTime: options.endTime };
-            await player.play(playUrl, finalOptions);
-        }
-    } catch (e) {
-        error(String(e), 'play');
-    }
+// ===== 默认值与常量 =====
+const DEFAULT_LINK_FORMAT = '[{{标题}} {{时间}}]({{链接}})'
+const DEFAULT_NOTES_TEMPLATE = '# {{标题}}\n时长：{{时长}}\n作者：{{作者}}\n简介：{{简介}}\n链接：[{{链接}}]({{链接}})\n![封面]({{封面}})'
+const TIME_REGEX = /[?&]t=([^&]+)/
+const FILE_ID_SOURCES = new Set(['alidrive', 'pan123', 'pan115', 'quarktv', 'onedrive'])
+const PLAY_QUEUE_KEY = 'siyuan-media-player:queue'
+const AUTHOR_KEYS = ['artist', 'ownerName', 'author', 'uname', 'upName'] as const
+const DESC_KEYS = ['desc', 'description', 'intro', 'dynamic', 'content', 'remarks', 'summary'] as const
+const decodeUrlValue = (value = '') => { try { return decodeURIComponent(value) } catch { return value } }
+const toPage = (value: any) => Math.max(1, Number(value || '1') || 1)
+const resolveBilibiliLink = (value = '', pageHint?: any) => {
+  const input = decodeUrlValue(String(value || '').trim())
+  if (!input) return null
+  const page = toPage(pageHint || input.match(/[?&]p=(\d+)/)?.[1] || input.match(/(?:^|\|)page:(\d+)/)?.[1])
+  const suffix = page > 1 ? `?p=${page}` : ''
+  const normalized = input
+    .replace(/^bilibili:\/\/\/?/, '/')
+    .replace(/^bilibili:\/\//, '/')
+  const bvid = normalized.match(/(?:^|\/)(BV[\w]+)/i)?.[1] || normalized.match(/(?:^|\|)bvid:([^|/?&#]+)/i)?.[1]
+  if (bvid) return { sourcePath: `/video/${bvid}`, publicUrl: `https://www.bilibili.com/video/${bvid}${suffix}`, page, bvid }
+  const bangumiId = normalized.match(/(?:bangumi\/play\/ss|\/bangumi\/)(\d+)/i)?.[1]
+  if (bangumiId) return { sourcePath: `/bangumi/${bangumiId}`, publicUrl: `https://www.bilibili.com/bangumi/play/ss${bangumiId}${suffix}`, page }
+  const roomId = normalized.match(/(?:live\.bilibili\.com\/|\/live\/)(\d+)/i)?.[1]
+  if (roomId) return { sourcePath: `/live/${roomId}`, publicUrl: `https://live.bilibili.com/${roomId}`, page: 1 }
+  return null
 }
 
-// 独立播放函数 - 处理复杂媒体类型（从PlayList组件逻辑抽离）
-export async function playMediaItem(item: any, startTime?: number, endTime?: number, getConfig?: () => Promise<any>, openTab?: () => void): Promise<void> {
-    try {
-        // 处理普通媒体
-        const opts = { ...item, startTime, endTime };
-
-        // B站视频处理
-        const bvid = item.bvid || item.url?.match(/BV[a-zA-Z0-9]+/)?.[0];
-        if ((item.source === 'B站' || item.type === 'bilibili' || bvid || item.isCourse) && (bvid || item.isCourse) && getConfig) {
-            const { isBilibiliAvailable, BilibiliParser } = await import('./bilibili');
-            if (!isBilibiliAvailable()) throw new Error('B站扩展未启用');
-            const config = await getConfig();
-            const playConfig = item.isCourse ? config : (config.settings?.bilibiliLogin?.mid ? config : (await Promise.all((config.settings?.bilibiliAccounts || []).map(async (acc: any) => { try { await BilibiliParser.getVideoParts({ bvid }); return { settings: { bilibiliLogin: acc } }; } catch { return null; } }))).find(Boolean));
-            if (!playConfig) throw new Error('需要登录B站才能播放视频');
-            const cid = item.cid || (!item.isCourse && bvid ? (await BilibiliParser.getVideoParts({ bvid }))?.[0]?.cid : null);
-            if (cid) Object.assign(opts, { url: await BilibiliParser.getProcessedVideoStream(bvid, cid, 0, playConfig, (item as any).aid, (item as any).isCourse, (item as any).epid), originalUrl: opts.originalUrl || (item.isCourse ? `https://www.bilibili.com/cheese/play/ep${item.epid}` : `https://www.bilibili.com/video/${bvid}${opts.url?.match(/[?&]p=(\d+)/)?.[1] ? `?p=${opts.url.match(/[?&]p=(\d+)/)?.[1]}` : ''}`), type: 'video', bvid, cid });
-        }
-
-        // 事件分发：允许多开时自动打开新tab
-        if (getConfig && openTab) { 
-            const cfg = await getConfig(), hasTab = !!document.querySelector('.media-player-tab, #media-player-mobile-dialog'), embedded = cfg.settings?.playerType?.match(/built-in|mpv/);
-            embedded && (!hasTab || cfg.settings?.allowMultipleInstances) ? (openTab(), setTimeout(() => window.dispatchEvent(new CustomEvent('playMediaItem', { detail: opts })), 300)) : window.dispatchEvent(new CustomEvent('playMediaItem', { detail: opts }));
-        } else window.dispatchEvent(new CustomEvent('playMediaItem', { detail: opts }));
-    } catch (e) {
-        const errorMsg = String(e), errorMap = { 'WBI密钥': 'B站登录信息已过期，请重新登录', '需要登录B站': '需要登录B站才能播放视频', 'B站扩展未启用': 'B站扩展未启用，无法播放B站视频' }, key = Object.keys(errorMap).find(k => errorMsg.includes(k));
-        error(errorMsg, 'playMediaItem');
-        showMessage(key ? errorMap[key] : `播放失败: ${errorMsg}`, 0);
-        throw e;
-    }
+// ===== 运行时状态 =====
+let initialized = false
+let loopStartTime: number | null = null
+export const normalizeRange = (startTime?: number, endTime?: number) => {
+  const start = typeof startTime === 'number' ? Math.max(0, Number(startTime) || 0) : undefined
+  const end = typeof endTime === 'number' ? Math.max(0, Number(endTime) || 0) : undefined
+  return { startTime: start, endTime: start !== undefined && end !== undefined && end < start ? start : end }
 }
 
-// ===== 全局API =====
-// 注册全局播放器
-export function registerGlobalPlayer(currentItem: any, player: any): void {
-    if (typeof window === 'undefined') return;
-    try {
-        (window as any).siyuanMediaPlayer = {
-            player, currentItem,
-            seekTo: (time: number) => typeof player.seekTo === 'function' ? (player.seekTo(time), true) : false,
-            setLoopSegment: (start: number, end: number) => typeof player.setPlayTime === 'function' ? (player.setPlayTime(start, end), true) : false,
-            getCurrentMedia: () => currentItem,
-            getCurrentTime: () => player.getCurrentTime?.() || 0
-        };
-    } catch (e) {
-        error(String(e), 'registerGlobalPlayer');
-    }
+/** 统一获取播放器运行时对象。 */
+export const getAPI = (): RuntimeAPI => ((window as any).siyuanMediaPlayer ||= {})
+export const playQueuedItems = async (item: MediaItem, siblings?: MediaItem[]) => {
+  const items = (siblings?.length ? siblings : [item]).filter((entry: any) => entry && (item?.type === 'image' ? entry.type === 'image' : entry.type !== 'folder'))
+  try { localStorage.setItem(PLAY_QUEUE_KEY, JSON.stringify({ items, currentId: item?.id })) } catch {}
+  if (item?.type === 'image') {
+    const { previewImages } = await import('@/core/imageViewer')
+    previewImages(items.length ? items : [item], item)
+    return
+  }
+  await getAPI().playMediaItem?.(item)
+}
+/** 秒数格式化为时间文本。 */
+export const fmt = (seconds: number): string => {
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = Math.floor(seconds % 60)
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`
+}
+/** 解析 01:23 或 01:02:03 这类时间文本。 */
+export const parseTime = (timeText = ''): number => {
+  const value = String(timeText || '').trim()
+  if (!value) return 0
+  const parts = value.split(':').map(Number)
+  if (parts.some((part) => !Number.isFinite(part))) return Number(value) || 0
+  return parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : parts.length === 2 ? parts[0] * 60 + parts[1] : parts[0] || 0
+}
+/** 统一生成媒体链接。 */
+export const getMediaUrl = (item: MediaItem): string => {
+  const source = normalizeSource(String(item?.source || ''))
+  const sourcePath = String(item?.sourcePath || '')
+  const local = String(item?.localPath || item?.originalUrl || item?.url || '')
+  const appendSourcePath = (url: string): string => {
+    if (!url || !sourcePath.includes('|') || /[?&]path=/.test(url)) return url
+    return `${url}${url.includes('?') ? '&' : '?'}path=${encodeURIComponent(sourcePath)}`
+  }
+  const bilibili = (source === 'bilibili' || item?.bvid)
+    ? resolveBilibiliLink(item?.bvid ? `/video/${item.bvid}` : (item?.sourcePath || item?.path || item?.originalUrl || item?.url || ''), item?.page || item?.originalUrl?.match(/[?&]p=(\d+)/)?.[1] || item?.url?.match(/[?&]p=(\d+)/)?.[1])
+    : null
+  if (bilibili?.publicUrl) return bilibili.publicUrl
+  if (BaseDriver.isLocalNativePath(local)) return BaseDriver.toFileUrl(local)
+  if ((item?.source === 'tvbox' || item?.site) && item?.originalUrl?.startsWith('tvbox://')) return item.originalUrl
+  const url = source === 'quarktv' ? (item?.originalUrl || item?.url || '') : appendSourcePath(item?.originalUrl || item?.url || '')
+  const accountId = String(item?.cloudAccountId || '')
+  const accountRef = accountId.split('_').pop() || accountId
+  const finalUrl = !url || !accountRef || /[?&](?:a|accountId|cloudAccountId)=/.test(url)
+    ? url
+    : `${url}${url.includes('?') ? '&' : '?'}a=${encodeURIComponent(accountRef)}`
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(finalUrl) && !/^https?:\/\//i.test(finalUrl) ? finalUrl : humanizeUrl(finalUrl)
 }
 
-// 创建链接点击处理器 - 统一链接处理
-export function createLinkClickHandler(playerAPI: any, getConfig: () => Promise<any>, openTab: () => void, playlistPlay?: any): (e: MouseEvent) => Promise<void> {
-    return async (e: MouseEvent) => {
-        const target = e.target as HTMLElement;
-        // 获取链接URL（优先 data-href，再回退 href；加粗/斜体等格式可能导致 href 变为内部链接）
-        const linkEl = target.matches('span[data-type="a"]') ? target : target.closest('a[href], [data-href], span[data-type="a"], span[data-type="url"]');
-        const url = (linkEl?.getAttribute('data-media-url') || linkEl?.getAttribute('data-href') || linkEl?.getAttribute('href')) as string | null;
-        if (!isRecognizedMediaLink(url)) return;
-        e.preventDefault();
-        e.stopPropagation();
-        //e.stopImmediatePropagation(); // 阻止其他插件（如网页视图插件）拦截媒体链接
+// ===== 广播 =====
+const getBroadcastUrl = (channel: string) => `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/broadcast?channel=${encodeURIComponent(channel)}`
+/** 统一创建广播通道，主窗口和新窗口共用。 */
+const createBroadcast = (channel: string) => {
+  let socket: WebSocket | null = null
+  const listeners = new Set<(payload: Record<string, any>) => void>()
 
-        try {
-            const config = await getConfig();
-            const type = e.ctrlKey ? PlayerType.BROWSER : config.settings.playerType;
+  const connect = () => {
+    if (socket && socket.readyState < WebSocket.CLOSING) return socket
+    socket = new WebSocket(getBroadcastUrl(channel))
+    socket.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(String(event.data || '{}'))
+        listeners.forEach((listener) => listener(payload))
+      } catch {}
+    }
+    socket.onclose = () => { socket = null }
+    return socket
+  }
 
-            // 外部播放器
-            if (type === PlayerType.POT_PLAYER || type === PlayerType.VLC || type === PlayerType.BROWSER) {
-                const err = await openPlayer(url, type, config.settings.playerPath);
-                if (err) showMessage(err);
-                return;
-            }
-
-            // 内置播放器处理
-            const hasTab = !!document.querySelector('.media-player-tab, #media-player-mobile-dialog');
-            const currentItem = playerAPI.getCurrentMedia?.();
-            const parsed = Media.parse(url);
-
-            // 丝滑跳转判断
-            if (hasTab && currentItem && parsed.startTime !== undefined && ((currentItem.bvid && parsed.bv) ? (currentItem.bvid === parsed.bv && (currentItem.originalUrl?.match(/[?&]p=(\d+)/)?.[1] || '1') === (parsed.page || '1')) : (currentItem.originalUrl || currentItem.url || '').split('?')[0] === parsed.url.split('?')[0])) {
-                parsed.endTime !== undefined ? playerAPI.setPlayTime?.(parsed.startTime, parsed.endTime) : playerAPI.seekTo?.(parsed.startTime);
-                console.log(`🎯 丝滑跳转: ${Media.fmt(parsed.startTime)}${parsed.endTime ? `-${Media.fmt(parsed.endTime)}` : ''}`);
-                return;
-            }
-
-            // 获取媒体信息
-            const processResult = await Media.getMediaInfo(url, config);
-            const mediaItem = processResult.success && processResult.mediaItem ?
-                { ...processResult.mediaItem, startTime: parsed.startTime, endTime: parsed.endTime } :
-                Media.create({ title: Media.getTitle(url), type: detectMediaType(url), url, startTime: parsed.startTime, endTime: parsed.endTime });
-
-            // 块内播放：从链接元素向上查找块
-            const block = linkEl?.closest('[data-node-id][data-inline-player]');
-            const inlinePlayerId = block?.getAttribute('data-inline-player');
-            if (inlinePlayerId && processResult.success && mediaItem.url) {
-                const { initInlinePlayer } = await import('./mediaView');
-                const pluginI18n = (window as any).siyuan?.languages?.['siyuan-media-player'] || {};
-                await initInlinePlayer(inlinePlayerId, mediaItem, getConfig, pluginI18n);
-                block?.removeAttribute('data-inline-player');
-                return;
-            }
-
-            // Tab播放：允许多开模式由playMediaItem统一处理tab打开，单实例模式在这里确保有tab
-            const allowMultiple = config.settings?.allowMultipleInstances;
-            if (!hasTab && !allowMultiple) { openTab(); await new Promise(resolve => setTimeout(resolve, 800)); }
-            if (playlistPlay) await playlistPlay(mediaItem, mediaItem.startTime, mediaItem.endTime);
-        } catch (e) {
-            error(String(e), 'linkClick');
+  return {
+    post: (payload: Record<string, any>) => api.request('/api/broadcast/postMessage', { channel, message: JSON.stringify(payload) }),
+    on: (callback: (payload: Record<string, any>) => void) => {
+      listeners.add(callback)
+      connect()
+      return () => {
+        listeners.delete(callback)
+        if (!listeners.size && socket) {
+          socket.close()
+          socket = null
         }
-    };
+      }
+    },
+  }
+}
+const playerBroadcast = createBroadcast('siyuan-media-player')
+const mediaListBroadcast = createBroadcast('siyuan-media-list')
+export const postPlayerBroadcast = playerBroadcast.post
+export const onPlayerBroadcast = playerBroadcast.on
+export const postMediaListBroadcast = mediaListBroadcast.post
+export const onMediaListBroadcast = mediaListBroadcast.on
+
+// ===== 内部工具 =====
+const normalizeMediaUrl = (url = '') => url
+  .replace(TIME_REGEX, '')
+  .replace(/[?&](?:a|accountId|cloudAccountId)=[^&]*/g, '')
+  .replace(/[?&]$/, '')
+  .replace(/\?&/, '?')
+const normalizeSource = (source = '') => BaseDriver.normalizeSource(source)
+const getRuntime = () => getAPI()
+const getSettings = async () => ({ ...(await getPlayerSettings()), ...(getRuntime().config || {}) })
+/** 统一提示出口。 */
+const notify = (text: string, type: 'info' | 'error' = 'info') => {
+  const player = getRuntime().player
+  if (player?.notice) player.notice.show = text
+  showMessage(text, type === 'error' ? 3000 : 2000, type)
+}
+/** 优先取事件里的时间，其次取当前播放器时间。 */
+const getRuntimeTime = (detail?: Record<string, any>): number => {
+  if (typeof detail?.currentTime === 'number') return detail.currentTime
+  const runtime = getRuntime()
+  if (typeof runtime.controller?.getCurrentTime === 'function') return Number(runtime.controller.getCurrentTime()) || 0
+  return Number(runtime.player?.currentTime) || 0
+}
+/** 从已加载字幕中取当前时刻字幕文本。 */
+const getCurrentSubtitle = (settings: Record<string, any>, time: number): string => {
+  const subtitleUrl = settings.currentSubtitleUrl
+  if (!subtitleUrl) return ''
+  const subtitles = SubtitleManager.get(subtitleUrl)
+  let text = ''
+  for (const subtitle of subtitles) {
+    if (subtitle.time > time) break
+    text = subtitle.text || ''
+  }
+  return text
+}
+export const withTime = (url: string, start: number, end?: number) => !url ? '' : `${url}${url.includes('?') ? '&' : '?'}t=${end !== undefined ? `${fmt(start)}-${fmt(end)}` : fmt(start)}`
+const applyTemplate = (template: string, replacements: Record<string, string>) => Object.entries(replacements).reduce((output, [token, value]) => output.replaceAll(token, value), template)
+const formatDuration = (value: any) => typeof value === 'number' ? fmt(value) : /^\d+(\.\d+)?$/.test(String(value || '')) ? fmt(Number(value)) : String(value || '')
+const getMediaMeta = (item: MediaItem) => ({ title: humanizeText(String(item?.title || item?.name || '未命名媒体')), author: pickMeta(item, AUTHOR_KEYS), desc: pickMeta(item, DESC_KEYS), duration: formatDuration(item?.duration ?? item?.durationSec) })
+const pickMeta = (item: any, keys: readonly string[]) => keys.map(key => item?.[key]).find(Boolean) || ''
+const normalizeImageUrl = (url = ''): string => !url ? '' : url.startsWith('//') ? `https:${url}` : url.startsWith('/') ? `${location.origin}${url}` : url
+const isExternalHttpUrl = (url = '') => {
+  try {
+    const target = new URL(normalizeImageUrl(url))
+    return /^https?:$/i.test(target.protocol) && target.origin !== location.origin
+  } catch {
+    return false
+  }
+}
+/** 拉取图片资源，供封面和截图写入笔记时复用。 */
+const getImageBlob = async (imageUrl = ''): Promise<Blob | null> => {
+  const source = String(imageUrl || '').trim()
+  if (!source) return null
+  try {
+    const target = normalizeImageUrl(source)
+    if (isExternalHttpUrl(target)) return await forwardProxyBlob(target)
+    const response = await fetch(target)
+    if (!response.ok) throw new Error('图片读取失败')
+    return await response.blob()
+  } catch {
+    return null
+  }
+}
+/** 把图片转为思源资源路径。 */
+export const imageToAsset = async (image: string | Blob = '', prefix = 'image'): Promise<string> => {
+  if (typeof image === 'string') {
+    const source = String(image || '').trim()
+    if (!source || source.startsWith('/assets/') || source.startsWith('/plugins/')) return source
+    image = await getImageBlob(source) || ''
+  }
+  if (!(image instanceof Blob)) return ''
+  try {
+    const type = image.type || 'image/png'
+    const ext = type.split('/')[1]?.split(';')[0]?.trim().toLowerCase()
+    const file = new File([image], `${prefix}_${Date.now()}.${ext === 'jpeg' ? 'jpg' : ext || 'png'}`, { type })
+    return (await api.upload('/assets/', [file]))?.succMap?.[file.name] || ''
+  } catch {
+    return ''
+  }
+}
+const stripImageToken = (template: string, token = '截图'): string => template.replace(new RegExp(`!?\\[.*?\\]\\(${token}\\)`, 'g'), '').replace(/\n{3,}/g, '\n\n').trim()
+/** 统一生成带时间点的媒体链接文本。 */
+const buildMediaLink = (item: MediaItem, settings: Record<string, any>, time: number, endTime?: number, subtitle?: string): string => {
+  const url = withTime(getMediaUrl(item), time, endTime)
+  const timeText = endTime !== undefined ? `${fmt(time)}-${fmt(endTime)}` : fmt(time)
+  const output = applyTemplate(stripImageToken(settings.linkFormat || DEFAULT_LINK_FORMAT), {
+    '{{时间}}': timeText,
+    '{{字幕}}': subtitle || '',
+    '{{标题}}': humanizeText(String(item?.title || item?.name || '')),
+    '{{艺术家}}': item?.artist || '',
+    '{{链接}}': url,
+  }).trim()
+  return output || `- [${timeText}](${url})`
+}
+const buildTimestampPayload = (item: MediaItem, settings: Record<string, any>, time: number): ClipboardPayload => ({ text: buildMediaLink(item, settings, time, undefined, getCurrentSubtitle(settings, time)) })
+const buildLoopPayload = (item: MediaItem, settings: Record<string, any>, start: number, end: number): ClipboardPayload => ({ text: buildMediaLink(item, settings, start, end, getCurrentSubtitle(settings, start)) })
+/** 生成媒体笔记内容。 */
+const buildMediaNotesPayload = async (item: MediaItem, settings: Record<string, any>, time: number): Promise<ClipboardPayload> => {
+  const thumbnail = normalizeImageUrl(item?.thumbnail || '')
+  const image = await getImageBlob(thumbnail) || await getRuntime().controller?.getScreenshotBlob?.(settings.screenshotFormat || 'png', Number(settings.screenshotQuality || 92) / 100)
+  const meta = getMediaMeta(item)
+  return {
+    text: applyTemplate(settings.mediaNotesTemplate || DEFAULT_NOTES_TEMPLATE, {
+      '{{标题}}': meta.title,
+      '{{作者}}': meta.author,
+      '{{艺术家}}': meta.author,
+      '{{简介}}': meta.desc,
+      '{{链接}}': getMediaUrl(item),
+      '{{时长}}': meta.duration,
+      '{{封面}}': image ? await imageToAsset(image, 'thumbnail') : '',
+      '{{日期}}': new Date().toLocaleDateString(),
+    }),
+  }
+}
+/** 生成截图写入内容。 */
+const buildScreenshotPayload = async (item: MediaItem, settings: Record<string, any>, time: number, image: Blob): Promise<ClipboardPayload> => {
+  const text = settings.screenshotWithTimestamp ? buildMediaLink(item, settings, time, undefined, getCurrentSubtitle(settings, time)) : ''
+  if (!text) return { text: '', image } // 纯截图：直接复制图片 Blob，方便粘贴到其他软件
+  const imageUrl = await imageToAsset(image, 'screenshot')
+  if (!imageUrl) throw new Error('截图上传失败')
+  return { text: `${text}\n\n![截图](${imageUrl})` }
+}
+
+/** 统一读取当前播放媒体。 */
+const getCurrentItem = () => {
+  const item = getRuntime().controller?.getCurrentMedia?.()
+  if (!item) throw new Error('请先播放媒体')
+  return item
+}
+
+const getParsedIdentity = (source = '', sourcePath = '', url = '') => {
+  const cleanUrl = normalizeMediaUrl(url)
+  const parsed = BaseDriver.parseItemUrl(cleanUrl, normalizeSource(source))
+  const resolvedSource = normalizeSource(source || parsed?.source || 'standard')
+  const resolvedPath = sourcePath || parsed?.sourcePath || ''
+  const comparablePath = FILE_ID_SOURCES.has(resolvedSource) ? (resolvedPath.split('|').pop() || resolvedPath) : resolvedPath
+  return `${resolvedSource}:${comparablePath || cleanUrl}`
+}
+const getLinkElement = (target: HTMLElement | null) => target?.matches('a[href], [data-href], span[data-type="a"], span[data-type="url"]') ? target : target?.closest('a[href], [data-href], span[data-type="a"], span[data-type="url"]') || null
+/** 从点击目标上提取链接和标题。 */
+const getLinkMeta = (target: HTMLElement | null) => {
+  const element = getLinkElement(target)
+  return {
+    url: String(element?.getAttribute('data-media-url') || element?.getAttribute('data-href') || element?.getAttribute('href') || '').trim(),
+    title: String(element?.textContent || '').trim(),
+  }
+}
+/** 把文档中的媒体链接统一解析成播放器可识别结构。 */
+const parseLink = (url: string): ParsedLink | null => {
+  const rawUrl = String(url || '').trim()
+  if (!rawUrl) return null
+  const [startText = '', endText = ''] = decodeUrlValue(rawUrl.match(TIME_REGEX)?.[1] || '').split('-')
+  const { startTime, endTime } = normalizeRange(startText ? parseTime(startText) : undefined, endText ? parseTime(endText) : undefined)
+  const accountId = rawUrl.match(/[?&](?:a|accountId|cloudAccountId)=([^&]+)/)?.[1]
+  const cleanUrl = normalizeMediaUrl(rawUrl)
+  const bilibili = resolveBilibiliLink(cleanUrl)
+  if (bilibili) return { rawUrl, cleanUrl, cloudAccountId: accountId, source: 'bilibili', sourcePath: bilibili.sourcePath, type: 'video', startTime, endTime, bvid: bilibili.bvid, page: bilibili.page }
+  const parsed = BaseDriver.parseItemUrl(cleanUrl)
+  return parsed ? { rawUrl, cleanUrl, cloudAccountId: accountId, ...parsed, startTime, endTime } : null
+}
+
+const getLinkTitle = (parsed: ParsedLink, title = '') => {
+  const linkText = String(title || '').trim()
+  // 带时间参数的链接，其锚文本通常是“时间戳模板”而不是媒体原始标题。
+  if (linkText && parsed.startTime === undefined && parsed.endTime === undefined) return linkText
+  if (parsed.source === 'bilibili' && parsed.bvid) return parsed.bvid
+  const sourceName = parsed.sourcePath?.split('/').filter(Boolean).pop()?.split('|')[0] || ''
+  if (sourceName) return sourceName.replace(/\.[^.]+$/, '')
+  const name = parsed.cleanUrl.split('/').pop()?.split('?')[0] || ''
+  try { return decodeURIComponent(name).replace(/\.[^.]+$/, '') || parsed.cleanUrl } catch { return name.replace(/\.[^.]+$/, '') || parsed.cleanUrl }
+}
+// ===== 链接匹配与播放 =====/** 判断文档链接和当前媒体是否指向同一资源。 */
+const isSameMedia = (item: MediaItem | null | undefined, parsed: ParsedLink) => {
+  if (!item) return false
+  if (parsed.source === 'bilibili' && parsed.bvid) {
+    return item.bvid === parsed.bvid && toPage(item?.page || item?.originalUrl?.match(/[?&]p=(\d+)/)?.[1] || item?.url?.match(/[?&]p=(\d+)/)?.[1]) === (parsed.page || 1)
+  }
+  return getParsedIdentity(String(item.source || ''), String(item.sourcePath || ''), getMediaUrl(item) || item.url || '') === getParsedIdentity(parsed.source, parsed.sourcePath || '', parsed.cleanUrl)
+}
+/** 把解析后的链接转成可播放媒体对象。 */
+const resolveLinkItem = async (parsed: ParsedLink, title = '') => {
+  const storage = await getStorage()
+  const cloudAccountId = parsed.cloudAccountId
+    ? (await storage.queryCloudAccounts('id = ? OR id LIKE ?', [parsed.cloudAccountId, `%_${parsed.cloudAccountId}`]).catch(() => []))[0]?.id || parsed.cloudAccountId
+    : undefined
+  if (parsed.source === 'bilibili' && parsed.sourcePath) {
+    const { bilibiliDriver } = await import('@/drivers/bilibili')
+    const account = await BaseDriver.getAccountBySource(storage, 'bilibili')
+    if (account) bilibiliDriver.setConfig(account)
+    return bilibiliDriver.createMediaItemFromLink(parsed.sourcePath, parsed.page || 1, { startTime: parsed.startTime, endTime: parsed.endTime })
+  }
+  const existing = cloudAccountId
+    ? (await storage.findMediaByUrls([parsed.cleanUrl, parsed.rawUrl], cloudAccountId))[0]
+    : (await storage.findMediaByUrls([parsed.cleanUrl, parsed.rawUrl]))[0]
+  if (existing) return existing
+  return BaseDriver.attachCloudAccount({
+    id: `link-${Date.now()}`,
+    url: parsed.cleanUrl,
+    originalUrl: parsed.cleanUrl,
+    source: parsed.source === 'standard' ? undefined : parsed.source,
+    sourcePath: parsed.source === 'standard' ? undefined : parsed.sourcePath,
+    cloudAccountId,
+    type: parsed.type,
+    title: getLinkTitle(parsed, title),
+    name: getLinkTitle(parsed, title),
+  }, storage)
+}
+/** 播放解析后的链接；同媒体时优先直接跳转。 */
+const playParsedLink = async (parsed: ParsedLink, title = '') => {
+  const runtime = getRuntime()
+  const current = runtime.controller?.getCurrentMedia?.()
+  if (parsed.startTime !== undefined && isSameMedia(current, parsed)) {
+    if (parsed.endTime !== undefined) runtime.controller?.setLoopSegment?.(parsed.startTime, parsed.endTime)
+    else runtime.controller?.seekTo?.(parsed.startTime)
+    runtime.player?.play?.()
+    if (runtime.player?.notice) runtime.player.notice.show = `跳转到 ${fmt(parsed.startTime)}${parsed.endTime !== undefined ? `-${fmt(parsed.endTime)}` : ''}`
+    return true
+  }
+  await runtime.playMediaItem?.({ ...(await resolveLinkItem(parsed, title)), startTime: parsed.startTime, endTime: parsed.endTime })
+  return true
+}
+const playLink = async (url: string) => {
+  const parsed = parseLink(url)
+  return parsed ? playParsedLink(parsed) : false
+}
+
+// ===== 动作处理 =====
+const getActionTime = (settings: Record<string, any>, detail?: Record<string, any>) => Math.max(0, getRuntimeTime(detail) + Number(settings.timestampOffset || 0))
+const getNoteArgs = (item: MediaItem) => [humanizeText(String(item?.title || item?.name || '媒体')), getMediaNoteKey(item)] as const
+const insertCurrent = async (settings: Record<string, any>, payload: ClipboardPayload | Promise<ClipboardPayload>) => {
+  const item = getCurrentItem()
+  await insertByTarget(await payload, settings, ...getNoteArgs(item))
+}
+/** 插入时间戳链接。 */
+const handleTimestamp = async (detail?: Record<string, any>) => {
+  const settings = await getSettings()
+  const item = getCurrentItem()
+  await insertByTarget(buildTimestampPayload(item, settings, getActionTime(settings, detail)), settings, ...getNoteArgs(item))
+}
+/** 两次触发组成一个循环片段。 */
+const handleLoopSegment = async (detail?: Record<string, any>) => {
+  const settings = await getSettings()
+  const time = getActionTime(settings, detail)
+  if (loopStartTime === null) {
+    loopStartTime = time
+    return void notify(`已记录开始时间 ${fmt(time)}`)
+  }
+  const { startTime: start, endTime } = normalizeRange(loopStartTime, time)
+  loopStartTime = null
+  const item = getCurrentItem()
+  if (start === undefined || endTime === undefined) return
+  await insertByTarget(buildLoopPayload(item, settings, start, endTime), settings, ...getNoteArgs(item))
+  endTime === start && notify(`结束时间已自动重置为开始时间 ${fmt(start)}`)
+}
+/** 创建媒体笔记。 */
+const handleMediaNotes = async (detail?: Record<string, any>) => {
+  const item = getCurrentItem()
+  const settings = await getSettings()
+  await createMediaNote(item, settings, await buildMediaNotesPayload(item, settings, getRuntimeTime(detail)))
+}
+/** 截图并按设置写入。 */
+const handleScreenshot = async () => {
+  if (!LicenseManager.can('screenshot')) return void LicenseManager.notifyPro()
+  const runtime = getRuntime()
+  const settings = await getSettings()
+  const image = await runtime.controller?.getScreenshotBlob?.(settings.screenshotFormat || 'png', Number(settings.screenshotQuality || 92) / 100)
+  if (!image) return void notify('截图失败', 'error')
+  await insertCurrent(settings, buildScreenshotPayload(getCurrentItem(), settings, getRuntimeTime(), image))
+}
+/** 统一分发播放器动作。 */
+const handleAction = async (action: MediaAction, detail?: Record<string, any>) => {
+  const runtime = getRuntime()
+  if (action === 'prev') return runtime.playPrev?.()
+  if (action === 'next') return runtime.playNext?.()
+  if (action === 'background') return runtime.toBackground?.()
+  if (action === 'aiSummary') return runtime.runAiSummary?.()
+  if (action === 'timestamp') return handleTimestamp(detail)
+  if (action === 'loopSegment') return handleLoopSegment(detail)
+  if (action === 'mediaNotes') return handleMediaNotes(detail)
+  if (action === 'screenshot') return handleScreenshot()
+}
+/** 响应全局播放器动作事件。 */
+const onMediaPlayerAction = (event: Event) => {
+  const detail = (event as CustomEvent<Record<string, any>>).detail || {}
+  const action = detail.action as MediaAction | undefined
+  if (!action) return
+  handleAction(action, detail).catch((error) => {
+    console.error('[Player]', error)
+    notify(error instanceof Error ? error.message : '操作失败', 'error')
+  })
+}
+/** 拦截文档中的媒体链接点击并直接播放。 */
+const getMediaName = (url: string, type: 'video' | 'audio') => url.replace(/^file:\/\/\/?/, '').split(/[\\/]/).pop() || (type === 'video' ? '未命名视频' : '未命名音频')
+const getMediaBlockItem = (target: HTMLElement | null) => {
+  const block = target?.closest?.('div[data-type="NodeVideo"], div[data-type="NodeAudio"]') as HTMLElement | null
+  const mediaEl = !block || target?.closest?.('.protyle-action__drag') ? null : block.querySelector('video, audio') as HTMLMediaElement | null
+  const url = String(mediaEl?.currentSrc || mediaEl?.getAttribute('src') || mediaEl?.querySelector('source')?.getAttribute('src') || '').trim()
+  if (!mediaEl || !url) return null
+  const type = mediaEl.tagName.toLowerCase() as 'video' | 'audio', name = getMediaName(url, type)
+  return { url, originalUrl: url, title: name, name, type }
+}
+const stopEvent = (event: MouseEvent) => (event.preventDefault(), event.stopPropagation())
+const onDocumentClick = (event: Event) => {
+  const mouseEvent = event as MouseEvent
+  if (mouseEvent.defaultPrevented || mouseEvent.button !== 0 || mouseEvent.ctrlKey || mouseEvent.metaKey || mouseEvent.shiftKey || mouseEvent.altKey) return
+  const target = mouseEvent.target as HTMLElement | null, mediaItem = getMediaBlockItem(target), runtime = getRuntime()
+  if (mediaItem) return stopEvent(mouseEvent), void runtime.playMediaItem?.(mediaItem)
+  const { url, title } = getLinkMeta(target), parsed = parseLink(url)
+  if (!parsed) return
+  stopEvent(mouseEvent)
+  playParsedLink(parsed, title).catch((error) => {
+    console.error('[PlayerLink]', error)
+    notify(error instanceof Error ? error.message : '链接播放失败', 'error')
+  })
+}
+const createTimestampLink = async (time?: number) => {
+  const item = getRuntime().controller?.getCurrentMedia?.()
+  if (!item) return ''
+  const settings = await getSettings()
+  const actualTime = Math.max(0, (time ?? getRuntimeTime()) + Number(settings.timestampOffset || 0))
+  return buildMediaLink(item, settings, actualTime, undefined, getCurrentSubtitle(settings, actualTime))
+}
+
+// ===== 初始化 =====/** 只初始化一次播放器运行时能力。 */
+export const initMediaPlayer = () => {
+  if (initialized) return
+  initialized = true
+  window.addEventListener('mediaPlayerAction', onMediaPlayerAction)
+  document.addEventListener('click', onDocumentClick, true)
+  const runtime = getRuntime()
+  runtime.triggerAction = (action: MediaAction) => window.dispatchEvent(new CustomEvent('mediaPlayerAction', { detail: { action } }))
+  runtime.createTimestampLink = createTimestampLink
+  runtime.playLink = playLink
 }

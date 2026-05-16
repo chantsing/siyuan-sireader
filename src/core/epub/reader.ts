@@ -70,7 +70,7 @@ function configureView(view: FoliateView, settings: ReaderSettings) {
   !scroll && pageAnimation === 'slide' ? set('animated', '') : renderer.removeAttribute('animated')
   set('gap', '0%')
   set('margin', `${layout.headerFooterMargin || 0}px`)
-  set('max-inline-size', mobile || !layout.maxInlineSize ? '100%' : `${layout.maxInlineSize}px`)
+  layout.maxInlineSize ? set('max-inline-size', `${layout.maxInlineSize}px`) : renderer.removeAttribute('max-inline-size')
   layout.maxBlockSize ? set('max-block-size', `${layout.maxBlockSize}px`) : renderer.removeAttribute('max-block-size')
   applyVisualFilter(visualSettings)
   applyViewTheme(view, getTheme(settings))
@@ -203,8 +203,29 @@ export class FoliateReader {
   async open(file: File | string | any) {
     await this.view.open(file)
     this.applySettings()
+    this.bindScrolledSectionBridge()
     if (this.marks) await this.marks.init()
     this.emit('loaded', { book: this.view.book })
+  }
+
+  private bindScrolledSectionBridge() {
+    const r = this.view.renderer as any
+    if (!r || r.__sireaderScrollBridge) return
+    const pos = () => Number(r.start ?? 0)
+    let start = pos(), busy = false
+    const reset = () => { start = pos() }
+    r.__sireaderScrollBridge = true
+    this.view.addEventListener('load', reset as EventListener)
+    r.addEventListener('scroll', async () => {
+      const next = pos(), delta = next - start
+      start = next
+      const dir = !busy && r.getAttribute?.('flow') === 'scrolled' && Math.abs(delta) >= 1
+        ? delta > 0 && Number(r.viewSize ?? 0) - Number(r.end ?? 0) <= 2 ? 1 : delta < 0 && next <= 2 ? -1 : 0
+        : 0
+      if (!dir) return
+      busy = true
+      try { await this.view[dir > 0 ? 'next' : 'prev']() } finally { reset(); busy = false }
+    })
   }
 
   // 应用设置

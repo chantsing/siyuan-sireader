@@ -1,302 +1,208 @@
 /**
- * 弹幕管理模块
- * 处理 B 站弹幕和本地弹幕的加载和解析
+ * 通用弹幕处理器
+ * 支持 XML、ASS、JSON 三种输入，并统一转换成 ArtPlayer 可直接消费的弹幕数组。
  */
-import { getBiliAPI, getBiliHeaders } from './bilibili';
-import artplayerPluginDanmuku from 'artplayer-plugin-danmuku';
-import { Media } from './player';
 
-/**
- * artplayer弹幕格式
- */
-interface ArtPlayerDanmaku {
-    text: string;        // 弹幕文本
-    startTime: number;   // 出现时间(秒)（统一为 startTime）
-    color: string;       // 颜色(十六进制)
-    border?: boolean;    // 是否有边框
-    mode: number;        // 弹幕模式
-    size?: number;       // 字体大小
+import { forwardProxyText } from '@/utils/webdav-proxy'
+
+export interface Danmaku {
+  text: string
+  time: number
+  color: string
+  mode: number
+  size?: number
 }
 
-/**
- * 弹幕插件配置
- */
-interface DanmakuOptions {
-    speed?: number;      // 弹幕速度
-    opacity?: number;    // 透明度
-    fontSize?: number;   // 字体大小
-    margin?: [number | `${number}%`, number | `${number}%`]; // 上下边距
-    synchronousPlayback?: boolean; // 同步播放
-}
+type DanmakuFormat = 'xml' | 'ass' | 'json'
 
-/**
- * 弹幕配置对象，与字幕配置对象保持一致的结构
- */
-export interface DanmakuFileOptions {
-    url: string;         // 弹幕URL
-    type?: string;       // 弹幕类型 (xml, ass)
-    encoding?: string;   // 弹幕编码
-}
-
-/**
- * 默认弹幕配置
- */
-const DEFAULT_OPTIONS = {
-    speed: 5,
-    opacity: 0.9,
-    fontSize: 25,
-    margin: [10, '25%'] as [number, `${number}%`],
-    synchronousPlayback: true
-};
-
-/**
- * B站弹幕处理类
- */
 export class DanmakuManager {
-    private static cache = new Map<string, ArtPlayerDanmaku[]>();
-    private static formats = ['xml', 'ass'];
-    
-    /**
-     * 获取媒体文件对应的弹幕
-     */
-    static async getDanmakuFileForMedia(mediaUrl: string): Promise<DanmakuFileOptions | null> {
-        try {
-            const url = await Media.findSupportFile(mediaUrl, this.formats.map(f => `.${f}`));
-            if (!url) return null;
-            
-            const type = url.split('.').pop()?.toLowerCase() || 'xml';
-            return { url, type, encoding: 'utf-8' };
-        } catch {
-            return null;
+  private static cache = new Map<string, Danmaku[]>()
+
+  static async fetchBiliXml(cid: string): Promise<string> {
+    try {
+      return await forwardProxyText(`https://comment.bilibili.com/${cid}.xml`, 'GET')
+    } catch {
+      return ''
+    }
+  }
+
+  private static isXmlLike(content: string): boolean {
+    return !!content && (content.includes('<i>') || content.includes('<d ') || content.includes('<?xml'))
+  }
+
+  /**
+   * 合并相同弹幕（按秒分组，相同文本去重并计数）
+   */
+  static merge(list: Danmaku[]): Danmaku[] {
+    return Object.entries(list.reduce((map, d) => ((map[d.time | 0] ||= new Map()).set(d.text, { ...d, count: (map[d.time | 0].get(d.text)?.count || 0) + 1 }), map), {} as Record<number, Map<string, any>>)).flatMap(([, items]) => Array.from(items.values()).map((d: any) => d.count > 1 ? { ...d, text: `${d.text} ×${d.count}` } : d))
+  }
+
+  /**
+   * 加载 B 站弹幕。
+   * 优先使用播放阶段预取到的 XML，避免播放器初始化时再次请求。
+   */
+  static async loadBili(cid: string, xmlContent = ''): Promise<Danmaku[]> {
+    const key = `bili_${cid}`
+    if (xmlContent && this.isXmlLike(xmlContent)) {
+      const list = this.parseXml(xmlContent)
+      this.cache.set(key, list)
+      return list
+    }
+    if (this.cache.has(key)) {
+      return this.cache.get(key)!
+    }
+
+    try {
+      const xml = await this.fetchBiliXml(cid)
+      if (!this.isXmlLike(xml)) return []
+      const list = xml ? this.parseXml(xml) : []
+      this.cache.set(key, list)
+      return list
+    } catch {
+      return []
+    }
+  }
+
+  /**
+   * 加载通用弹幕文件。
+   */
+  static async load(url: string, format?: DanmakuFormat): Promise<Danmaku[]> {
+    if (!url) return []
+    if (this.cache.has(url)) return this.cache.get(url)!
+
+    try {
+      const content = /^https?:\/\//i.test(url) || url.startsWith('//')
+        ? await forwardProxyText(url.startsWith('//') ? `https:${url}` : url, 'GET').catch(() => '')
+        : await fetch(url).then(r => r.text()).catch(() => '')
+      if (!content) return []
+
+      const type = format || this.detectFormat(content, url)
+      const list = this.parse(content, type)
+      this.cache.set(url, list)
+      return list
+    } catch {
+      return []
+    }
+  }
+
+  /**
+   * 读取缓存的弹幕数组。
+   */
+  static get(key: string): Danmaku[] {
+    return this.cache.get(key.startsWith('bili_') ? key : `bili_${key}`) || []
+  }
+
+  private static parse(content: string, format: DanmakuFormat): Danmaku[] {
+    const parsers: Record<DanmakuFormat, (c: string) => Danmaku[]> = {
+      xml: this.parseXml,
+      ass: this.parseAss,
+      json: this.parseJson
+    }
+    return parsers[format]?.(content) || []
+  }
+
+  /**
+   * 解析 XML 弹幕。
+   */
+  private static parseXml(xml: string): Danmaku[] {
+    if (!xml?.trim() || xml.startsWith('{')) return []
+
+    try {
+      const modeMap = (mode: number) => {
+        switch (mode) {
+          case 4: return 2
+          case 5: return 1
+          default: return 0
         }
-    }
-
-    /**
-     * 获取B站视频弹幕
-     */
-    static async getBiliDanmaku(cid: string, config: any): Promise<ArtPlayerDanmaku[]> {
-        const key = `bili_${cid}`;
-        if (this.cache.has(key)) return this.cache.get(key) || [];
-
-        try {
-            const api = getBiliAPI();
-            if (!api) return [];
-
-            const xmlUrl = `https://comment.bilibili.com/${cid}.xml`;
-            const headers = getBiliHeaders(config);
-
-            let xmlText = await fetch(xmlUrl, { method: 'GET', headers, referrerPolicy: "no-referrer" })
-                .then(r => r.ok ? r.text() : Promise.reject())
-                .catch(() => fetch(api.PROXY, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        url: xmlUrl, method: 'GET', timeout: 10000,
-                        headers: Object.entries(headers).map(([k, v]) => ({ [k]: v }))
-                    })
-                })
-                .then(r => r.json())
-                .then(result => {
-                    if (result.code !== 0 || !result.data) return '';
-                    return typeof result.data === 'string'
-                            ? result.data
-                            : (typeof result.data.body === 'string' ? result.data.body : '');
-                })
-                .catch(() => ''));
-            
-            const danmakuList = xmlText ? this.parseXmlDanmaku(xmlText) : [];
-            return this.save(key, danmakuList.length ? danmakuList : this.generateTestDanmaku());
-        } catch {
-            return this.generateTestDanmaku();
+      }
+      const decode = (text: string) => text
+        .replaceAll('&quot;', '"')
+        .replaceAll('&apos;', '\'')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&amp;', '&')
+      const matches = Array.from(xml.matchAll(/<d (?:.*? )??p="(?<p>.+?)"(?: .*?)?>(?<text>.+?)<\/d>/gs))
+      const list = matches.map(match => {
+        const p = match.groups?.p?.split(',') || []
+        const text = decode(match.groups?.text?.trim() || '')
+        if (p.length < 4 || !text) return null
+        return {
+          text,
+          time: Number(p[0]) || 0,
+          mode: modeMap(Number(p[1])),
+          size: Number(p[2]) || 25,
+          color: `#${Number(p[3]).toString(16).padStart(6, '0')}`
         }
+      }).filter(Boolean) as Danmaku[]
+
+      return list
+    } catch {
+      return []
     }
-    
-    /**
-     * 解析XML格式的弹幕数据
-     */
-    private static parseXmlDanmaku(xmlText: string): ArtPlayerDanmaku[] {
-        if (!xmlText?.trim() || xmlText.trim().startsWith('{')) return [];
-        
-        try {
-            const parser = new DOMParser();
-            const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
-            
-            if (xmlDoc.getElementsByTagName('parsererror').length > 0) return [];
-            
-            const elements = xmlDoc.getElementsByTagName('d');
-            if (!elements?.length) return [];
-            
-            const danmakuList = [];
-            
-            for (const element of elements) {
-                const p = element.getAttribute('p');
-                const text = element.textContent;
-                
-                if (!p || !text) continue;
-                
-                const parts = p.split(',');
-                if (parts.length < 4) continue;
-                
-                const time = parseFloat(parts[0]);
-                const mode = parseInt(parts[1]);
-                const fontSize = parseInt(parts[2]);
-                const colorInt = parseInt(parts[3]);
-                const color = !isNaN(colorInt) ? `#${colorInt.toString(16).padStart(6, '0')}` : '#ffffff';
-                
-                danmakuList.push({ text, startTime: time, color, mode, size: fontSize });
-            }
-            
-            return danmakuList;
-        } catch {
-            return [];
+  }
+
+  /**
+   * 解析 ASS 弹幕。
+   */
+  private static parseAss(content: string): Danmaku[] {
+    if (!content?.trim()) return []
+
+    return content.split(/\r?\n/)
+      .filter(line => line.startsWith('Dialogue:'))
+      .map(line => {
+        const parts = line.split(',')
+        if (parts.length < 10) return null
+
+        const text = parts.slice(9).join(',').replace(/\{[^}]*\}|\\N/g, ' ').trim()
+        if (!text) return null
+
+        const [h, m, s] = parts[1].trim().split(':').map(Number)
+        return {
+          text,
+          time: h * 3600 + m * 60 + s,
+          color: '#ffffff',
+          mode: 1,
+          size: 25
         }
-    }
-    
-    /**
-     * 解析ASS格式弹幕
-     */
-    private static parseAssDanmaku(content: string): ArtPlayerDanmaku[] {
-        if (!content?.trim()) return [];
-        
-        return content.split(/\r?\n/)
-            .filter(line => line.startsWith('Dialogue:'))
-            .map(line => {
-                const parts = line.split(',');
-                if (parts.length < 10) return null;
-                
-                const text = parts.slice(9).join(',').replace(/\{[^}]*\}|\\N/g, ' ').trim();
-                if (!text) return null;
-                
-                const [h, m, s] = parts[1].trim().split(':').map(Number);
-                return { text, startTime: (h * 3600) + (m * 60) + s, color: '#ffffff', mode: 1, size: 25 };
-            })
-            .filter(Boolean) as ArtPlayerDanmaku[];
-    }
-    
-    /**
-     * 生成测试弹幕数据
-     */
-    private static generateTestDanmaku(): ArtPlayerDanmaku[] {
-        const texts = ['测试弹幕', 'B站弹幕测试', '欢迎使用思源播放器', '弹幕功能测试', '思源笔记真好用'];
-        const colors = ['#ffffff', '#ff0000', '#00ff00', '#0000ff', '#ffff00']; 
-        const modes = [1, 1, 5, 4, 1]; // 1=滚动, 5=顶部, 4=底部
-        
-        return Array(20).fill(0).map(() => ({
-            text: texts[Math.floor(Math.random() * texts.length)],
-            startTime: Math.random() * 30,
-            color: colors[Math.floor(Math.random() * colors.length)],
-            mode: modes[Math.floor(Math.random() * modes.length)],
-            size: Math.random() > 0.8 ? 30 : 25
-        })).sort((a, b) => a.startTime - b.startTime);
-    }
-    
-    /**
-     * 解析弹幕文件
-     */
-    static async loadDanmaku(url: string, type: string = 'xml'): Promise<ArtPlayerDanmaku[]> {
-        if (!url) return [];
-        if (this.cache.has(url)) return this.cache.get(url) || [];
-        
-        try {
-            const content = await fetch(url).then(r => r.text()).catch(() => '');
-            if (!content?.trim()) return [];
-            
-            // 根据类型选择解析器
-            const parser = {
-                'xml': this.parseXmlDanmaku,
-                'ass': this.parseAssDanmaku
-            }[type.toLowerCase()];
-            
-            return this.save(url, parser ? parser(content) : []);
-        } catch (e) {
-            return [];
-        }
-    }
-    
-    /**
-     * 为播放器加载B站弹幕，并转换为URL格式（简化后的方法）
-     */
-    static async loadBiliDanmakuUrl(cid: string, config: any): Promise<string | null> {
-        const danmakuList = await this.getBiliDanmaku(cid, config);
-        return danmakuList?.length ? this.generateDanmakuUrl(danmakuList) : null;
-    }
-    
-    /**
-     * 生成弹幕URL数据
-     */
-    static generateDanmakuUrl(danmakuList: ArtPlayerDanmaku[]): string {
-        return `data:application/xml;charset=utf-8,${encodeURIComponent(this.convertToXML(danmakuList))}`;
-    }
-    
-    /**
-     * 将弹幕数据转换为XML格式
-     */
-    static convertToXML(danmakuList: ArtPlayerDanmaku[]): string {
-        let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<i>\n';
-        danmakuList.forEach(({ text, startTime, color, mode }) => {
-            xml += `<d p="${startTime},${mode},25,${color.replace('#', '')},0,0,0,0">${this.escapeXml(text)}</d>\n`;
-        });
-        return xml + '</i>';
-    }
-    
-    /**
-     * 转义XML特殊字符
-     */
-    private static escapeXml(text: string): string {
-        return text
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&apos;');
-    }
-    
-    /**
-     * 创建弹幕插件
-     */
-    static createDanmakuPlugin(url: string, options: DanmakuOptions = {}): any {
-        return artplayerPluginDanmuku({danmuku: url,...DEFAULT_OPTIONS,...options});
-    }
+      })
+      .filter(Boolean) as Danmaku[]
+  }
 
-    /**
-     * 创建一个空弹幕插件
-     */
-    static createEmptyDanmakuPlugin(options: DanmakuOptions = {}): any {
-        return this.createDanmakuPlugin(this.generateDanmakuUrl([]), options);
-    }
-    
-    /**
-     * 从播放器插件中提取弹幕数据
-     */
-    static extractDanmakuData(plugin: any): any[] {
-        if (!plugin?.danmus) return [];
-        
-        return plugin.danmus.map((item: any) => ({
-            text: item.text,
-            startTime: item.time,
-            color: item.color || '#ffffff',
-            mode: item.mode || 1,
-            user: ''
-        }));
-    }
+  /**
+   * 解析 JSON 弹幕。
+   */
+  private static parseJson(content: string): Danmaku[] {
+    try {
+      const data = JSON.parse(content)
+      if (!Array.isArray(data)) return []
 
-    /**
-     * 清除弹幕缓存
-     */
-    static clearCache(): void {
-        this.cache.clear();
+      return data.map(item => ({
+        text: item.text || item.content || '',
+        time: item.time || item.startTime || 0,
+        color: item.color || '#ffffff',
+        mode: item.mode || 1,
+        size: item.size || 25
+      })).filter(d => d.text)
+    } catch {
+      return []
     }
+  }
 
-    /**
-     * 保存弹幕到缓存
-     */
-    private static save(key: string, danmakus: ArtPlayerDanmaku[]): ArtPlayerDanmaku[] {
-        const sorted = (danmakus || []).slice().sort((a, b) => {
-            const at = Number.isFinite(a.startTime as any) ? (a.startTime as number) : 0;
-            const bt = Number.isFinite(b.startTime as any) ? (b.startTime as number) : 0;
-            return at - bt;
-        });
-        this.cache.set(key, sorted);
-        return sorted;
-    }
+  /**
+   * 自动识别弹幕格式。
+   */
+  private static detectFormat(content: string, url: string): DanmakuFormat {
+    const ext = url.split('.').pop()?.toLowerCase()
+    if (ext === 'ass') return 'ass'
+    if (ext === 'json') return 'json'
+
+    const trimmed = content.trim()
+    if (trimmed.startsWith('[Script Info]')) return 'ass'
+    if (trimmed.startsWith('[') || trimmed.startsWith('{')) return 'json'
+    return 'xml'
+  }
+
+  static clear(): void {
+    this.cache.clear()
+  }
 }

@@ -22,7 +22,7 @@ export const openPdf = async (item: MediaItem): Promise<void> => {
     // WebDAV：Dialog + iframe 打开直链
     if (item.source === 'webdav' || (item.url || '').startsWith('webdav://path')) {
       try {
-        const { WebDAVManager } = await import('./webdav');
+        const { webdavDriver: WebDAVManager } = await import('../drivers/webdav');
         const raw = item.sourcePath || decodeURIComponent((item.url || '').substring('webdav://path'.length));
         const link = await WebDAVManager.getFileLink(raw);
         new Dialog({ title: item.title || 'PDF', width: '80vw', height: '80vh', content: `<iframe src="${link}" style="width:100%;height:100%;border:0;"></iframe>` });
@@ -33,8 +33,8 @@ export const openPdf = async (item: MediaItem): Promise<void> => {
     // AliyunDrive: Dialog + iframe 打开下载直链
     if (item.source === 'alidrive') {
       try {
-        const { AliDriveManager } = await import('./alidrive');
-        const fileId = (item.id || '').split('-').pop();
+        const { aliyunDriver: AliDriveManager } = await import('../drivers/aliyun');
+        const fileId = item.sourcePath || (item.id || '').split('-').pop();
         if (fileId) {
           const { url } = await AliDriveManager.getDownloadUrl(fileId);
           new Dialog({ title: item.title || 'PDF', width: '80vw', height: '80vh', content: `<iframe src="${url}" style="width:100%;height:100%;border:0;"></iframe>` });
@@ -46,10 +46,10 @@ export const openPdf = async (item: MediaItem): Promise<void> => {
     // BaiduDrive: Dialog + iframe 打开下载直链
     if (item.source === 'baidudrive') {
       try {
-        const { BaiduDriveManager } = await import('./baidudrive');
-        const fsid = (item.id || '').split('-').pop();
-        if (fsid) {
-          const link = await BaiduDriveManager.getDownloadLink(fsid);
+        const { baiduDriver: BaiduDriveManager } = await import('../drivers/baidu');
+        const path = item.sourcePath || '';
+        if (path) {
+          const link = await BaiduDriveManager.getFileLink(path);
           new Dialog({ title: item.title || 'PDF', width: '80vw', height: '80vh', content: `<iframe src="${link}" style="width:100%;height:100%;border:0;"></iframe>` });
           return;
         }
@@ -59,9 +59,9 @@ export const openPdf = async (item: MediaItem): Promise<void> => {
     // OpenList：Dialog + iframe 打开可访问直链
     if (item.source === 'openlist') {
       try {
-        const { OpenListManager } = await import('./openlist');
+        const { openlistDriver } = await import('../drivers/openlist');
         const path = (item as any).sourcePath || '';
-        const link = path ? await OpenListManager.getFileLink(path) : (item.originalUrl || item.url);
+        const link = path ? await openlistDriver.getFileLink(path) : (item.originalUrl || item.url);
         new Dialog({ title: item.title || 'PDF', width: '80vw', height: '80vh', content: `<iframe src="${link}" style="width:100%;height:100%;border:0;"></iframe>` });
         return;
       } catch {}
