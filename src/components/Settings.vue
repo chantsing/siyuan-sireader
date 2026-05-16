@@ -21,12 +21,12 @@ const props = defineProps<{modelValue:ReaderSettings;i18n:any;onSave:()=>Promise
 const emit = defineEmits<{'update:modelValue':[value:ReaderSettings]}>()
 
 // 基础状态
-const settings = ref<ReaderSettings>(props.modelValue)
-const activeTab = ref<'appearance'|'bookshelf'|'search'|'toc'|'mark'|'deck'>('bookshelf')
-const previewExpanded = ref(localStorage.getItem('sr-preview-expanded')!=='0')
-const activeAccordion = ref('')
-const activeSub = ref('')
-const licenseRef = ref<HTMLElement>()
+const settings = ref<ReaderSettings>(props.modelValue),
+  activeTab = ref<'appearance'|'bookshelf'|'search'|'toc'|'mark'|'deck'>('bookshelf'),
+  previewExpanded = ref(localStorage.getItem('sr-preview-expanded')!=='0'),
+  activeAccordion = ref(''),
+  activeSub = ref(''),
+  licenseRef = ref<HTMLElement>()
 const plugin = usePlugin()
 const {canShowToc} = useReaderState()
 const {customFonts,isLoadingFonts,loadCustomFonts,resetStyles:resetStylesRaw} = useSetting(plugin)
@@ -34,8 +34,7 @@ const {interfaceItems,customThemeItems,appearanceGroups,ttsItems,ttsOptions} = U
 const {confirming:resetConfirm,handleClick:handleReset} = useConfirm(() => {resetStylesRaw();save()})
 
 // TTS
-const ttsVoices = ref<any[]>([])
-const loadingTTS = ref(false)
+const ttsVoices = ref<any[]>([]), loadingTTS = ref(false)
 const loadTTS = async () => {
   if (loadingTTS.value||ttsVoices.value.length) return
   loadingTTS.value = true
@@ -46,7 +45,12 @@ const loadTTS = async () => {
     if (!ttsVoices.value.length) showMessage(props.i18n.loadVoicesFailed||'加载失败',3000,'error')
   } catch (e:any) { showMessage(e.message||props.i18n.loadVoicesFailed||'加载失败',3000,'error') } finally { loadingTTS.value = false }
 }
-const selectVoice = (name:string,isLocal:boolean) => {if (!isLocal&&!can.value('tts-online')) return showUpgrade('在线语音'); if (settings.value.tts) {settings.value.tts.voice=name;save()}}
+const selectVoice = (name:string,isLocal:boolean) => {
+  if (!isLocal&&!can.value('tts-online')) return showUpgrade('在线语音')
+  if (!settings.value.tts) return
+  settings.value.tts.voice = name
+  save()
+}
 const toggleFav = (voice:any) => {
   if (!settings.value.tts) return
   const fav = settings.value.tts.favoriteVoices||[]
@@ -59,24 +63,23 @@ const myVoices = computed(() => [...ttsVoices.value.filter(v => v.isLocal),...(s
 const onlineVoices = computed(() => ttsVoices.value.filter(v => !v.isLocal))
 watch(() => props.modelValue,v => settings.value=v,{immediate:true})
 // 词典与笔记插入
-const offlineDicts = ref<any[]>([])
-const onlineDicts = ref<any[]>([])
-const fileInput = ref<HTMLInputElement>()
-const uploading = ref(false)
-const loadingDict = ref(true)
-const fontsLoaded = ref(false)
-const removingDict = ref<string|null>(null)
-const quickDoc = useDocSearch()
-const insertDoc = useDocSearch()
+const offlineDicts = ref<any[]>([]),
+  onlineDicts = ref<any[]>([]),
+  fileInput = ref<HTMLInputElement>(),
+  uploading = ref(false),
+  loadingDict = ref(true),
+  fontsLoaded = ref(false),
+  removingDict = ref<string|null>(null)
+const quickDoc = useDocSearch(), insertDoc = useDocSearch()
 const {notebooks,load:loadNotebooks} = useNotebooks()
-const {license,userAvatar,code:activationCode,loading:loadingLicense,processing,load:loadLicense,activate:activateLicense,recover:recoverLicense,clear:clearLicense,can,showUpgrade} = useLicense(props.i18n)
+const {license,code:activationCode,loading:loadingLicense,processing,load:loadLicense,activate:activateLicense,recover:recoverLicense,clear:clearLicense,can,showUpgrade} = useLicense(props.i18n)
 const ttsFields = computed(() => [...ttsItems, ...ttsOptions.map(item => ({ ...item, desc: ttsI18nKey(item.key,'Desc') }))])
-const noteTargetOptions = ['clipboard','current','notebook','document','dailynote'] as const
-const noteModeOptions = ['insertBlock','prependBlock','appendBlock','updateBlock','prependDoc','appendDoc'] as const
-const linkFormatPresetOptions = Object.keys(LINK_FORMAT_PRESETS) as (keyof typeof LINK_FORMAT_PRESETS)[]
+const noteTargetOptions = ['clipboard','current','notebook','document','dailynote'] as const,
+  noteModeOptions = ['insertBlock','prependBlock','appendBlock','updateBlock','prependDoc','appendDoc'] as const,
+  linkFormatPresetOptions = Object.keys(LINK_FORMAT_PRESETS) as (keyof typeof LINK_FORMAT_PRESETS)[]
 const noteModeLabels = { insertBlock: 'noteInsertModeCursor', prependBlock: 'noteInsertModeBefore', appendBlock: 'noteInsertModeAfter', updateBlock: 'noteInsertModeReplace', prependDoc: 'noteInsertModeDocTop', appendDoc: 'noteInsertModeDocBottom' } as const
 const selectField = (key:string, label:string, value:string, options:any[], set:(value:string)=>void, show=true, empty='') => ({ key, type: 'select', label, value, options, set, show, empty })
-const searchField = (key:string, label:string, docs:any[], input:string, results:any[], search:()=>void, select:(doc:any)=>void, remove:(doc:any,i:number)=>void, show=true, hint='', drag?:'quickDoc') => ({ key, type: 'search', label, docs, input, results, search, select, remove, show, hint, drag })
+const searchField = (key:string, label:string, docs:any[], input:string, results:any[], setInput:(value:string)=>void, search:()=>void, select:(doc:any)=>void, remove:(doc:any,i:number)=>void, show=true, hint='', drag?:'quickDoc') => ({ key, type: 'search', label, docs, input, results, setInput, search, select, remove, show, hint, drag })
 const dictSections = computed(() => [
   {
     key: 'offlineDict', title: props.i18n.offlineDict||'离线词典', items: offlineDicts.value, empty: props.i18n.noDicts||'暂无离线词典',
@@ -104,16 +107,16 @@ const noteFields = computed(() => [
   selectField('notebookId', props.i18n.notebookId || props.i18n.notebook || '笔记本', settings.value.notebookId || '', notebooks.value.map((nb:any) => ({ value: nb.id, label: nb.name })), value => (settings.value.notebookId = value, save()), ['notebook', 'dailynote'].includes(settings.value.noteInsertTarget), props.i18n.notSelected || '未选择'),
   selectField('linkFormatPreset', props.i18n.linkFormatPreset || '模板预设', '', linkFormatPresetOptions.map(value => ({ value, label: props.i18n[`linkFormatPreset${value.charAt(0).toUpperCase()}${value.slice(1)}`] || value })), applyLinkFormatPreset, true, props.i18n.selectPreset || '请选择'),
   { key: 'linkFormat', type: 'textarea', label: props.i18n.linkFormat || '链接格式', value: settings.value.linkFormat, hint: props.i18n.linkFormatDesc || '可用变量：书名 作者 章节 位置 链接 文本 笔记 截图' },
-  searchField('parentDoc', props.i18n.parentDoc || '父文档', settings.value.parentDoc ? [settings.value.parentDoc] : [], insertDoc.state.input, insertDoc.state.results, insertDoc.search, doc => insertDoc.select(doc, selectInsertDoc), () => clearInsertDoc(), settings.value.noteInsertTarget === 'document'),
-  searchField('quickSendDocs', props.i18n.quickSendDocs || '快捷发送文档', settings.value.quickSendDocs || [], quickDoc.state.input, quickDoc.state.results, quickDoc.search, doc => quickDoc.select(doc, addQuickDoc), (_doc:any, i:number) => removeQuickDoc(i), true, props.i18n.quickSendDocsDesc || '用于快速发送标注', 'quickDoc')
+  searchField('parentDoc', props.i18n.parentDoc || '父文档', settings.value.parentDoc ? [settings.value.parentDoc] : [], insertDoc.state.value.input, insertDoc.state.value.results, value => (insertDoc.state.value.input = value, !value.trim() && (insertDoc.state.value.results = [])), insertDoc.search, doc => insertDoc.select(doc, selectInsertDoc), () => clearInsertDoc(), settings.value.noteInsertTarget === 'document'),
+  searchField('quickSendDocs', props.i18n.quickSendDocs || '快捷发送文档', settings.value.quickSendDocs || [], quickDoc.state.value.input, quickDoc.state.value.results, value => (quickDoc.state.value.input = value, !value.trim() && (quickDoc.state.value.results = [])), quickDoc.search, doc => quickDoc.select(doc, addQuickDoc), (_doc:any, i:number) => removeQuickDoc(i), true, props.i18n.quickSendDocsDesc || '用于快速发送标注', 'quickDoc')
 ].filter((item:any) => item.show !== false))
 
 // 交互方法
 const toggleAccordion = (key:string) => activeAccordion.value = activeAccordion.value === key ? '' : key
 const toggleSub = async (key:string) => {
   activeSub.value = activeSub.value === key ? '' : key
-  if (key === 'customFont' && !fontsLoaded.value && activeSub.value === key) { await loadCustomFonts(); fontsLoaded.value = true }
-  if ((key === 'ttsFavorites' || key === 'ttsVoices') && activeSub.value === key && !ttsVoices.value.length) await loadTTS()
+  if (key === 'customFont' && !fontsLoaded.value && activeSub.value === key) return await loadCustomFonts(), void (fontsLoaded.value = true)
+  if (['ttsFavorites','ttsVoices'].includes(key) && activeSub.value === key && !ttsVoices.value.length) await loadTTS()
 }
 watch(activeAccordion, key => key === 'other' && loadNotebooks())
 const handleUpload = async (e:Event) => {
@@ -126,7 +129,12 @@ const handleUpload = async (e:Event) => {
     showMessage(`${props.i18n.addedDict || '添加'} ${files.length} ${props.i18n.dictFiles || '个词典文件'}`, 2000, 'info')
   } catch (e:any) { showMessage(e.message || props.i18n.addFailed || '添加失败', 3000, 'error') } finally { uploading.value = false; if (fileInput.value) fileInput.value.value = '' }
 }
-const removeDict = async (id:string) => { await offlineDictManager.removeDict(id); offlineDicts.value = offlineDictManager.getDicts(); removingDict.value = null; showMessage(props.i18n.deleted || '已删除', 1500, 'info') }
+const removeDict = async (id:string) => {
+  await offlineDictManager.removeDict(id)
+  offlineDicts.value = offlineDictManager.getDicts()
+  removingDict.value = null
+  showMessage(props.i18n.deleted || '已删除', 1500, 'info')
+}
 const toggleDict = async (manager:any, ref:any, id:string) => { await manager.toggleDict(id); ref.value = manager.getDicts() }
 const addQuickDoc = (doc:any) => {
   if (!settings.value.quickSendDocs) settings.value.quickSendDocs = []
@@ -140,7 +148,9 @@ const clearInsertDoc = () => { settings.value.parentDoc = undefined; insertDoc.r
 const applyLinkFormatPreset = (preset:string) => {
   const format = LINK_FORMAT_PRESETS[preset as keyof typeof LINK_FORMAT_PRESETS]
 // 拖拽排序
-  if (!format) return; settings.value.linkFormat = format; save()
+  if (!format) return
+  settings.value.linkFormat = format
+  save()
 }
 let dragFrom = -1
 const dragStart = (e:DragEvent, i:number) => { dragFrom = i; (e.target as HTMLElement).style.opacity = '0.4' }
@@ -166,7 +176,6 @@ const navItems = computed(() => (settings.value.navItems || [
 ]).filter(item => item.id !== 'dictionary').sort((a, b) => a.order - b.order))
 const tooltipDir = computed(() => ({ left: 'e', right: 'w', top: 's', bottom: 'n' }[settings.value.navPosition] || 'n'))
 const tabs = computed(() => navItems.value.filter(item => item.enabled && (item.id === 'appearance' || item.id === 'bookshelf' || item.id === 'search' || item.id === 'deck' || canShowToc.value)).map(item => ({id:item.id as any,icon:item.icon,tip:item.tip})))
-const bodyClass = computed(() => activeTab.value === 'appearance' ? 'sr-body-scroll sr-body-pad-16 sr-body-stack-12' : undefined)
 
 // 预览样式
 const previewStyle = computed(() => {
@@ -182,17 +191,22 @@ const previewStyle = computed(() => {
 const save = async () => (emit('update:modelValue',settings.value),await props.onSave())
 const debouncedSave = (() => {let t:any;return () => (clearTimeout(t),t=setTimeout(save,300))})()
 const setFont = (f?:FontFileInfo) => (settings.value.textSettings.fontFamily=f?'custom':'inherit',settings.value.textSettings.customFont=f?{fontFamily:f.displayName,fontFile:f.name}:{fontFamily:'',fontFile:''},f?debouncedSave():save())
-const saveTheme = () => {if(!can.value('reader-theme')){settings.value.theme='default';showUpgrade('主题配色');return}save()}
-const handleReadOnline = async (book:any) => {const {openOrActivateBook} = await import('@/utils/bookOpen');openOrActivateBook(plugin,book,settings.value)}
+const saveTheme = () => { if (!can.value('reader-theme')) return settings.value.theme='default', showUpgrade('主题配色'); save() }
+const handleReadOnline = async (book:any) => (await import('@/utils/bookOpen')).openOrActivateBook(plugin,book,settings.value)
 const togglePreview = () => (previewExpanded.value=!previewExpanded.value,localStorage.setItem('sr-preview-expanded',previewExpanded.value?'1':'0'))
-const openPurchasePage = () => window.open('https://pay.ldxp.cn/shop/J7MJJ8YR/lillyt','_blank')
-const openMembershipInfo = () => window.open('https://sireader.745201.xyz','_blank')
+const openPage = (url:string) => window.open(url,'_blank')
+const openPurchasePage = () => openPage('https://pay.ldxp.cn/shop/J7MJJ8YR/lillyt')
+const openMembershipInfo = () => openPage('https://sireader.745201.xyz')
 
 // 打开授权面板
 ;(window as any)._openLicense = () => {
   activeTab.value = 'appearance'
   activeAccordion.value = 'license'
-  setTimeout(() => { licenseRef.value?.scrollIntoView({ behavior: 'smooth', block: 'center' }); licenseRef.value?.classList.add('license-highlight'); setTimeout(() => licenseRef.value?.classList.remove('license-highlight'), 2000) }, 50)
+  setTimeout(() => {
+    licenseRef.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    licenseRef.value?.classList.add('license-highlight')
+    setTimeout(() => licenseRef.value?.classList.remove('license-highlight'), 2000)
+  }, 50)
 }
 
 // 生命周期
@@ -208,262 +222,496 @@ watch(canShowToc,(show) => !show&&['toc','mark'].includes(activeTab.value)&&(act
 <template>
   <DockShell
     :active-tab="activeTab"
-    :body-class="bodyClass"
     :nav-position="settings.navPosition"
     :tooltip-dir="tooltipDir"
     :tabs="tabs.map(tab => ({ ...tab, tip: i18n?.[tab.tip] || tab.tip }))"
+    body-class="sr-settings-body"
     @update:activeTab="activeTab = $event as any"
   >
-      <div v-if="activeTab==='appearance'" class="sr-preview" :class="{expanded:previewExpanded}" :style="previewStyle">
-        <div class="sr-preview-hf" @click="togglePreview"><span>{{i18n.livePreview||'实时预览'}}</span><svg class="sr-preview-toggle"><use :xlink:href="previewExpanded?'#iconContract':'#iconExpand'"/></svg></div>
-        <Transition name="expand"><div v-show="previewExpanded" class="sr-preview-body"><p>春江潮水连海平，海上明月共潮生。</p><p>滟滟随波千万里，何处春江无月明。</p></div></Transition>
-        <div v-if="previewExpanded" class="sr-preview-hf">{{settings.viewMode==='double'?'双页':settings.viewMode==='scroll'?'连续滚动':'单页'}}</div>
-      </div>
-      <Transition name="slide" mode="out-in">
-        <div v-if="activeTab==='appearance'" :key="activeTab" class="sr-section">
-          <div ref="licenseRef" class="ds-card ds-accordion" data-name="license" @click="toggleAccordion('license')">
-            <h3>
-              <div v-if="license" class="license-avatar">
-                <img v-if="userAvatar" :src="userAvatar" :alt="license.userName">
-                <div v-else class="license-placeholder">{{license.userName[0].toUpperCase()}}</div>
-                <svg class="license-badge" viewBox="0 0 1024 1024"><use :xlink:href="license.type==='lifetime'?'#iconLicenseLifetime':license.type==='annual'?'#iconLicenseAnnual':license.type==='monthly'?'#iconLicenseMonthly':'#iconLicenseTrial'"/></svg>
-              </div>
-              <div v-if="license" class="license-info">
-                <div>{{license.userName}}<span class="license-tag" :class="`license-${license.type}`">{{i18n[license.type==='lifetime'?'lifetimeVersion':license.type==='annual'?'annualVersion':license.type==='monthly'?'monthlyVersion':'trialVersion']}}</span></div>
-                <div>ID {{license.userId}}</div>
-                <div><template v-if="license.type!=='lifetime'">{{i18n.remaining||'剩余'}}{{license.daysRemaining}}{{i18n.days||'天'}} · </template>{{i18n.activatedAt||'激活于'}} {{new Date(license.activatedAt).toLocaleDateString()}}</div>
-              </div>
-              <span v-else>{{i18n.membership||'会员订阅'}}<svg class="ds-help-icon" viewBox="0 0 24 24" @click.stop="openMembershipInfo"><use xlink:href="#iconHelp"/></svg></span>
-              <svg class="ds-arrow" :class="{expanded:activeAccordion==='license'}" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
-            </h3>
-            <Transition name="expand">
-              <div v-if="activeAccordion==='license'" @click.stop>
-                <div v-if="loadingLicense" class="sr-empty">{{i18n.loading||'加载中'}}...</div>
-                <template v-else>
-                  <div v-if="license" class="license-actions"><button class="b3-button b3-button--text" @click="clearLicense">{{i18n.logout||'退出登录'}}</button><button class="b3-button b3-button--text" @click="openPurchasePage">{{i18n.purchase||'购买'}}</button></div>
-                  <div v-else class="license-actions">
-                    <input v-model="activationCode" type="text" class="b3-text-field" :placeholder="i18n.enterActivationCode||'请输入激活码'" :disabled="processing" @mousedown.stop @pointerdown.stop @touchend.stop="focusMobileEditable($event.target)">
-                    <div class="license-btn-row"><button class="b3-button b3-button--outline" :disabled="processing||!activationCode.trim()" @click="activateLicense">{{processing?(i18n.processing||'处理中'):(i18n.activate||'激活')}}</button><button class="b3-button b3-button--text" :disabled="processing" @click="recoverLicense">{{i18n.recover||'恢复授权'}}</button></div>
-                    <button class="b3-button b3-button--text" @click="openPurchasePage">{{i18n.purchase||'购买'}}</button>
-                  </div>
+    <div v-if="activeTab === 'appearance'" class="fn__flex-1 fn__flex-column sy__file bs-view bs-tree">
+      <div class="fn__flex-1 bs-tree__scroll" @contextmenu.prevent.stop>
+        <ul class="b3-list b3-list--background">
+          <li class="b3-list-item" data-type="navigation-root" @click="togglePreview">
+            <span class="b3-list-item__toggle b3-list-item__toggle--hl">
+              <svg class="b3-list-item__arrow" :class="{ 'b3-list-item__arrow--open': previewExpanded }"><use xlink:href="#iconRight"></use></svg>
+            </span>
+            <span class="b3-list-item__text">{{ i18n.livePreview || 'Preview' }}</span>
+          </li>
+          <li v-if="previewExpanded" class="b3-list-item b3-list-item--hide-action">
+            <div class="sr-preview" :style="previewStyle">
+              <p>{{ i18n.previewText1 || '预览段落一：在这里调整设置，可以实时看到阅读效果变化。' }}</p>
+              <p>{{ i18n.previewText2 || '预览段落二：主题、间距和排版会随着设置即时更新。' }}</p>
+            </div>
+          </li>
+        </ul>
+
+        <ul ref="licenseRef" class="b3-list b3-list--background" data-name="license">
+          <li class="b3-list-item" data-type="navigation-root" @click="toggleAccordion('license')">
+            <span class="b3-list-item__toggle b3-list-item__toggle--hl">
+              <svg class="b3-list-item__arrow" :class="{ 'b3-list-item__arrow--open': activeAccordion === 'license' }"><use xlink:href="#iconRight"></use></svg>
+            </span>
+            <span class="b3-list-item__text">{{ i18n.membership || '会员订阅' }}</span>
+            <span class="fn__space"></span>
+            <span v-if="license">{{ license.userName }}</span>
+            <span class="b3-list-item__action b3-tooltips b3-tooltips__w" :aria-label="i18n.usageTitle || '使用说明'" @click.stop="openMembershipInfo"><svg><use xlink:href="#iconHelp"></use></svg></span>
+          </li>
+          <template v-if="activeAccordion === 'license'">
+            <li v-if="loadingLicense" class="b3-list-item b3-list-item--hide-action">
+              <span class="b3-list-item__text ft__secondary">{{ i18n.loading || 'Loading' }}...</span>
+            </li>
+            <template v-else-if="license">
+              <li class="b3-list-item b3-list-item--hide-action">
+                <span class="b3-list-item__text">{{ license.userName }}</span>
+                <span class="fn__space"></span>
+                <span class="b3-list-item__meta">ID {{ license.userId }} · {{ i18n[license.type === 'lifetime' ? 'lifetimeVersion' : license.type === 'annual' ? 'annualVersion' : license.type === 'monthly' ? 'monthlyVersion' : 'trialVersion'] }}</span>
+                <span>{{ new Date(license.activatedAt).toLocaleDateString() }}</span>
+              </li>
+              <li v-if="license.type !== 'lifetime'" class="b3-list-item b3-list-item--hide-action">
+                <span class="b3-list-item__text ft__secondary">{{ i18n.remaining || 'Remaining' }} {{ license.daysRemaining }} {{ i18n.days || 'days' }}</span>
+              </li>
+              <li class="b3-list-item b3-list-item--hide-action">
+                <span class="fn__space"></span>
+                <button class="b3-button b3-button--text" @click.stop="clearLicense">{{ i18n.logout || 'Logout' }}</button>
+                <div class="fn__space"></div>
+                <button class="b3-button b3-button--text" @click.stop="openPurchasePage">{{ i18n.purchase || 'Purchase' }}</button>
+              </li>
+            </template>
+            <template v-else>
+              <li class="b3-list-item b3-list-item--hide-action">
+                <div class="fn__flex-1">
+                  <input
+                    v-model="activationCode"
+                    type="text"
+                    class="b3-text-field"
+                    :placeholder="i18n.enterActivationCode || 'Activation code'"
+                    :disabled="processing"
+                    @mousedown.stop
+                    @pointerdown.stop
+                    @touchend.stop="focusMobileEditable($event.target)"
+                  >
+                </div>
+              </li>
+              <li class="b3-list-item b3-list-item--hide-action">
+                <span class="fn__space"></span>
+                <button class="b3-button b3-button--outline" :disabled="processing || !activationCode.trim()" @click.stop="activateLicense">
+                  {{ processing ? (i18n.processing || 'Processing') : (i18n.activate || 'Activate') }}
+                </button>
+                <div class="fn__space"></div>
+                <button class="b3-button b3-button--text" :disabled="processing" @click.stop="recoverLicense">{{ i18n.recover || 'Recover' }}</button>
+                <div class="fn__space"></div>
+                <button class="b3-button b3-button--text" @click.stop="openPurchasePage">{{ i18n.purchase || 'Purchase' }}</button>
+              </li>
+            </template>
+          </template>
+        </ul>
+
+        <ul class="b3-list b3-list--background">
+          <li class="b3-list-item" data-type="navigation-root" @click="toggleAccordion('interface')">
+            <span class="b3-list-item__toggle b3-list-item__toggle--hl">
+              <svg class="b3-list-item__arrow" :class="{ 'b3-list-item__arrow--open': activeAccordion === 'interface' }"><use xlink:href="#iconRight"></use></svg>
+            </span>
+            <span class="b3-list-item__text">{{ i18n.interfaceLayout || 'Interface' }}</span>
+          </li>
+          <template v-if="activeAccordion === 'interface'">
+            <li v-for="item in interfaceItems" :key="item.key" class="b3-list-item b3-list-item--hide-action">
+              <span class="b3-list-item__toggle fn__hidden"></span>
+              <span class="b3-list-item__text ariaLabel" :aria-label="i18n[item.key + 'Desc'] || ''">{{ i18n[item.key] || item.key }}</span>
+              <span class="fn__space"></span>
+              <select v-if="item.opts" v-model="settings[item.key]" class="b3-select sr-control" @change="save">
+                <option v-for="opt in item.opts" :key="opt" :value="opt">{{ i18n[opt] || opt }}</option>
+              </select>
+              <label v-else-if="item.type === 'checkbox'" class="fn__flex-center"><input v-model="settings[item.key]" type="checkbox" class="b3-switch" @change="save"></label>
+              <input
+                v-else-if="item.type === 'range'"
+                v-model.number="settings[item.key]"
+                type="range"
+                class="b3-slider sr-control b3-tooltips b3-tooltips__n"
+                :min="item.min"
+                :max="item.max"
+                :step="item.step"
+                :aria-label="`${settings[item.key]}${item.unit || ''}`"
+                @input="debouncedSave"
+              >
+            </li>
+            <li class="b3-list-item" data-type="navigation-root" @click.stop="toggleSub('navItems')">
+              <span class="b3-list-item__toggle b3-list-item__toggle--hl">
+                <svg class="b3-list-item__arrow" :class="{ 'b3-list-item__arrow--open': activeSub === 'navItems' }"><use xlink:href="#iconRight"></use></svg>
+              </span>
+              <span class="b3-list-item__text">{{ i18n.navConfig || 'Navigation' }}</span>
+            </li>
+            <template v-if="activeSub === 'navItems'">
+              <li
+                v-for="(item, idx) in navItems"
+                :key="item.id"
+                class="b3-list-item b3-list-item--hide-action"
+                draggable="true"
+                @dragstart="dragStart($event, idx)"
+                @dragend="dragEnd"
+                @dragover="dragOver"
+                @drop="dragDrop($event, idx, 'nav')"
+              >
+                <span class="b3-list-item__toggle fn__hidden"></span>
+                <span class="b3-list-item__graphic">⋮⋮</span>
+                <span class="b3-list-item__text">{{ i18n[item.tip] || item.tip }}</span>
+                <span class="fn__space"></span>
+                <label class="fn__flex-center"><input v-model="item.enabled" type="checkbox" class="b3-switch" :disabled="item.id === 'appearance'" @change="save"></label>
+              </li>
+            </template>
+          </template>
+        </ul>
+
+        <ul class="b3-list b3-list--background">
+          <li class="b3-list-item" data-type="navigation-root" @click="toggleAccordion('theme')">
+            <span class="b3-list-item__toggle b3-list-item__toggle--hl">
+              <svg class="b3-list-item__arrow" :class="{ 'b3-list-item__arrow--open': activeAccordion === 'theme' }"><use xlink:href="#iconRight"></use></svg>
+            </span>
+            <span class="b3-list-item__text">{{ i18n.readingTheme || 'Theme' }}</span>
+          </li>
+          <template v-if="activeAccordion === 'theme'">
+            <li class="b3-list-item b3-list-item--hide-action">
+              <span class="b3-list-item__toggle fn__hidden"></span>
+              <span class="b3-list-item__text ariaLabel" :aria-label="i18n.presetThemeDesc || ''">{{ i18n.presetTheme || 'Preset theme' }}</span>
+              <span class="fn__space"></span>
+              <select v-model="settings.theme" class="b3-select sr-control" @change="saveTheme">
+                <option v-for="(theme, key) in PRESET_THEMES" :key="key" :value="key">{{ i18n[theme.name] || theme.name }}</option>
+                <option value="custom">{{ i18n.custom || 'Custom' }}</option>
+              </select>
+            </li>
+            <template v-if="settings.theme === 'custom'">
+              <li v-for="item in customThemeItems" :key="item.key" class="b3-list-item b3-list-item--hide-action">
+                <span class="b3-list-item__text ariaLabel" :aria-label="i18n[item.label + 'Desc'] || i18n[item.key + 'Desc'] || ''">{{ i18n[item.label] || item.label }}</span>
+                <span class="fn__space"></span>
+                <input
+                  v-model="settings.customTheme[item.key]"
+                  :type="item.type"
+                  :class="item.type === 'color' ? 'sr-control' : 'b3-text-field sr-control'"
+                  @change="can('reader-theme') ? save() : showUpgrade('reader-theme')"
+                >
+              </li>
+            </template>
+          </template>
+        </ul>
+
+        <ul v-for="group in appearanceGroups" :key="group.title" class="b3-list b3-list--background">
+          <li class="b3-list-item" data-type="navigation-root" @click="toggleAccordion(group.title)">
+            <span class="b3-list-item__toggle b3-list-item__toggle--hl">
+              <svg class="b3-list-item__arrow" :class="{ 'b3-list-item__arrow--open': activeAccordion === group.title }"><use xlink:href="#iconRight"></use></svg>
+            </span>
+            <span class="b3-list-item__text">{{ i18n[group.title] || group.title }}</span>
+          </li>
+          <template v-if="activeAccordion === group.title">
+            <li v-for="item in group.items" :key="item.key" class="b3-list-item b3-list-item--hide-action">
+              <span class="b3-list-item__toggle fn__hidden"></span>
+              <span class="b3-list-item__text ariaLabel" :aria-label="i18n[item.key + 'Desc'] || ''">{{ i18n[item.key] || item.key }}</span>
+              <span class="fn__space"></span>
+              <label v-if="item.type === 'checkbox'" class="fn__flex-center"><input v-model="settings[group.title][item.key]" type="checkbox" class="b3-switch" @change="save"></label>
+              <select v-else-if="item.type === 'select'" v-model="settings[group.title][item.key]" class="b3-select sr-control" @change="debouncedSave">
+                <option v-for="(opt, idx) in item.opts" :key="opt" :value="opt">{{ i18n[item.labels[idx]] }}</option>
+              </select>
+              <input
+                v-else
+                v-model.number="settings[group.title][item.key]"
+                type="range"
+                class="b3-slider sr-control b3-tooltips b3-tooltips__n"
+                :min="item.min"
+                :max="item.max"
+                :step="item.step"
+                :aria-label="`${settings[group.title][item.key]}${item.unit || ''}`"
+                @input="debouncedSave"
+              >
+            </li>
+            <template v-if="group.title === 'textSettings'">
+              <li class="b3-list-item" data-type="navigation-root" @click.stop="toggleSub('customFont')">
+                <span class="b3-list-item__toggle b3-list-item__toggle--hl">
+                  <svg class="b3-list-item__arrow" :class="{ 'b3-list-item__arrow--open': activeSub === 'customFont' }"><use xlink:href="#iconRight"></use></svg>
+                </span>
+                <span class="b3-list-item__text">{{ i18n.customFont || 'Custom font' }}</span>
+              </li>
+              <template v-if="activeSub === 'customFont'">
+                <li class="b3-list-item b3-list-item--hide-action">
+                  <span class="b3-list-item__toggle fn__hidden"></span>
+                  <span class="b3-list-item__text ariaLabel" :aria-label="i18n.fontTip || '刷新字体列表'"><code>data/plugins/custom-fonts/</code></span>
+                  <span class="fn__space"></span>
+                  <button class="b3-button b3-button--text" :disabled="isLoadingFonts" @click.stop="loadCustomFonts(true)">{{ i18n.refresh || 'Refresh' }}</button>
+                </li>
+                <li v-if="isLoadingFonts" class="b3-list-item b3-list-item--hide-action">
+                  <span class="b3-list-item__toggle fn__hidden"></span>
+                  <span class="b3-list-item__text ft__secondary">{{ i18n.loadingFonts || 'Loading fonts' }}</span>
+                </li>
+                <template v-else-if="customFonts.length">
+                  <li
+                    v-for="f in customFonts"
+                    :key="f.name"
+                    class="b3-list-item b3-list-item--hide-action"
+                    :class="{ 'b3-list-item--focus': settings.textSettings.customFont.fontFile === f.name }"
+                    @click.stop="setFont(f)"
+                  >
+                    <span class="b3-list-item__toggle fn__hidden"></span>
+                    <span class="b3-list-item__text" :style="{ fontFamily: f.displayName }">{{ f.displayName }}</span>
+                    <span class="fn__space"></span>
+                    <span class="b3-list-item__meta">{{ f.name }}</span>
+                    <button v-if="settings.textSettings.customFont.fontFile === f.name" class="b3-button b3-button--text" @click.stop="setFont()">{{ i18n.clear || 'Clear' }}</button>
+                  </li>
                 </template>
-              </div>
-            </Transition>
-          </div>
-          <div class="ds-card ds-accordion" @click="toggleAccordion('interface')">
-            <h3>{{i18n.interfaceLayout||'界面布局'}}<svg class="ds-arrow" :class="{expanded:activeAccordion==='interface'}" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></h3>
-                        <Transition name="expand">
-              <div v-if="activeAccordion==='interface'" @click.stop>
-                <div v-for="item in interfaceItems" :key="item.key" class="ds-field" :class="{switch:item.type==='checkbox',select:item.opts}">
-                  <label>{{i18n[item.key]||item.key}}</label>
-                  <select v-if="item.opts" v-model="settings[item.key]" class="b3-select" @change="save"><option v-for="opt in item.opts" :key="opt" :value="opt">{{i18n[opt]||opt}}</option></select>
-                  <div v-else-if="item.type==='range'" class="ds-range"><input v-model.number="settings[item.key]" type="range" class="b3-slider" :min="item.min" :max="item.max" :step="item.step" @input="debouncedSave"><span>{{settings[item.key]}}{{item.unit}}</span></div>
-                  <input v-else-if="item.type==='checkbox'" v-model="settings[item.key]" type="checkbox" class="b3-switch" @change="save">
-                  <small v-if="i18n[item.key+'Desc']">{{i18n[item.key+'Desc']}}</small>
-                </div>
-                <div class="ds-divider"></div>
-                <div class="ds-sub-accordion" @click.stop="toggleSub('navItems')">
-                  <div class="ds-sub-title">{{i18n.navConfig||'导航栏配置'}}<svg class="ds-arrow" :class="{expanded:activeSub==='navItems'}" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></div>
-                  <Transition name="expand">
-                    <div v-if="activeSub==='navItems'" class="ds-list">
-                      <div v-for="(item,idx) in navItems" :key="item.id" class="ds-list-item" draggable="true" @dragstart="dragStart($event,idx)" @dragend="dragEnd" @dragover="dragOver" @drop="dragDrop($event,idx,'nav')">
-                        <svg class="ds-list-handle" viewBox="0 0 24 24"><path d="M9 3h2v2H9V3m4 0h2v2h-2V3M9 7h2v2H9V7m4 0h2v2h-2V7m-4 4h2v2H9v-2m4 0h2v2h-2v-2m-4 4h2v2H9v-2m4 0h2v2h-2v-2m-4 4h2v2H9v-2m4 0h2v2h-2v-2Z"/></svg>
-                        <div class="ds-list-label"><div>{{i18n[item.tip]||item.tip}}</div></div>
-                        <input v-model="item.enabled" type="checkbox" class="b3-switch" :disabled="item.id==='appearance'" @change="save">
-                      </div>
-                    </div>
-                  </Transition>
-                </div>
-              </div>
-            </Transition>
-          </div>
-          <div class="ds-card ds-accordion" @click="toggleAccordion('theme')">
-            <h3>{{i18n.readingTheme||'阅读主题'}}<svg class="ds-arrow" :class="{expanded:activeAccordion==='theme'}" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></h3>          
-            <Transition name="expand">
-              <div v-if="activeAccordion==='theme'" @click.stop>
-                <div class="ds-field select">
-                  <label>{{i18n.presetTheme||'预设主题'}}</label>
-                  <select v-model="settings.theme" class="b3-select" @change="saveTheme">
-                    <option v-for="(theme,key) in PRESET_THEMES" :key="key" :value="key">{{i18n[theme.name]||theme.name}}</option>
-                    <option value="custom">{{i18n.custom||'自定义'}}</option>
-                  </select>
-                  <small>{{i18n.presetThemeDesc}}</small>
-                </div>
-                <Transition name="expand"><div v-if="settings.theme==='custom'"><div class="ds-divider"></div><div v-for="item in customThemeItems" :key="item.key" class="ds-field"><label>{{i18n[item.label]}}</label><input v-model="settings.customTheme[item.key]" :type="item.type" :class="item.type==='color'?'ds-color':'b3-text-field'" @change="can('reader-theme')?save():showUpgrade('主题配色')"></div></div></Transition>
-              </div>
-            </Transition>
-          </div>
-          <div v-for="group in appearanceGroups" :key="group.title" class="ds-card ds-accordion" @click="toggleAccordion(group.title)">
-            <h3>{{i18n[group.title]}}<svg class="ds-arrow" :class="{expanded:activeAccordion===group.title}" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></h3>
-            <Transition name="expand">
-              <div v-if="activeAccordion===group.title" @click.stop>
-                <div v-for="item in group.items" :key="item.key" class="ds-field" :class="{switch:item.type==='checkbox',select:item.type==='select'}">
-                  <label>{{i18n[item.key]}}</label>
-                  <select v-if="item.type==='select'" v-model="settings[group.title][item.key]" class="b3-select" @change="debouncedSave"><option v-for="(opt,idx) in item.opts" :key="opt" :value="opt">{{i18n[item.labels[idx]]}}</option></select>
-                  <div v-else-if="item.type==='range'" class="ds-range"><input v-model.number="settings[group.title][item.key]" type="range" class="b3-slider" :min="item.min" :max="item.max" :step="item.step" @input="debouncedSave"><span>{{settings[group.title][item.key]}}{{item.unit||''}}</span></div>
-                  <input v-else-if="item.type==='checkbox'" v-model="settings[group.title][item.key]" type="checkbox" class="b3-switch" @change="save">
-                </div>
-                <template v-if="group.title==='textSettings'">
-                  <div class="ds-divider"></div>
-                  <div class="ds-sub-accordion" @click.stop="toggleSub('customFont')">
-                    <div class="ds-sub-title">{{i18n.customFont||'自定义字体'}}<svg class="ds-arrow" :class="{expanded:activeSub==='customFont'}" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></div>
-                    <Transition name="expand">
-                      <div v-if="activeSub==='customFont'">
-                        <small class="ds-hint"><code>data/plugins/custom-fonts/</code> <button class="ds-link-btn" @click.stop="loadCustomFonts(true)" :disabled="isLoadingFonts">{{i18n.fontTip||'刷新字体列表'}}</button></small>
-                        <div v-if="isLoadingFonts" class="sr-empty">{{i18n.loadingFonts}}</div>
-                        <div v-else-if="customFonts.length" class="ds-list ds-list-scroll">
-                          <div v-for="f in customFonts" :key="f.name" class="ds-list-item ds-list-item-simple" :class="{active:settings.textSettings.customFont.fontFile===f.name}" @click.stop="setFont(f)">
-                            <div class="ds-list-label" :style="{fontFamily:f.displayName}">
-                              <div>{{f.displayName}}</div>
-                              <small>{{f.name}}</small>
-                            </div>
-                            <button v-if="settings.textSettings.customFont.fontFile===f.name" @click.stop="setFont()" class="ds-list-btn ds-list-btn-del">×</button>
-                          </div>
-                        </div>
-                        <div v-else class="sr-empty">{{i18n.noCustomFonts}}</div>
-                      </div>
-                    </Transition>
-                  </div>
-                </template>
-              </div>
-            </Transition>
-          </div>
-          <div class="ds-card ds-accordion" @click="toggleAccordion('dictionary')">
-            <h3>{{i18n.dictionaryTools||'词典工具'}}<svg class="ds-arrow" :class="{expanded:activeAccordion==='dictionary'}" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></h3>
-            <Transition name="expand">
-              <div v-if="activeAccordion==='dictionary'" @click.stop>
-                <div v-if="loadingDict" class="sr-empty">{{i18n.loading||'加载中...'}}</div>
-                <template v-else>
-                  <div v-for="section in dictSections" :key="section.key" class="ds-sub-accordion" @click.stop="toggleSub(section.key)">
-                    <div v-if="section.key==='onlineDict'" class="ds-divider"></div>
-                    <div class="ds-sub-title">{{section.title}}<svg class="ds-arrow" :class="{expanded:activeSub===section.key}" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></div>
-                    <Transition name="expand">
-                      <div v-if="activeSub===section.key">
-                        <template v-if="section.extra">
-                          <input ref="fileInput" type="file" multiple accept=".ifo,.idx,.dz,.index,.syn" style="display:none" @change="handleUpload">
-                          <button class="ds-btn-add" :disabled="uploading" @click.stop="can('dict-offline')?fileInput?.click():showUpgrade('离线词典')"><svg><use xlink:href="#iconUpload"/></svg>{{uploading?(i18n.uploading||'上传中...'):(i18n.addDict||'添加词典')}}</button>
-                          <small class="ds-hint">{{i18n.dictFormatHint||'支持 StarDict 和 dictd 格式'}} <a href="https://github.com/mm-o/siyuan-sireader/blob/main/docs/%E7%A6%BB%E7%BA%BF%E8%AF%8D%E5%85%B8%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E.md" target="_blank">{{i18n.downloadDict||'下载词典'}}</a></small>
-                        </template>
-                        <div v-if="section.items.length" class="ds-list">
-                          <div v-for="(d,idx) in section.items" :key="d.id" class="ds-list-item" draggable="true" @dragstart="dragStart($event,idx)" @dragend="dragEnd" @dragover="dragOver" @drop="section.drop($event,idx)">
-                            <svg class="ds-list-handle" viewBox="0 0 24 24"><path d="M9 3h2v2H9V3m4 0h2v2h-2V3M9 7h2v2H9V7m4 0h2v2h-2V7m-4 4h2v2H9v-2m4 0h2v2h-2v-2m-4 4h2v2H9v-2m4 0h2v2h-2v-2m-4 4h2v2H9v-2m4 0h2v2h-2v-2Z"/></svg>
-                            <div class="ds-list-label"><div>{{d.name}}</div><small>{{section.desc(d)}}</small></div>
-                            <Transition v-if="section.extra" name="fade"><div v-if="removingDict===d.id" class="sr-confirm" @click.stop><button @click="removingDict=null">{{i18n.cancel||'取消'}}</button><button @click="removeDict(d.id)" class="btn-delete">{{i18n.delete||'删除'}}</button></div></Transition>
-                            <div :class="section.extra?'ds-list-btns':''">
-                              <input type="checkbox" :checked="d.enabled" class="b3-switch" @change="section.toggle(d.id)">
-                              <button v-if="section.extra&&removingDict!==d.id" @click.stop="removingDict=d.id" class="ds-list-btn ds-list-btn-del">×</button>
-                            </div>
-                          </div>
-                        </div>
-                        <div v-else-if="section.empty" class="sr-empty">{{section.empty}}</div>
-                      </div>
-                    </Transition>
-                  </div>
-                </template>
-              </div>
-            </Transition>
-          </div>
-          <div class="ds-card ds-accordion" @click="toggleAccordion('other')">
-            <h3>{{i18n.noteInsert||'笔记插入'}}<svg class="ds-arrow" :class="{expanded:activeAccordion==='other'}" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></h3>
-            <Transition name="expand">
-              <div v-if="activeAccordion==='other'" @click.stop>
-                <div v-for="field in noteFields" :key="field.key" class="ds-field" :class="{select:field.type==='select'}">
-                  <label>{{field.label}}</label>
-                  <select v-if="field.type==='select'" :value="field.value" class="b3-select" @change="field.set(($event.target as HTMLSelectElement).value)">
-                    <option v-if="field.empty" value="">{{field.empty}}</option><option v-for="opt in (field.options||[])" :key="opt.value" :value="opt.value">{{opt.label}}</option>
-                  </select>
-                  <template v-else>
-                    <textarea v-if="field.type==='textarea'" v-model="settings.linkFormat" class="b3-text-field" rows="3" @input="debouncedSave"/>
-                  <template v-else>
-                    <div class="ds-list" v-if="(field.docs||[]).length">
-                      <div v-for="(doc,i) in (field.docs||[])" :key="doc.id" class="ds-list-item" :draggable="!!field.drag" @dragstart="field.drag&&dragStart($event,i)" @dragend="field.drag&&dragEnd($event)" @dragover="field.drag&&dragOver($event)" @drop="field.drag&&dragDrop($event,i,field.drag)"><svg v-if="field.drag" class="ds-list-handle" viewBox="0 0 24 24"><path d="M9 3h2v2H9V3m4 0h2v2h-2V3M9 7h2v2H9V7m4 0h2v2h-2V7m-4 4h2v2H9v-2m4 0h2v2h-2v-2m-4 4h2v2H9v-2m4 0h2v2h-2v-2m-4 4h2v2H9v-2m4 0h2v2h-2v-2Z"/></svg><div class="ds-list-label"><div>{{doc.name}}</div></div><button @click="field.remove(doc,i)" class="ds-list-btn ds-list-btn-del">×</button></div>
-                    </div>
-                    <div style="position:relative;margin-top:8px">
-                      <input v-model="field.input" @input="field.search()" :placeholder="i18n?.searchDocPlaceholder||'搜索文档...'" class="b3-text-field"/>
-                      <div v-if="(field.results||[]).length" style="position:absolute;top:100%;left:0;right:0;margin-top:4px;max-height:200px;overflow-y:auto;background:var(--b3-theme-surface);border:1px solid var(--b3-border-color);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.1);z-index:10">
-                        <button v-for="doc in (field.results||[])" :key="doc.id" @click="field.select(doc)" style="width:100%;padding:8px;border:none;background:transparent;text-align:left;cursor:pointer;font-size:12px;transition:background .15s;border-bottom:1px solid var(--b3-border-color)" @mouseenter="$event.target.style.background='var(--b3-list-hover)'" @mouseleave="$event.target.style.background='transparent'">{{doc.hPath||doc.content||'无标题'}}</button>
-                      </div>
-                    </div>
-                    </template>
-                    <small v-if="field.hint">{{field.hint}}</small>
+                <li v-else class="b3-list-item b3-list-item--hide-action">
+                  <span class="b3-list-item__toggle fn__hidden"></span>
+                  <span class="b3-list-item__text ft__secondary">{{ i18n.noCustomFonts || 'No custom fonts' }}</span>
+                </li>
+              </template>
+            </template>
+          </template>
+        </ul>
+
+        <ul class="b3-list b3-list--background">
+          <li class="b3-list-item" data-type="navigation-root" @click="toggleAccordion('dictionary')">
+            <span class="b3-list-item__toggle b3-list-item__toggle--hl">
+              <svg class="b3-list-item__arrow" :class="{ 'b3-list-item__arrow--open': activeAccordion === 'dictionary' }"><use xlink:href="#iconRight"></use></svg>
+            </span>
+            <span class="b3-list-item__text">{{ i18n.dictionaryTools || 'Dictionary' }}</span>
+          </li>
+          <template v-if="activeAccordion === 'dictionary'">
+            <li v-if="loadingDict" class="b3-list-item b3-list-item--hide-action">
+              <span class="b3-list-item__text ft__secondary">{{ i18n.loading || 'Loading' }}...</span>
+            </li>
+            <template v-else>
+              <template v-for="section in dictSections" :key="section.key">
+                <li class="b3-list-item" data-type="navigation-root" @click.stop="toggleSub(section.key)">
+                  <span class="b3-list-item__toggle b3-list-item__toggle--hl">
+                    <svg class="b3-list-item__arrow" :class="{ 'b3-list-item__arrow--open': activeSub === section.key }"><use xlink:href="#iconRight"></use></svg>
+                  </span>
+                  <span class="b3-list-item__text">{{ section.title }}</span>
+                </li>
+                <template v-if="activeSub === section.key">
+                  <li v-if="section.extra" class="b3-list-item b3-list-item--hide-action">
+                    <span class="b3-list-item__toggle fn__hidden"></span>
+                    <input ref="fileInput" type="file" multiple accept=".ifo,.idx,.dz,.index,.syn" class="fn__none" @change="handleUpload">
+                    <span class="b3-list-item__text ariaLabel" :aria-label="i18n.dictFormatHint || '支持 StarDict 和 dictd 格式'">{{ i18n.addDict || '添加词典' }}</span>
+                    <span class="fn__space"></span>
+                    <button class="b3-button b3-button--text" :disabled="uploading" @click.stop="can('dict-offline') ? fileInput?.click() : showUpgrade('dict-offline')">
+                      {{ uploading ? (i18n.uploading || 'Uploading') : (i18n.addDict || 'Add') }}
+                    </button>
+                  </li>
+                  <li v-if="section.extra" class="b3-list-item b3-list-item--hide-action">
+                    <span class="b3-list-item__toggle fn__hidden"></span>
+                    <span class="b3-list-item__text">
+                      <a href="https://github.com/mm-o/siyuan-sireader/blob/main/docs/%E7%A6%BB%E7%BA%BF%E8%AF%8D%E5%85%B8%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E.md" target="_blank">{{ i18n.downloadDict || '下载词典' }}</a>
+                    </span>
+                  </li>
+                  <template v-if="section.items.length">
+                    <li
+                      v-for="(d, idx) in section.items"
+                      :key="d.id"
+                      class="b3-list-item b3-list-item--hide-action"
+                      draggable="true"
+                      @dragstart="dragStart($event, idx)"
+                      @dragend="dragEnd"
+                      @dragover="dragOver"
+                      @drop="section.drop($event, idx)"
+                    >
+                      <span class="b3-list-item__toggle fn__hidden"></span>
+                      <span class="b3-list-item__graphic">⋮⋮</span>
+                      <span class="b3-list-item__text">{{ d.name }}</span>
+                      <span class="fn__space"></span>
+                      <span class="b3-list-item__meta">{{ section.desc(d) }}</span>
+                      <label class="fn__flex-center"><input type="checkbox" :checked="d.enabled" class="b3-switch" @change="section.toggle(d.id)"></label>
+                      <template v-if="section.extra">
+                        <div class="fn__space"></div>
+                        <button v-if="removingDict === d.id" class="b3-button b3-button--cancel" @click.stop="removingDict = null">{{ i18n.cancel || 'Cancel' }}</button>
+                        <div v-if="removingDict === d.id" class="fn__space"></div>
+                        <button v-if="removingDict === d.id" class="b3-button b3-button--text" @click.stop="removeDict(d.id)">{{ i18n.delete || 'Delete' }}</button>
+                        <button v-else class="b3-button b3-button--text" @click.stop="removingDict = d.id">{{ i18n.delete || 'Delete' }}</button>
+                      </template>
+                    </li>
                   </template>
+                  <li v-else-if="section.empty" class="b3-list-item b3-list-item--hide-action">
+                    <span class="b3-list-item__toggle fn__hidden"></span>
+                    <span class="b3-list-item__text ft__secondary">{{ section.empty }}</span>
+                  </li>
+                </template>
+              </template>
+            </template>
+          </template>
+        </ul>
+
+        <ul class="b3-list b3-list--background">
+          <li class="b3-list-item" data-type="navigation-root" @click="toggleAccordion('other')">
+            <span class="b3-list-item__toggle b3-list-item__toggle--hl">
+              <svg class="b3-list-item__arrow" :class="{ 'b3-list-item__arrow--open': activeAccordion === 'other' }"><use xlink:href="#iconRight"></use></svg>
+            </span>
+            <span class="b3-list-item__text">{{ i18n.noteInsert || 'Note insert' }}</span>
+          </li>
+          <template v-if="activeAccordion === 'other'">
+            <li v-for="field in noteFields" :key="field.key" class="b3-list-item b3-list-item--hide-action">
+              <span class="b3-list-item__toggle fn__hidden"></span>
+              <div class="fn__flex-1">
+                <div class="fn__flex">
+                  <span class="b3-list-item__text ariaLabel" :aria-label="field.hint || ''">{{ field.label }}</span>
+                  <span class="fn__space"></span>
+                  <select v-if="field.type === 'select'" :value="field.value" class="b3-select sr-control" @change="field.set(($event.target as HTMLSelectElement).value)">
+                    <option v-if="field.empty" value="">{{ field.empty }}</option>
+                    <option v-for="opt in (field.options || [])" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                  </select>
                 </div>
-              </div>
-            </Transition>
-          </div>
-          <div class="ds-card ds-accordion" @click="toggleAccordion('tts')">
-            <h3>{{i18n.ttsSettings||'语音朗读'}}<svg class="ds-arrow" :class="{expanded:activeAccordion==='tts'}" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></h3>
-            <Transition name="expand">
-              <div v-if="activeAccordion==='tts'" @click.stop>
-                <template v-if="settings.tts">
-                  <div v-for="item in ttsFields" :key="item.key" class="ds-field" :class="{switch:item.type==='checkbox'}"><label>{{i18n[ttsI18nKey(item.key)]||item.key}}</label><div v-if="item.type==='range'" class="ds-range"><input v-model.number="settings.tts[item.key]" type="range" class="b3-slider" :min="item.min" :max="item.max" :step="item.step" @input="debouncedSave"><span>{{settings.tts[item.key]}}{{item.unit}}</span></div><input v-else-if="item.type==='checkbox'" v-model="settings.tts[item.key]" type="checkbox" class="b3-switch" @change="save"><small v-if="item.desc&&i18n[item.desc]">{{i18n[item.desc]}}</small></div>
-                  <div class="ds-divider"></div>
-                  <div v-for="section in voiceSections" :key="section.key" class="ds-sub-accordion" @click.stop="toggleSub(section.key)">
-                    <div class="ds-divider"></div>
-                    <div class="ds-sub-title">{{section.title}}<svg class="ds-arrow" :class="{expanded:activeSub===section.key}" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></div>
-                    <Transition name="expand">
-                      <div v-if="activeSub===section.key">
-                        <button v-if="section.showLoad" class="ds-btn-add" :disabled="loadingTTS" @click.stop="loadTTS"><svg><use xlink:href="#iconRefresh"/></svg>{{loadingTTS?(i18n.loading||'加载中...'):(i18n.ttsLoadVoices||'加载语音列表')}}</button>
-                        <small class="ds-hint">{{section.hint}}</small>
-                        <div v-if="section.showLoad&&loadingTTS" class="sr-empty">{{i18n.loading||'加载中...'}}</div>
-                        <div v-else-if="section.items.length" class="ds-list ds-list-scroll">
-                          <div v-for="v in section.items" :key="v.name" class="ds-list-item ds-list-item-simple" :class="{active:settings.tts.voice===v.name}" @click.stop="section.pick(v)">
-                            <div class="ds-list-label"><div>{{v.displayName}}</div><small>{{section.meta(v)}}</small></div>
-                            <button v-if="section.actionText(v)" @click.stop="section.action(v)" class="ds-list-btn" :class="{ 'ds-list-btn-del': !section.showLoad }" :title="section.actionTitle(v)">{{section.actionText(v)}}</button>
-                          </div>
-                        </div>
-                        <div v-else class="sr-empty">{{section.empty}}</div>
+                <textarea v-if="field.type === 'textarea'" v-model="settings.linkFormat" class="b3-text-field" rows="3" @input="debouncedSave"></textarea>
+                <template v-else-if="field.type === 'search'">
+                  <div
+                    v-for="(doc, i) in (field.docs || [])"
+                    :key="doc.id"
+                    class="fn__flex"
+                    :draggable="!!field.drag"
+                    @dragstart="field.drag && dragStart($event, i)"
+                    @dragend="field.drag && dragEnd($event)"
+                    @dragover="field.drag && dragOver($event)"
+                    @drop="field.drag && dragDrop($event, i, field.drag)"
+                  >
+                  <span v-if="field.drag">⋮⋮</span>
+                    <span class="fn__ellipsis">{{ doc.name }}</span>
+                    <span class="fn__space"></span>
+                    <button class="b3-button b3-button--text" @click="field.remove(doc, i)">{{ i18n.delete || 'Delete' }}</button>
+                  </div>
+                  <div>
+                    <input :value="field.input" class="b3-text-field" :placeholder="i18n?.searchDocPlaceholder || 'Search document'" @input="field.setInput(($event.target as HTMLInputElement).value); ($event.target as HTMLInputElement).value.trim() && field.search()" @keyup.enter="field.search()">
+                    <div v-if="(field.results || []).length">
+                      <div
+                        v-for="doc in (field.results || [])"
+                        :key="doc.id"
+                        class="b3-list-item b3-list-item--hide-action"
+                        @click="field.select(doc)"
+                      >
+                        <span class="b3-list-item__toggle fn__hidden"></span>
+                        <span class="b3-list-item__text">{{ doc.hPath || doc.content || 'Untitled' }}</span>
                       </div>
-                    </Transition>
+                    </div>
                   </div>
                 </template>
-                <div v-else class="sr-empty">{{i18n.ttsNotConfigured||'TTS 未配置'}}</div>
               </div>
-            </Transition>
-          </div>
-          <Transition name="fade" mode="out-in"><div v-if="resetConfirm" key="confirm" class="ds-reset-group"><button @click="resetConfirm=false">{{i18n.cancel||'取消'}}</button><button class="ds-reset-confirm" @click="handleReset">{{i18n.confirm||'确认重置'}}</button></div><button v-else key="reset" class="ds-reset" @click="handleReset">{{i18n.resetDefault||'重置为默认'}}</button></Transition>
+            </li>
+          </template>
+        </ul>
+
+        <ul class="b3-list b3-list--background">
+          <li class="b3-list-item" data-type="navigation-root" @click="toggleAccordion('tts')">
+            <span class="b3-list-item__toggle b3-list-item__toggle--hl">
+              <svg class="b3-list-item__arrow" :class="{ 'b3-list-item__arrow--open': activeAccordion === 'tts' }"><use xlink:href="#iconRight"></use></svg>
+            </span>
+            <span class="b3-list-item__text">{{ i18n.ttsSettings || 'TTS' }}</span>
+          </li>
+          <template v-if="activeAccordion === 'tts'">
+            <template v-if="settings.tts">
+              <li v-for="item in ttsFields" :key="item.key" class="b3-list-item b3-list-item--hide-action">
+                <span class="b3-list-item__toggle fn__hidden"></span>
+                <span class="b3-list-item__text ariaLabel" :aria-label="item.desc && i18n[item.desc] ? i18n[item.desc] : ''">{{ i18n[ttsI18nKey(item.key)] || item.key }}</span>
+                <span class="fn__space"></span>
+                <label v-if="item.type === 'checkbox'" class="fn__flex-center"><input v-model="settings.tts[item.key]" type="checkbox" class="b3-switch" @change="save"></label>
+                <input
+                  v-else
+                  v-model.number="settings.tts[item.key]"
+                  type="range"
+                  class="b3-slider sr-control b3-tooltips b3-tooltips__n"
+                  :min="item.min"
+                  :max="item.max"
+                  :step="item.step"
+                  :aria-label="`${settings.tts[item.key]}${item.unit || ''}`"
+                  @input="debouncedSave"
+                >
+              </li>
+              <template v-for="section in voiceSections" :key="section.key">
+                <li class="b3-list-item" data-type="navigation-root" @click.stop="toggleSub(section.key)">
+                  <span class="b3-list-item__toggle b3-list-item__toggle--hl">
+                    <svg class="b3-list-item__arrow" :class="{ 'b3-list-item__arrow--open': activeSub === section.key }"><use xlink:href="#iconRight"></use></svg>
+                  </span>
+                  <span class="b3-list-item__text ariaLabel" :aria-label="section.hint || ''">{{ section.title }}</span>
+                </li>
+                <template v-if="activeSub === section.key">
+                  <li v-if="section.showLoad" class="b3-list-item b3-list-item--hide-action">
+                    <span class="b3-list-item__toggle fn__hidden"></span>
+                    <span class="b3-list-item__text">{{ i18n.ttsLoadVoices || 'Load voices' }}</span>
+                    <span class="fn__space"></span>
+                    <span class="b3-list-item__action b3-tooltips b3-tooltips__w" :aria-label="i18n.ttsLoadVoices || 'Load voices'" @click.stop="!loadingTTS && loadTTS()">
+                      <svg><use xlink:href="#iconRefresh"></use></svg>
+                    </span>
+                  </li>
+                  <li v-if="section.showLoad && loadingTTS" class="b3-list-item b3-list-item--hide-action">
+                    <span class="b3-list-item__toggle fn__hidden"></span>
+                    <span class="b3-list-item__text ft__secondary">{{ i18n.loading || 'Loading' }}...</span>
+                  </li>
+                  <template v-else-if="section.items.length">
+                    <li
+                      v-for="v in section.items"
+                      :key="v.name"
+                      class="b3-list-item b3-list-item--hide-action"
+                      :class="{ 'b3-list-item--focus': settings.tts.voice === v.name }"
+                      @click.stop="section.pick(v)"
+                    >
+                      <span class="b3-list-item__toggle fn__hidden"></span>
+                      <span class="b3-list-item__text">{{ v.displayName }}</span>
+                      <span class="fn__space"></span>
+                      <span class="b3-list-item__meta">{{ section.meta(v) }}</span>
+                      <span
+                        v-if="section.actionText(v)"
+                        class="b3-list-item__action b3-tooltips b3-tooltips__w"
+                        :aria-label="section.actionTitle(v)"
+                        @click.stop="section.action(v)"
+                      >
+                        <svg><use :xlink:href="isFav(v.name) ? '#iconBookmark' : '#iconBookmark'"></use></svg>
+                      </span>
+                    </li>
+                  </template>
+                  <li v-else class="b3-list-item b3-list-item--hide-action">
+                    <span class="b3-list-item__toggle fn__hidden"></span>
+                    <span class="b3-list-item__text ft__secondary">{{ section.empty }}</span>
+                  </li>
+                </template>
+              </template>
+            </template>
+            <li v-else class="b3-list-item b3-list-item--hide-action">
+              <span class="b3-list-item__text ft__secondary">{{ i18n.ttsNotConfigured || 'TTS not configured' }}</span>
+            </li>
+          </template>
+        </ul>
+
+        <div class="sr-settings-actions">
+        <template v-if="resetConfirm">
+          <button class="b3-button b3-button--cancel" @click="resetConfirm = false">{{ i18n.cancel || 'Cancel' }}</button>
+          <button class="b3-button" @click="handleReset">{{ i18n.confirm || 'Confirm' }}</button>
+        </template>
+        <button v-else class="b3-button" @click="handleReset">{{ i18n.resetDefault || 'Reset' }}</button>
         </div>
-        <!-- 外部组件，不使用 Transition -->
-      </Transition>
-      <BookSearch v-show="activeTab==='search'" :i18n="i18n" />
-      <BookShelf v-show="activeTab==='bookshelf'" :i18n="i18n" :cover-size="settings.bookshelfCoverSize" :open-doc-assets="settings.openDocAssets" @read="handleReadOnline"/>
-      <ReaderToc v-if="['toc','deck'].includes(activeTab)" :mode="activeTab === 'deck' ? 'deck' : 'toc'" :i18n="props.i18n"/>
-      <ReaderMarks v-if="activeTab==='mark'" :i18n="props.i18n"/>
+      </div>
+    </div>
+
+    <BookSearch v-show="activeTab === 'search'" :i18n="i18n" />
+    <BookShelf v-show="activeTab === 'bookshelf'" :i18n="i18n" :cover-size="settings.bookshelfCoverSize" :open-doc-assets="settings.openDocAssets" @read="handleReadOnline" />
+    <ReaderToc v-if="['toc', 'deck'].includes(activeTab)" :mode="activeTab === 'deck' ? 'deck' : 'toc'" :i18n="props.i18n" />
+    <ReaderMarks v-if="activeTab === 'mark'" :i18n="props.i18n" />
   </DockShell>
 </template>
 
 <style scoped lang="scss">
 @use './deck/deck.scss';
-.ds-card{background:var(--b3-theme-surface);border:1px solid var(--b3-border-color);border-radius:8px;padding:16px;transition:all .2s;&:hover{box-shadow:0 2px 8px rgba(0,0,0,.08)}&.ds-accordion{cursor:pointer;user-select:none;h3{margin:0;font-size:14px;font-weight:600;display:flex;align-items:center;gap:16px;transition:color .15s}}}
-.license-avatar{position:relative;width:56px;height:56px;flex-shrink:0;img{width:100%;height:100%;border-radius:50%;object-fit:cover}}
-.license-placeholder{width:100%;height:100%;border-radius:50%;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:600}
-.license-badge{position:absolute;bottom:-2px;right:-2px;width:24px;height:24px}
-.license-info{flex:1;min-width:0;>div{line-height:1.5;margin-bottom:2px;&:first-child{font-size:16px;font-weight:600}&:not(:first-child){font-size:12px;color:var(--b3-theme-on-surface-light);opacity:.85}}}
-.ds-help-icon{width:16px;height:16px;margin-left:6px;opacity:.5;cursor:pointer;transition:all .15s;vertical-align:text-bottom;transform:translateY(-1px);&:hover{opacity:1;color:var(--b3-theme-primary)}}
-.license-tag{font-size:11px;padding:2px 7px;border-radius:3px;font-weight:500;margin-left:6px;opacity:.9;&.license-lifetime{background:rgba(156,39,176,.1);color:#9c27b0}&.license-annual{background:rgba(76,175,80,.1);color:#4caf50}&.license-monthly{background:rgba(33,150,243,.1);color:#2196f3}&.license-trial{background:rgba(255,152,0,.1);color:#ff9800}}
-.license-btn{width:100%;margin-top:8px}
-.license-actions{display:flex;flex-direction:column;gap:8px;margin-top:8px;>button{width:100%}input{width:100%}.license-btn-row{display:flex;gap:8px;>button{flex:1;white-space:nowrap}}}
-.sr-preview{position:sticky;top:0;z-index:10;background:var(--b3-theme-surface);border-radius:8px;overflow:hidden;display:flex;flex-direction:column;transition:max-height .3s;column-count:var(--column-count,1);column-gap:var(--gap);max-height:50px;&.expanded{max-height:min(300px,var(--max-block))}p{margin:0;padding:var(--margin-v) var(--margin-h);text-indent:calc(1em * var(--text-indent,0));break-inside:avoid;& + p{margin-top:calc(1em * var(--paragraph-spacing,0.8))}}}
-.sr-preview-hf{height:50px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;font-size:12px;opacity:.6;border:1px dashed currentColor;border-width:1px 0 0;user-select:none;&:first-child{border-width:0 0 1px;font-weight:500}&:hover{opacity:.8;background:var(--b3-list-hover)}}
-.sr-preview-toggle{width:14px;height:14px;transition:transform .3s}
-.sr-preview-body{flex:1;overflow:auto;min-height:0}
-.ds-color{width:55px;height:34px;padding:3px;border-radius:4px;cursor:pointer;border:1px solid var(--b3-border-color)}
-.ds-divider{height:1px;background:var(--b3-border-color);margin:16px 0}
-.ds-sub-accordion{cursor:pointer;user-select:none;margin-top:8px;&:hover .ds-sub-title{color:var(--b3-theme-primary)}}
-.ds-sub-title{font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:space-between;padding:8px 0;transition:color .15s;svg{width:16px;height:16px;fill:currentColor;opacity:.7;transition:transform .2s;flex-shrink:0}&:has(svg.expanded) svg,svg.expanded{transform:rotate(180deg)}}
-.ds-hint{display:block;font-size:11px;color:var(--b3-theme-on-surface-variant);opacity:.7;margin:8px 0;line-height:1.5;a{color:var(--b3-theme-primary);text-decoration:none;&:hover{text-decoration:underline}}code{background:var(--b3-theme-background);padding:2px 6px;border-radius:3px;font-size:10px}}
-.ds-link-btn{padding:2px 8px;margin-left:6px;border:1px solid var(--b3-border-color);background:transparent;color:var(--b3-theme-primary);border-radius:3px;cursor:pointer;font-size:11px;transition:all .15s;&:hover:not(:disabled){background:var(--b3-list-hover)}&:disabled{opacity:.5;cursor:not-allowed}}
-.ds-btn-add{width:100%;padding:8px 12px;margin-bottom:8px;border:1px dashed var(--b3-border-color);background:transparent;color:var(--b3-theme-on-surface);border-radius:4px;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;gap:6px;transition:all .15s;svg{width:14px;height:14px}&:hover:not(:disabled){background:var(--b3-list-hover);border-color:var(--b3-theme-primary);color:var(--b3-theme-primary)}&:disabled{opacity:.5;cursor:not-allowed}}
-.ds-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
-.ds-list-scroll{max-height:300px;overflow-y:auto;padding-right:4px;&::-webkit-scrollbar{width:6px}&::-webkit-scrollbar-track{background:var(--b3-theme-background)}&::-webkit-scrollbar-thumb{background:var(--b3-border-color);border-radius:3px;&:hover{background:var(--b3-theme-on-surface-variant)}}}
-.ds-list-item{position:relative;display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--b3-theme-surface);border:1px solid var(--b3-border-color);border-radius:4px;transition:background .15s;cursor:move;&:hover{background:var(--b3-list-hover)}&.active{background:var(--b3-theme-primary-lightest);border-color:var(--b3-theme-primary)}.sr-confirm{position:absolute;right:4px;top:50%;transform:translateY(-50%)}}
-.ds-list-item-simple{cursor:pointer !important}
-.ds-list-handle{width:16px;height:16px;fill:var(--b3-theme-on-surface);opacity:.3;cursor:grab;flex-shrink:0;&:active{cursor:grabbing}}
-.ds-list-label{flex:1;font-size:13px;min-width:0;div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}small{display:block;font-size:11px;opacity:.6;margin-top:2px}}
-.ds-list-btns{display:flex;gap:4px;flex-shrink:0}
-.ds-list-btn{width:24px;height:24px;padding:0;border:1px solid var(--b3-border-color);background:var(--b3-theme-surface);color:var(--b3-theme-on-surface);border-radius:4px;cursor:pointer;font-size:14px;line-height:1;transition:all .15s;&:hover{background:var(--b3-list-hover)}&:active{transform:scale(.95)}}
-.ds-list-btn-del{color:var(--b3-theme-error);&:hover{background:var(--b3-theme-error);color:white;border-color:var(--b3-theme-error)}}
-.license-highlight{animation:license-pulse 2s ease;box-shadow:0 0 0 4px var(--b3-theme-primary-light),0 8px 24px rgba(33,150,243,.4) !important}
-@keyframes license-pulse{0%,100%{transform:scale(1);box-shadow:0 2px 8px rgba(0,0,0,.08)}10%,30%,50%{transform:scale(1.03);box-shadow:0 0 0 4px var(--b3-theme-primary-light),0 8px 24px rgba(33,150,243,.4)}20%,40%{transform:scale(1);box-shadow:0 0 0 2px var(--b3-theme-primary-lighter),0 4px 16px rgba(33,150,243,.2)}}
-</style>
 
+:deep(.sr-settings-body){padding-top:8px;box-sizing:border-box}
+.bs-view{min-height:0;height:100%;padding:0;box-sizing:border-box}
+.bs-tree{overflow:hidden;--bs-tree-border:color-mix(in srgb,var(--b3-theme-on-surface-light) 30%,transparent);--b3-list-hover:color-mix(in srgb,var(--b3-theme-primary) 12%,transparent)}
+.bs-tree__scroll{display:flex;flex-direction:column;gap:6px;min-height:0;overflow:auto;scrollbar-gutter:stable;padding:8px 0 8px 8px;box-sizing:border-box}
+.bs-tree :deep(ul){padding:0;list-style:none}
+.bs-tree :deep(.b3-list){margin:0;background:transparent}
+.bs-tree :deep(.b3-list-item){overflow:visible}
+.bs-tree :deep(.b3-list-item[data-type="navigation-root"]){margin:0;border-radius:var(--b3-border-radius)}
+.bs-tree :deep(.b3-list-item--hide-action + .b3-list-item--hide-action){border-top:1px solid var(--b3-border-color)}
+.bs-tree :deep(.b3-list-item--hide-action:last-child){padding-bottom:6px}
+.bs-tree :deep(.b3-list-item__text),.bs-tree :deep(.b3-text-field){min-width:0}
+.bs-tree :deep(.b3-text-field){width:100%;max-width:100%;box-sizing:border-box}
+.bs-tree :deep(ul.b3-list.b3-list--background){border:1px solid var(--bs-tree-border);border-radius:var(--b3-border-radius)}
+.sr-control{width:80px}
+.sr-settings-actions{display:flex;justify-content:center;align-items:center;gap:8px;padding:8px 0 0}
+.bs-tree :deep(input[type="color"].sr-control){height:24px;padding:0;border:none;background:transparent}
+.sr-preview{width:100%;overflow:hidden;border-radius:var(--b3-border-radius);column-count:var(--column-count, 1);column-gap:var(--gap)}
+.sr-preview p{margin:0;padding:var(--margin-v) var(--margin-h);text-indent:calc(1em * var(--text-indent, 0));break-inside:avoid}
+.sr-preview p + p{margin-top:calc(1em * var(--paragraph-spacing, 0.8))}
+.license-highlight{animation:license-pulse 2s ease}
+@keyframes license-pulse {
+  0%,100%{box-shadow:0 0 0 0 transparent}
+  50%{box-shadow:0 0 0 4px var(--b3-theme-primary-light)}
+}
+</style>
