@@ -72,7 +72,8 @@ const offlineDicts = ref<any[]>([]),
   removingDict = ref<string|null>(null)
 const quickDoc = useDocSearch(), insertDoc = useDocSearch()
 const {notebooks,load:loadNotebooks} = useNotebooks()
-const {license,code:activationCode,loading:loadingLicense,processing,load:loadLicense,activate:activateLicense,recover:recoverLicense,clear:clearLicense,can,showUpgrade} = useLicense(props.i18n)
+const {license,userAvatar,code:activationCode,loading:loadingLicense,processing,load:loadLicense,activate:activateLicense,recover:recoverLicense,clear:clearLicense,can,showUpgrade} = useLicense(props.i18n)
+const licenseAvatarSrc = computed(() => userAvatar.value || ((globalThis as any)?.window?.siyuan?.user?.userAvatarURL || ''))
 const ttsFields = computed(() => [...ttsItems, ...ttsOptions.map(item => ({ ...item, desc: ttsI18nKey(item.key,'Desc') }))])
 const noteTargetOptions = ['clipboard','current','notebook','document','dailynote'] as const,
   noteModeOptions = ['insertBlock','prependBlock','appendBlock','updateBlock','prependDoc','appendDoc'] as const,
@@ -252,7 +253,6 @@ watch(canShowToc,(show) => !show&&['toc','mark'].includes(activeTab.value)&&(act
             </span>
             <span class="b3-list-item__text">{{ i18n.membership || '会员订阅' }}</span>
             <span class="fn__space"></span>
-            <span v-if="license">{{ license.userName }}</span>
             <span class="b3-list-item__action b3-tooltips b3-tooltips__w" :aria-label="i18n.usageTitle || '使用说明'" @click.stop="openMembershipInfo"><svg><use xlink:href="#iconHelp"></use></svg></span>
           </li>
           <template v-if="activeAccordion === 'license'">
@@ -261,45 +261,51 @@ watch(canShowToc,(show) => !show&&['toc','mark'].includes(activeTab.value)&&(act
             </li>
             <template v-else-if="license">
               <li class="b3-list-item b3-list-item--hide-action">
-                <span class="b3-list-item__text">{{ license.userName }}</span>
-                <span class="fn__space"></span>
-                <span class="b3-list-item__meta">ID {{ license.userId }} · {{ i18n[license.type === 'lifetime' ? 'lifetimeVersion' : license.type === 'annual' ? 'annualVersion' : license.type === 'monthly' ? 'monthlyVersion' : 'trialVersion'] }}</span>
-                <span>{{ new Date(license.activatedAt).toLocaleDateString() }}</span>
-              </li>
-              <li v-if="license.type !== 'lifetime'" class="b3-list-item b3-list-item--hide-action">
-                <span class="b3-list-item__text ft__secondary">{{ i18n.remaining || 'Remaining' }} {{ license.daysRemaining }} {{ i18n.days || 'days' }}</span>
-              </li>
-              <li class="b3-list-item b3-list-item--hide-action">
-                <span class="fn__space"></span>
-                <button class="b3-button b3-button--text" @click.stop="clearLicense">{{ i18n.logout || 'Logout' }}</button>
-                <div class="fn__space"></div>
-                <button class="b3-button b3-button--text" @click.stop="openPurchasePage">{{ i18n.purchase || 'Purchase' }}</button>
+                <div class="fn__flex-1" style="min-width:0;display:flex;flex-direction:column;gap:4px;padding:1px 0">
+                  <div style="display:flex;align-items:center;gap:8px;min-width:0">
+                    <span style="position:relative;width:44px;height:44px;display:flex;align-items:center;justify-content:center;flex:0 0 44px">
+                      <span style="width:44px;height:44px;display:flex;align-items:center;justify-content:center;overflow:hidden;border-radius:999px;background:var(--b3-theme-surface)">
+                        <img v-if="licenseAvatarSrc" :src="licenseAvatarSrc" :alt="license.userName" style="width:100%;height:100%;object-fit:cover">
+                        <svg v-else style="width:20px;height:20px;color:var(--b3-theme-primary)"><use :xlink:href="license.type === 'lifetime' ? '#iconLicenseLifetime' : license.type === 'annual' ? '#iconLicenseAnnual' : license.type === 'monthly' ? '#iconLicenseMonthly' : '#iconLicenseTrial'"></use></svg>
+                      </span>
+                      <span style="position:absolute;right:-3px;bottom:-2px;width:14px;height:14px;border-radius:999px;display:flex;align-items:center;justify-content:center;background:var(--b3-theme-surface);box-shadow:0 0 0 1px var(--b3-border-color)">
+                        <svg style="width:10px;height:10px;color:var(--b3-theme-primary)"><use :xlink:href="license.type === 'lifetime' ? '#iconLicenseLifetime' : license.type === 'annual' ? '#iconLicenseAnnual' : license.type === 'monthly' ? '#iconLicenseMonthly' : '#iconLicenseTrial'"></use></svg>
+                      </span>
+                    </span>
+                    <span class="b3-list-item__text" style="display:flex;flex-direction:column;gap:1px;min-width:0">
+                      <span style="font-size:15px">{{ license.userName }}</span>
+                      <span class="ft__secondary" style="font-size:12px">{{ i18n.activated || '已激活' }} - {{ i18n[license.type === 'lifetime' ? 'lifetimeVersion' : license.type === 'annual' ? 'annualVersion' : license.type === 'monthly' ? 'monthlyVersion' : 'trialVersion'] }}</span>
+                      <span class="ft__smaller ft__on-surface">ID {{ license.userId }}</span>
+                      <span class="ft__smaller ft__on-surface">{{ i18n.activatedAt || '激活于' }} {{ new Date(license.activatedAt).toLocaleDateString() }}</span>
+                    </span>
+                  </div>
+                  <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap"><button class="b3-button b3-button--text" @click.stop="clearLicense">{{ i18n.logout || 'Logout' }}</button><button class="b3-button b3-button--text" @click.stop="openPurchasePage">{{ i18n.purchase || 'Purchase' }}</button></div>
+                </div>
               </li>
             </template>
             <template v-else>
               <li class="b3-list-item b3-list-item--hide-action">
-                <div class="fn__flex-1">
-                  <input
-                    v-model="activationCode"
-                    type="text"
-                    class="b3-text-field"
-                    :placeholder="i18n.enterActivationCode || 'Activation code'"
-                    :disabled="processing"
-                    @mousedown.stop
-                    @pointerdown.stop
-                    @touchend.stop="focusMobileEditable($event.target)"
-                  >
+                <span class="b3-list-item__toggle fn__hidden"></span>
+                <div class="fn__flex-1" style="min-width:0;display:flex;flex-direction:column;gap:4px;padding:1px 0">
+                  <div style="display:flex;align-items:center;gap:8px;min-width:0">
+                    <span style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;flex:0 0 28px">
+                      <svg style="width:18px;height:18px;color:var(--b3-theme-primary)"><use xlink:href="#iconLicenseTrial"></use></svg>
+                    </span>
+                    <div class="fn__flex-1" style="min-width:0">
+                      <input
+                        v-model="activationCode"
+                        type="text"
+                        class="b3-text-field"
+                        :placeholder="i18n.enterActivationCode || 'Activation code'"
+                        :disabled="processing"
+                        @mousedown.stop
+                        @pointerdown.stop
+                        @touchend.stop="focusMobileEditable($event.target)"
+                      >
+                    </div>
+                  </div>
+                  <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap"><button class="b3-button b3-button--outline" :disabled="processing || !activationCode.trim()" @click.stop="activateLicense">{{ processing ? (i18n.processing || 'Processing') : (i18n.activate || 'Activate') }}</button><button class="b3-button b3-button--text" :disabled="processing" @click.stop="recoverLicense">{{ i18n.recover || 'Recover' }}</button><button class="b3-button b3-button--text" @click.stop="openPurchasePage">{{ i18n.purchase || 'Purchase' }}</button></div>
                 </div>
-              </li>
-              <li class="b3-list-item b3-list-item--hide-action">
-                <span class="fn__space"></span>
-                <button class="b3-button b3-button--outline" :disabled="processing || !activationCode.trim()" @click.stop="activateLicense">
-                  {{ processing ? (i18n.processing || 'Processing') : (i18n.activate || 'Activate') }}
-                </button>
-                <div class="fn__space"></div>
-                <button class="b3-button b3-button--text" :disabled="processing" @click.stop="recoverLicense">{{ i18n.recover || 'Recover' }}</button>
-                <div class="fn__space"></div>
-                <button class="b3-button b3-button--text" @click.stop="openPurchasePage">{{ i18n.purchase || 'Purchase' }}</button>
               </li>
             </template>
           </template>

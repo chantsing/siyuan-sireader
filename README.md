@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI translation, Anki flashcards
 
-[![Version](https://img.shields.io/badge/version-1.2.2-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-1.2.5-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,24 @@ Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI tr
 ---
 
 ## 📝 Latest Updates
+
+### v1.2.5 (2026.5.17)
+
+**Added**
+
+- Added mouse wheel page turning.
+- Added mouse side-button page turning.
+
+**Improved**
+
+- Refactored the table-of-contents style and interaction for a smoother, more consistent experience.
+- Refactored the settings page styling for a more compact layout.
+
+**Fixed**
+
+- Fixed note-insert search results not appearing.
+- Fixed EPUB content collapsing into a single line in continuous-scroll mode.
+- Fixed continuous-scroll mode failing to turn to the next chapter.
 
 ### v1.2.2 (2026.5.12)
 

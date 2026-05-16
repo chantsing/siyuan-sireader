@@ -7,7 +7,7 @@
 让思源笔记变身专业阅读器，支持 EPUB/PDF/TXT/在线小说  
 提供智能标注、TTS 朗读、词典查询、AI 翻译、Anki 闪卡等功能
 
-[![Version](https://img.shields.io/badge/version-1.2.2-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-1.2.5-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,24 @@
 ---
 
 ## 📝 最新更新
+
+### v1.2.5 (2026.5.17)
+
+**新增**
+
+- 支持鼠标滚轮翻页。
+- 支持鼠标侧键翻页。
+
+**优化**
+
+- 重构目录样式和交互，整体更流畅、更统一。
+- 重构设置页样式，界面更紧凑。
+
+**修复**
+
+- 修复笔记插入搜索不显示结果的问题。
+- 修复 EPUB 在连续滚动模式下内容挤成一条线的问题。
+- 修复连续滚动模式下无法翻页到下一章的问题。
 
 ### v1.2.2 (2026.5.12)
 
