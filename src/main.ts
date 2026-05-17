@@ -1,8 +1,8 @@
-import { Plugin } from 'siyuan'
+﻿import { Plugin } from 'siyuan'
 import { createApp } from 'vue'
 import App from './App.vue'
 import { initDictModule } from '@/utils/dictionary'
-import { registerCoreIcons } from '@/utils/icons'
+import { registerReaderIcons } from '@/utils/icon'
 import { initMobile, isMobile } from '@/utils/mobile'
 import { setPlugin } from '@/utils/copy'
 
@@ -20,7 +20,7 @@ export const setOpenSettingHandler = (handler: () => void) => {
 export function init(p: Plugin) {
   usePlugin(p)
   setPlugin(p)
-  registerCoreIcons(p)
+  registerReaderIcons(p)
   initDictModule(p)
   initMobile(p)
 
