@@ -46,6 +46,18 @@ const createItem = (mode: BookImportItem['mode'], source: string | File, label: 
   error: '',
   preview: null,
 })
+const toDraftItem = (value: string) => {
+  const fs = getFs()
+  if (!fs) return createItem('url', value, value, value)
+  try {
+    const file = createLocalFileRef(value, 0, 0)
+    const stats = fs.statSync((file as any).path)
+    Object.assign(file, { size: stats.size, lastModified: stats.mtimeMs })
+    return createItem('file', file, value, toFileUrl(file))
+  } catch {
+    return createItem('url', value, value, value)
+  }
+}
 
 export const useBookImport = () => {
   const items = ref<BookImportItem[]>([])
@@ -92,9 +104,12 @@ export const useBookImport = () => {
     const urls = asLines(input)
     if (!urls.length) return
     draft.value = input
+    const next = urls.map(toDraftItem)
     await parseItems(
-      urls.map(url => createItem('url', url, url, url)),
-      item => bookshelfManager.previewUrlBook(item.source as string),
+      next,
+      item => item.mode === 'file'
+        ? bookshelfManager.previewLocalBook(getImportFile(item))
+        : bookshelfManager.previewUrlBook(item.source as string),
       3,
     )
   }
@@ -150,8 +165,10 @@ export const useBookImport = () => {
         if (item.mode === 'url') await bookshelfManager.addUrlBook(item.linkSource, undefined, undefined, item.preview)
         else if (mode === 'file' || item.linkSource) await importFile[mode](item)
         else throw new Error('当前环境不支持以链接方式导入本地文件')
+        item.error = ''
         success++
-      } catch {
+      } catch (error) {
+        item.error = error instanceof Error ? error.message : '导入失败'
         failed++
       }
     })

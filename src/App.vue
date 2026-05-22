@@ -5,8 +5,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, provide } from 'vue'
-import { createApp, type Component } from 'vue'
+import { computed, createApp, defineComponent, h, onMounted, onUnmounted, provide, ref, toRaw, watch, type Component } from 'vue'
 import { MotionPlugin } from '@vueuse/motion'
 import { showMessage } from 'siyuan'
 import { usePlugin, setOpenSettingHandler, registerCleanup } from '@/main'
@@ -14,6 +13,12 @@ import { useSetting, settingsManager } from '@/composables/useSetting'
 import { useStats } from '@/composables/useStats'
 import { READER_ICON_ID } from '@/utils/icon'
 import { isMobile } from '@/utils/mobile'
+import { useReaderState } from '@/core/epub/state'
+import DockShell from '@/components/ui/DockShell.vue'
+import BookSearch from '@/components/BookSearch.vue'
+import BookShelf from '@/components/BookShelf.vue'
+import ReaderToc from '@/components/ReaderToc.vue'
+import ReaderMarks from '@/components/ReaderMarks.vue'
 import Settings from '@/components/Settings.vue'
 import Stats from '@/components/Stats.vue'
 
@@ -23,6 +28,82 @@ const showStats = ref(false)
 
 let settingsApp: any = null
 let mobileReaderApp: any = null
+const cloneSettings = () => JSON.parse(JSON.stringify(toRaw(settings.value)))
+const waitForSettings = async () => {
+  if (isLoaded.value) return
+  await new Promise(r => { const check = () => isLoaded.value ? r(true) : setTimeout(check, 50); check() })
+}
+
+const SETTINGS_TABS = [
+  { id: 'bookshelf', icon: 'lucide-library-big', tip: 'bookshelf', enabled: true, order: 0 },
+  { id: 'search', icon: 'lucide-book-search', tip: 'search', enabled: true, order: 1 },
+  { id: 'deck', icon: 'lucide-wallet-cards', tip: '卡包', enabled: true, order: 2 },
+  { id: 'toc', icon: 'lucide-scroll-text', tip: '目录', enabled: true, order: 3 },
+  { id: 'mark', icon: 'lucide-square-pen', tip: '标注', enabled: true, order: 4 },
+  { id: 'appearance', icon: 'lucide-settings-2', tip: '设置', enabled: true, order: 7 },
+]
+
+const SettingsDock = defineComponent({
+  props: ['modelValue', 'i18n', 'onSave', 'onUpdate:modelValue'],
+  setup(props: any) {
+    const { canShowToc } = useReaderState()
+    const activeTab = ref('appearance')
+    const model = ref(props.modelValue)
+    const navItems = computed(() => (model.value.navItems || SETTINGS_TABS).filter((item: any) => item.id !== 'dictionary').sort((a: any, b: any) => a.order - b.order))
+    const tabs = computed(() => navItems.value.filter((item: any) => item.enabled && (item.id === 'appearance' || item.id === 'bookshelf' || item.id === 'search' || item.id === 'deck' || canShowToc.value)).map((item: any) => ({ id: item.id, icon: item.icon, tip: props.i18n?.[item.tip] || item.tip })))
+    const tooltipDir = computed(() => ({ left: 'e', right: 'w', top: 's', bottom: 'n' }[model.value.navPosition] || 'n'))
+    const handleUpdate = (value: any) => {
+      model.value = value
+      props['onUpdate:modelValue']?.(value)
+    }
+    const handleReadOnline = async (book: any) => (await import('@/utils/bookOpen')).openOrActivateBook(plugin, book, model.value)
+    const openLicense = () => {
+      activeTab.value = 'appearance'
+      setTimeout(() => (window as any)._openLicenseContent?.(), 50)
+    }
+    watch(canShowToc, show => !show && ['toc', 'mark'].includes(activeTab.value) && (activeTab.value = 'bookshelf'), { immediate: true })
+    onMounted(() => { ;(window as any)._openLicense = openLicense })
+    onUnmounted(() => { if ((window as any)._openLicense === openLicense) delete (window as any)._openLicense })
+    return () => h(
+      DockShell,
+      {
+        activeTab: activeTab.value,
+        navPosition: model.value.navPosition,
+        tooltipDir: tooltipDir.value,
+        tabs: tabs.value,
+        'onUpdate:activeTab': (tab: string) => { activeTab.value = tab },
+      },
+      {
+        default: () => [
+          h(Settings, {
+            modelValue: model.value,
+            i18n: props.i18n,
+            onSave: props.onSave,
+            'onUpdate:modelValue': handleUpdate,
+            style: { display: activeTab.value === 'appearance' ? '' : 'none' },
+          }),
+          h(BookSearch, {
+            i18n: props.i18n,
+            style: { display: activeTab.value === 'search' ? '' : 'none' },
+          }),
+          h(BookShelf, {
+            i18n: props.i18n,
+            coverSize: model.value.bookshelfCoverSize,
+            openDocAssets: model.value.openDocAssets,
+            onRead: handleReadOnline,
+            style: { display: activeTab.value === 'bookshelf' ? '' : 'none' },
+          }),
+          ['toc', 'deck'].includes(activeTab.value)
+            ? h(ReaderToc, { mode: activeTab.value === 'deck' ? 'deck' : 'toc', i18n: props.i18n })
+            : null,
+          activeTab.value === 'mark'
+            ? h(ReaderMarks, { i18n: props.i18n })
+            : null,
+        ],
+      },
+    )
+  },
+})
 
 // 打开设置并展开授权
 const openSetting = () => {
@@ -41,11 +122,14 @@ const fetchFile = async (url: string) => {
   } catch { return null }
 }
 
-const mountReader = async (el: HTMLElement, props: any) => {
-  if (!isLoaded.value) await new Promise(r => { const check = () => isLoaded.value ? r(true) : setTimeout(check, 50); check() })
-  const { toRaw } = await import('vue')
+const createReaderApp = async (props: any) => {
   const { default: Reader } = await import('@/components/Reader.vue')
-  const app = createApp(Reader as Component, { ...props, plugin, settings: JSON.parse(JSON.stringify(toRaw(settings.value))), i18n: plugin.i18n })
+  return createApp(Reader as Component, { ...props, plugin, settings: cloneSettings(), i18n: plugin.i18n })
+}
+
+const mountReader = async (el: HTMLElement, props: any) => {
+  await waitForSettings()
+  const app = await createReaderApp(props)
   app.mount(el)
   return app
 }
@@ -134,18 +218,13 @@ plugin.addDock({
     container.className = 'sireader-dock-content'
     container.style.cssText = 'width:100%;height:100%;overflow:auto'
     this.element.appendChild(container)
-    
-    // 等待设置加载
     if (!isLoaded.value) {
       container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--b3-theme-on-surface)">加载中...</div>'
-      await new Promise(r => { const check = () => isLoaded.value ? r(true) : setTimeout(check, 50); check() })
+      await waitForSettings()
       container.innerHTML = ''
     }
-    
-    // 挂载设置组件
-    const { toRaw } = await import('vue')
-    settingsApp = createApp(Settings, {
-      modelValue: JSON.parse(JSON.stringify(toRaw(settings.value))),
+    settingsApp = createApp(SettingsDock, {
+      modelValue: cloneSettings(),
       i18n: (this.data.plugin as typeof plugin).i18n,
       onSave: async () => await settingsManager.save(settings.value),
       'onUpdate:modelValue': (v: any) => settings.value = v
@@ -188,14 +267,7 @@ const handleMobileReaderOpen = async (e: CustomEvent) => {
     document.body.appendChild(container)
   }
   container.style.display = 'block'
-  const { toRaw } = await import('vue')
-  const { default: Reader } = await import('@/components/Reader.vue')
-  mobileReaderApp = createApp(Reader as Component, {
-    bookInfo: book,
-    plugin,
-    settings: JSON.parse(JSON.stringify(toRaw(settings.value))),
-    i18n: plugin.i18n
-  })
+  mobileReaderApp = await createReaderApp({ bookInfo: book })
   mobileReaderApp.mount(container)
 }
 

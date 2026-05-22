@@ -674,8 +674,8 @@ export class ShapeToolManager {
       await this.saveData(shapes)
       if (shapes.length) {
         try {
-          const { autoSyncMark } = await import('@/utils/copy')
-          await autoSyncMark(shapes[shapes.length - 1], { bookUrl: this.bookUrl, isPdf: true, pdfViewer: this.pdfViewer, shapeManager: this })
+          const { syncMarkOnCreate } = await import('@/utils/copy')
+          await syncMarkOnCreate(shapes[shapes.length - 1], { bookUrl: this.bookUrl, isPdf: true, pdfViewer: this.pdfViewer, shapeManager: this })
         } catch {}
       }
     }, this.onShapeClick)
@@ -723,6 +723,7 @@ export class ShapeToolManager {
     if (!this.controller) return false
     const shape = this.getLocalShape(id)
     if (!shape) return false
+    try { await (await import('@/utils/copy')).syncMarkOnDelete(shape) } catch (e) { console.error('[DeleteShapeBlock]', e) }
     await removeAnnotation(id)
     this.removeShape(id, shape.page)
     return true

@@ -31,130 +31,58 @@
             @drop.prevent="dropMark(mark)"
             @dragend="endMarkDrag()"
           >
-            <span class="sr-bar" :style="{ background: getBarColor(mark) }"></span>
-            <div class="sr-main">
-              <div class="sr-head">
-                <div v-if="mark.chapter && markSort === 'time'" class="sr-chapter">{{ mark.chapter }}</div>
-                <div v-if="showTime(mark)" class="sr-time">{{ formatTime(mark.timestamp || Date.now()) }}</div>
+            <MarkCard
+              :time="formatDateTime(mark.timestamp || Date.now())"
+              :tags="getMarkTags(mark)"
+              :tag-options="markTagOptions"
+              :selected-tags="editTagList"
+              :tag-input="editTags"
+              :editing="isEditing(mark)"
+              :editable="canEdit(mark)"
+              :text="isEditing(mark) ? editText : mainText(mark)"
+              :chapter="isEditing(mark) ? '' : mark.chapter"
+              :note="isEditing(mark) ? editNote : mark.note"
+              :mark-color="getBarColor(mark)"
+              :color-value="editColor"
+              :color-options="isEditing(mark) && showEditOptions(mark) ? getEditColorOptions(mark.type === 'shape') : []"
+              :bookmark="isBookmark(mark)"
+              @update:tag-input="editTags = $event"
+              @update:text="editText = $event"
+              @update:note="editNote = $event"
+              @update:color-value="editColor = $event"
+              @toggle-tag="toggleEditTag"
+              @go="isVisualGroup(mark) ? null : goTo(mark)"
+              @edit="startEdit(mark)"
+              @cancel="cancelEdit"
+              @save="saveEdit(mark)"
+            >
+              <template #actions>
+                <div v-if="!isVisualGroup(mark)" class="sr-head-actions">
+                  <button class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.copy || '复制'" @click.stop="copyMark(mark)"><svg><use xlink:href="#iconCopy" /></svg></button>
+                  <button v-if="mark.blockId && !isBookmark(mark)" class="b3-tooltips b3-tooltips__nw" aria-label="打开块" @click.stop="openBlock(mark.blockId)" @mouseenter="onBlockEnter($event, mark.blockId)" @mouseleave="hideFloat"><svg><use xlink:href="#iconRef" /></svg></button>
+                  <button v-else-if="canImport(mark)" class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.import || '导入'" @click.stop="importMark(mark)"><svg><use xlink:href="#iconDownload" /></svg></button>
+                  <button class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.delete || '删除'" @click.stop="deleteMark(mark)"><svg><use xlink:href="#iconTrashcan" /></svg></button>
+                </div>
                 <button v-if="isVisualGroup(mark)" class="sr-expand-btn b3-tooltips b3-tooltips__nw" :aria-label="isExpanded(mark) ? '收起' : '展开'" @click.stop="toggleExpand(mark)">
                   <svg><use :xlink:href="isExpanded(mark) ? '#iconUp' : '#iconDown'" /></svg>
                 </button>
-              </div>
-
-              <div
-                v-if="isEditing(mark)"
-                class="sr-title"
-                contenteditable
-                @input="editText = ($event.target as HTMLElement).textContent || ''"
-              >{{ editText }}</div>
-              <div v-else class="sr-title" :class="{ 'sr-title-bookmark': isBookmark(mark) }" @click="isVisualGroup(mark) ? null : goTo(mark)">
-                {{ mainText(mark) }}
-                <span v-if="isVisualGroup(mark)" class="sr-meta">第 {{ mark.page }} 页 · {{ (mark.inks || mark.shapes).length }} 条</span>
-              </div>
-
-              <textarea v-if="isEditing(mark)" ref="editNoteRef" v-model="editNote" placeholder="添加笔记…" class="sr-note-input" />
-              <div v-else-if="mark.note" class="sr-note" @click.stop="startEdit(mark)">{{ mark.note }}</div>
-
-              <canvas v-if="mark.type === 'ink-group'" :data-page="mark.page" class="sr-preview sr-group-preview" width="240" height="80"></canvas>
-
-              <template v-if="isEditing(mark) && showEditOptions(mark)">
-                <div class="sr-options">
-                  <div class="sr-colors">
-                    <button
-                      v-for="color in getEditColorOptions(mark.type === 'shape')"
-                      :key="color.key"
-                      class="sr-color-btn"
-                      :class="{ active: editColor === color.value }"
-                      :style="{ background: color.bg }"
-                      @click.stop="editColor = color.value"
-                    />
-                  </div>
-                  <div v-if="mark.type === 'shape'" class="sr-styles">
-                    <button
-                      v-for="shape in shapeOptions"
-                      :key="shape.type"
-                      class="sr-style-btn"
-                      :class="{ active: editShapeType === shape.type }"
-                      :title="shape.label"
-                      @click.stop="editShapeType = shape.type"
-                    >
-                      <svg><use :xlink:href="shape.icon" /></svg>
-                    </button>
-                  </div>
-                  <div v-else class="sr-styles">
-                    <button
-                      v-for="style in STYLES.filter(item => !item.pdfOnly || isPdfMode)"
-                      :key="style.type"
-                      class="sr-style-btn"
-                      :class="{ active: editStyle === style.type }"
-                      @click.stop="editStyle = style.type"
-                    >
-                      <span class="sr-style-icon" :data-type="style.type">{{ style.text }}</span>
-                    </button>
-                  </div>
-                </div>
-                <div class="sr-actions">
-                  <button class="sr-btn-primary" @click.stop="saveEdit(mark)">保存</button>
-                  <button class="sr-btn-secondary" @click.stop="cancelEdit">取消</button>
-                </div>
               </template>
+              <template #meta>
+                <span v-if="isVisualGroup(mark)" class="sr-meta">第 {{ mark.page }} 页 · {{ (mark.inks || mark.shapes).length }} 条</span>
+              </template>
+              <template #extra>
+                <canvas v-if="mark.type === 'ink-group'" :data-page="mark.page" class="sr-preview sr-group-preview" width="240" height="80"></canvas>
 
-              <Transition name="expand">
-                <div v-if="isExpanded(mark)" class="sr-sub-list">
-                  <div v-for="sub in mark.inks || mark.shapes" :key="sub.id" class="sr-sub-item" :class="{ 'sr-card-edit': isEditing(sub) }">
-                    <canvas v-if="mark.type === 'ink-group'" :data-ink-id="sub.id" class="sr-preview" width="240" height="40" @click.stop="isEditing(sub) ? null : goTo(sub)"></canvas>
-                    <canvas v-else :data-shape-id="sub.id" class="sr-preview" width="240" height="40" @click.stop="isEditing(sub) ? null : goTo(sub)"></canvas>
-                    <textarea v-if="isEditing(sub)" ref="editNoteRef" v-model="editNote" placeholder="添加笔记…" class="sr-note-input" />
-                    <div v-else-if="sub.note" class="sr-note" @click.stop="startEdit(sub)">{{ sub.note }}</div>
-                    <template v-if="isEditing(sub)">
-                      <div class="sr-options">
-                        <div class="sr-colors">
-                          <button
-                            v-for="color in getEditColorOptions(sub.type === 'shape')"
-                            :key="color.key"
-                            class="sr-color-btn"
-                            :class="{ active: editColor === color.value }"
-                            :style="{ background: color.bg }"
-                            @click.stop="editColor = color.value"
-                          />
-                        </div>
-                        <div v-if="sub.type === 'shape'" class="sr-styles">
-                          <button
-                            v-for="shape in shapeOptions"
-                            :key="shape.type"
-                            class="sr-style-btn"
-                            :class="{ active: editShapeType === shape.type }"
-                            :title="shape.label"
-                            @click.stop="editShapeType = shape.type"
-                          >
-                            <svg><use :xlink:href="shape.icon" /></svg>
-                          </button>
-                        </div>
-                      </div>
-                      <div class="sr-actions">
-                        <button class="sr-btn-primary" @click.stop="saveEdit(sub)">保存</button>
-                        <button class="sr-btn-secondary" @click.stop="cancelEdit">取消</button>
-                      </div>
-                    </template>
-                    <div v-else class="sr-btns">
-                      <button v-if="mark.type === 'shape-group'" class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.copy || '复制'" @click.stop="copyMark(sub)"><svg><use xlink:href="#iconCopy" /></svg></button>
-                      <button v-if="mark.type === 'shape-group'" class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.edit || '编辑'" @click.stop="startEdit(sub)"><svg><use xlink:href="#iconEdit" /></svg></button>
-                      <button v-if="sub.blockId" class="b3-tooltips b3-tooltips__nw" aria-label="打开块" @click.stop="openBlock(sub.blockId)" @mouseenter="onBlockEnter($event, sub.blockId)" @mouseleave="hideFloat"><svg><use xlink:href="#iconRef" /></svg></button>
-                      <button v-else class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.import || '导入'" @click.stop="importMark(sub)"><svg><use xlink:href="#iconDownload" /></svg></button>
-                      <button class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.delete || '删除'" @click.stop="deleteMark(sub)"><svg><use xlink:href="#iconTrashcan" /></svg></button>
+                <Transition name="expand">
+                  <div v-if="isExpanded(mark)" class="sr-sub-list">
+                    <div v-for="sub in mark.inks || mark.shapes" :key="sub.id" class="sr-sub-item">
+                      <canvas v-if="mark.type === 'ink-group'" :data-ink-id="sub.id" class="sr-preview" width="240" height="40" @click.stop="goTo(sub)"></canvas>
+                      <canvas v-else :data-shape-id="sub.id" class="sr-preview" width="240" height="40" @click.stop="goTo(sub)"></canvas>
                     </div>
                   </div>
-                </div>
-              </Transition>
-
-              <div v-if="!isEditing(mark)" class="sr-btns">
-                <button v-if="canCopy(mark)" class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.copy || '复制'" @click.stop="copyMark(mark)"><svg><use xlink:href="#iconCopy" /></svg></button>
-                <button v-if="canEdit(mark)" class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.edit || '编辑'" @click.stop="startEdit(mark)"><svg><use xlink:href="#iconEdit" /></svg></button>
-                <button v-if="mark.blockId && !isBookmark(mark)" class="b3-tooltips b3-tooltips__nw" aria-label="打开块" @click.stop="openBlock(mark.blockId)" @mouseenter="onBlockEnter($event, mark.blockId)" @mouseleave="hideFloat"><svg><use xlink:href="#iconRef" /></svg></button>
-                <button v-else-if="canImport(mark)" class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.import || '导入'" @click.stop="importMark(mark)"><svg><use xlink:href="#iconDownload" /></svg></button>
-                <button class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.delete || '删除'" @click.stop="deleteMark(mark)"><svg><use xlink:href="#iconTrashcan" /></svg></button>
-              </div>
-            </div>
+                </Transition>
+              </template>
+            </MarkCard>
           </div>
         </template>
       </template>
@@ -208,15 +136,14 @@
 </template>
 
 <script setup lang="ts">
+import MarkCard from './MarkCard.vue'
 import DockShell from './ui/DockShell.vue'
-import { formatTime } from '@/core/MarkManager'
 import { useReaderMarks } from '@/composables/useReaderMarks'
 
 const props = withDefaults(defineProps<{ i18n?: any }>(), { i18n: () => ({}) })
 
 const {
   MARK_SORT_OPTIONS,
-  STYLES,
   keyword,
   searchPlaceholder,
   toolbarMenuAction,
@@ -235,28 +162,24 @@ const {
   dropMark,
   endMarkDrag,
   getBarColor,
-  markSort,
-  showTime,
   isVisualGroup,
   isExpanded,
   toggleExpand,
   isEditing,
   editText,
   editNote,
-  editNoteRef,
+  editTags,
+  editTagList,
   startEdit,
   cancelEdit,
   showEditOptions,
   getEditColorOptions,
   editColor,
-  shapeOptions,
-  editShapeType,
-  editStyle,
-  isPdfMode,
+  markTagOptions,
+  toggleEditTag,
   saveEdit,
   mainText,
   copyMark,
-  canCopy,
   canEdit,
   isBookmark,
   openBlock,
@@ -271,8 +194,10 @@ const {
   isMarkFilterActive,
   toggleMarkFilterItem,
   resetMarkOrganize,
+  getMarkTags,
   goTo,
 } = useReaderMarks(props.i18n)
+const formatDateTime = (ts: number) => new Date(ts).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 </script>
 
 <style scoped lang="scss">
@@ -291,42 +216,26 @@ const {
 .sr-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .sr-actions-end{justify-content:flex-end}
 .sr-section-line{padding-top:12px;border-top:1px solid var(--b3-border-color)}
-.sr-card{display:flex;gap:10px;padding:10px 8px;margin-bottom:6px;border:1px solid var(--b3-border-color);border-radius:10px;box-shadow:none;background:transparent;position:relative}
-.sr-card:hover{background:var(--b3-list-hover)}
+.sr-card{--sr-gap:4px;--sr-line:19px;display:flex;gap:var(--sr-gap);padding:6px;margin-bottom:6px;border:1px solid #d8d8d8;border-radius:8px;background:#fff;position:relative;transform:none!important;box-shadow:none!important;transition:border-color .15s,background-color .15s}
+.sr-card:hover{border-color:#9fb0c1;background:#fbfdff;transform:none!important;box-shadow:none!important}
 .sr-card-drag{cursor:grab}
 .sr-card.is-dragging{opacity:.45}
 .sr-card.is-drag-over{border-color:var(--b3-theme-primary);box-shadow:0 0 0 1px var(--b3-theme-primary) inset}
-.sr-group{align-items:center;cursor:pointer;border-radius:10px;box-shadow:none;background:transparent}
+.sr-group{align-items:center;cursor:pointer;border-radius:10px;background:transparent}
 .sr-group-content{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:1;min-width:0}
 .sr-group-title,.sr-group-count{font-size:15px;line-height:1.35;font-weight:600}
 .sr-group-count{opacity:.6}
 .sr-bar{width:4px;border-radius:999px;background:var(--b3-theme-primary);flex-shrink:0}
 .sr-bar.collapsed{opacity:.4}
-.sr-main{flex:1;min-width:0}
-.sr-head{display:flex;align-items:center;gap:8px;margin-bottom:4px}
-.sr-chapter{font-size:12px;font-weight:500;color:var(--b3-theme-primary);opacity:.85;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sr-time{font-size:11px;color:var(--b3-theme-on-surface-variant);opacity:.6;white-space:nowrap;flex-shrink:0}
-.sr-title{font-size:13px;font-weight:600;line-height:1.5;word-break:break-word;cursor:pointer}
-.sr-title-bookmark{color:var(--b3-theme-primary)}
-.sr-note{font-size:12px;color:var(--b3-theme-on-surface-variant);line-height:1.5;margin-top:4px;font-style:italic;opacity:.85;cursor:text}
+.sr-head-actions{display:flex;align-items:center;gap:4px;flex-shrink:0}
+.sr-head-actions button,.sr-expand-btn{display:flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;border:none;background:transparent;border-radius:4px;line-height:1;cursor:pointer;color:#8a8a8a}
+.sr-head-actions button:hover,.sr-expand-btn:hover{background:#f4f4f4;color:#555}
+.sr-head-actions svg{width:14px;height:14px}
 .sr-meta{margin-left:8px;font-size:11px;font-weight:400;color:var(--b3-theme-on-surface-variant)}
-.sr-btns{display:flex;align-items:center;gap:4px;margin-top:8px}
-.sr-btns button,.sr-expand-btn{display:flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:none;background:transparent;border-radius:6px;cursor:pointer}
-.sr-btns button:hover,.sr-expand-btn:hover{background:var(--b3-list-hover)}
-.sr-preview{width:100%;margin-top:8px;background:var(--b3-theme-background)}
+.sr-preview{width:100%;background:var(--b3-theme-background)}
 .sr-group-preview{height:80px}
-.sr-sub-list{display:flex;flex-direction:column;gap:8px;margin-top:8px}
-.sr-sub-item{padding:8px;border:1px solid var(--b3-border-color);border-radius:8px;box-shadow:none;background:transparent}
-.sr-note-input{width:100%;min-height:72px;margin-top:8px;resize:vertical}
-.sr-options{display:flex;flex-direction:column;gap:8px;margin-top:8px}
-.sr-colors,.sr-styles{display:flex;flex-wrap:wrap;gap:6px}
-.sr-color-btn,.sr-style-btn{display:flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:1px solid var(--b3-border-color);background:var(--b3-theme-background);border-radius:8px;cursor:pointer}
-.sr-color-btn.active,.sr-style-btn.active{border-color:var(--b3-theme-primary);box-shadow:0 0 0 1px var(--b3-theme-primary) inset}
-.sr-style-btn svg{width:16px;height:16px}
-.sr-style-icon{font-size:12px;font-weight:700}
-.sr-actions{display:flex;gap:8px;margin-top:8px}
-.sr-btn-primary,.sr-btn-secondary{height:28px;padding:0 10px;border:1px solid var(--b3-border-color);border-radius:8px;background:var(--b3-theme-background);cursor:pointer}
-.sr-btn-primary{border-color:var(--b3-theme-primary);color:var(--b3-theme-primary)}
+.sr-sub-list{display:flex;flex-direction:column;gap:var(--sr-gap)}
+.sr-sub-item{padding:6px;border:1px solid #e2e2e2;border-radius:6px;box-shadow:none;background:#fafafa}
 .fade-enter-active,.fade-leave-active{transition:opacity .2s}
 .fade-enter-from,.fade-leave-to{opacity:0}
 .expand-enter-active,.expand-leave-active{transition:all .2s ease}

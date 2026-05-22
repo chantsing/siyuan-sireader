@@ -418,7 +418,14 @@ export class InkToolManager{
 
   async init(){
     if(this.controller)return this.controller
-    this.controller=new InkController(async()=>await this.persistController())
+    this.controller=new InkController(async()=>{
+      const inks=this.controllerData
+      await this.persistController()
+      if(inks.length)try{
+        const{syncMarkOnCreate}=await import('@/utils/copy')
+        await syncMarkOnCreate(inks[inks.length-1],{bookUrl:this.bookUrl,isPdf:true,pdfViewer:this.viewer,inkManager:this})
+      }catch{}
+    })
     this.controller.init(this.container)
     this.controller.setPdfViewer(this.viewer)
     const data=await this.loadData()
@@ -438,6 +445,7 @@ export class InkToolManager{
     if(!this.controller)return false
     const ink = this.getLocalInk(id)
     if(!ink)return false
+    try{await (await import('@/utils/copy')).syncMarkOnDelete(ink)}catch(e){console.error('[DeleteInkBlock]',e)}
     await removeAnnotation(id)
     this.removeInk(id,ink.page)
     return true

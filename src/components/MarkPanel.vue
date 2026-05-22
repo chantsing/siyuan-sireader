@@ -20,78 +20,58 @@
       <button v-for="doc in sendDocs" :key="doc.id" class="send-item" @click="() => handleSendToDoc(doc.path?.split('/').pop()?.replace('.sy', '') || doc.id)">{{ doc.hPath || doc.content || '无标题' }}</button>
     </div>
 
-    <div v-if="state.showPanel" v-motion :initial="{ opacity: 0, y: 5 }" :enter="{ opacity: 1, y: 0 }" class="sr-card sr-popup sr-popup-panel" :style="cardPosition" @click.stop>
+    <div v-if="state.showPanel" v-motion :initial="{ opacity: 0, y: 5 }" :enter="{ opacity: 1, y: 0 }" class="sr-popup sr-popup-panel" :style="cardPosition" @click.stop>
       <div class="sr-main">
         <Translate v-if="state.panel === 'translate'" :text="state.selection?.text || ''" />
-        <template v-else-if="!state.isEditing">
-          <div class="sr-title" @click="goToMark">{{ state.text || '无内容' }}</div>
-          <div v-if="state.note" class="sr-note" @click.stop="handleEdit">{{ state.note }}</div>
-          <div class="sr-btns">
-            <button @click.stop="handleCopyMark" class="b3-tooltips b3-tooltips__nw" :aria-label="i18n?.copy || '复制'"><svg><use xlink:href="#iconCopy" /></svg></button>
-            <button @click.stop="handleEdit" class="b3-tooltips b3-tooltips__nw" :aria-label="i18n?.edit || '编辑'"><svg><use xlink:href="#iconEdit" /></svg></button>
-            <button v-if="state.currentMark?.blockId" @click.stop="handleOpenBlock" @mouseenter="handleShowFloat" @mouseleave="hideFloat" class="b3-tooltips b3-tooltips__nw" aria-label="打开块"><svg><use xlink:href="#iconRef" /></svg></button>
-            <button v-else @click.stop="handleImport" class="b3-tooltips b3-tooltips__nw" :aria-label="i18n?.import || '导入'"><svg><use xlink:href="#iconDownload" /></svg></button>
-            <button @click.stop="handleDelete" class="b3-tooltips b3-tooltips__nw" :aria-label="i18n?.delete || '删除'"><svg><use xlink:href="#iconTrashcan" /></svg></button>
-          </div>
-        </template>
-
-        <template v-else>
-          <div class="sr-title">{{ state.text }}</div>
-          <textarea
-            v-if="isTextboxMark"
-            ref="noteRef"
-            v-model="state.text"
-            class="sr-note-input"
-            @mousedown.stop
-            @pointerdown.stop
-            @touchend.stop="focusMobileEditable($event.target)"
-            placeholder="输入文本框内容..."
-          />
-          <textarea
-            v-else
-            ref="noteRef"
-            v-model="state.note"
-            class="sr-note-input"
-            @mousedown.stop
-            @pointerdown.stop
-            @touchend.stop="focusMobileEditable($event.target)"
-            placeholder="添加笔记..."
-          />
-          <div class="sr-options">
-            <div class="sr-colors">
-              <button v-for="c in colorOptions" :key="c.key" class="sr-color-btn" :class="{ active: state.color === c.value }" :style="{ background: c.bg }" @click.stop="state.color = c.value" />
+        <MarkCard
+          v-else
+          :time="formatDateTime(state.currentMark?.timestamp || Date.now())"
+          :tags="displayTags"
+          :tag-options="panelTagOptions"
+          :selected-tags="displayTags"
+          :tag-input="state.tags"
+          :editing="state.isEditing"
+          editable
+          :text="state.text || '无内容'"
+          :chapter="state.isEditing ? '' : state.currentMark?.chapter"
+          :note="state.isEditing && isTextboxMark ? state.text : state.note"
+          :mark-color="currentMarkColor"
+          :color-value="state.color"
+          :color-options="state.isEditing ? colorOptions : []"
+          @update:tag-input="state.tags = $event"
+          @update:text="state.text = $event"
+          @update:note="isTextboxMark ? state.text = $event : state.note = $event"
+          @update:color-value="state.color = $event"
+          @toggle-tag="togglePanelTag"
+          @go="goToMark"
+          @edit="handleEdit"
+          @cancel="handleCancel"
+          @save="handleSave"
+        >
+          <template v-if="!state.isEditing" #actions>
+            <div class="sr-icon-actions">
+              <button @click.stop="handleCopyMark" class="b3-tooltips b3-tooltips__nw" :aria-label="i18n?.copy || '复制'"><svg><use xlink:href="#iconCopy" /></svg></button>
+              <button v-if="state.currentMark?.blockId" @click.stop="handleOpenBlock" @mouseenter="handleShowFloat" @mouseleave="hideFloat" class="b3-tooltips b3-tooltips__nw" aria-label="打开块"><svg><use xlink:href="#iconRef" /></svg></button>
+              <button v-else @click.stop="handleImport" class="b3-tooltips b3-tooltips__nw" :aria-label="i18n?.import || '导入'"><svg><use xlink:href="#iconDownload" /></svg></button>
+              <button @click.stop="handleDelete" class="b3-tooltips b3-tooltips__nw" :aria-label="i18n?.delete || '删除'"><svg><use xlink:href="#iconTrashcan" /></svg></button>
             </div>
-            <div v-if="isShapeMark" class="sr-styles">
-              <button v-for="s in SHAPES" :key="s.type" class="sr-style-btn" :class="{ active: state.shapeType === s.type }" :title="s.label" @click.stop="state.shapeType = s.type"><svg><use :xlink:href="s.icon" /></svg></button>
-              <span class="toolbar-divider" />
-              <button v-if="!isTextboxMark" class="sr-style-btn" :class="{ active: state.shapeFilled }" title="填充" @click.stop="state.shapeFilled = !state.shapeFilled"><svg><use xlink:href="#lucide-paint-bucket" /></svg></button>
-            </div>
-            <div v-else-if="!isInkMark" class="sr-styles">
-              <button v-for="s in STYLES" v-show="(!s.pdfOnly && !s.epubOnly) || (s.pdfOnly && isPdf) || (s.epubOnly && !isPdf)" :key="s.type" class="sr-style-btn" :class="{ active: state.style === s.type }" @click.stop="state.style = s.type">
-                <span class="sr-style-icon" :data-type="s.type">{{ s.text }}</span>
-              </button>
-            </div>
-          </div>
-          <div class="sr-actions">
-            <button @click.stop="handleCopyMark" class="sr-btn-secondary">复制</button>
-            <button @click.stop="handleSave" class="sr-btn-primary">保存</button>
-            <button @click.stop="handleCancel" class="sr-btn-secondary">取消</button>
-          </div>
-        </template>
+          </template>
+        </MarkCard>
       </div>
     </div>
   </Teleport>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { showMessage } from 'siyuan'
 import type { HighlightColor, Mark, MarkManager } from '@/core/MarkManager'
-import { COLORS, STYLES } from '@/core/MarkManager'
-import { PDF_SHAPE_COLORS, PDF_SHAPE_OPTIONS } from '@/core/pdf/shape'
+import { COLORS } from '@/core/MarkManager'
+import { PDF_SHAPE_COLORS } from '@/core/pdf/shape'
 import { hideFloat, openBlock, showFloat } from '@/utils/copy'
 import { jump } from '@/utils/jump'
-import { focusMobileEditable, isMobile } from '@/utils/mobile'
+import { isMobile } from '@/utils/mobile'
+import MarkCard from './MarkCard.vue'
 import Translate from './Translate.vue'
 
 interface MarkSelection {
@@ -122,15 +102,14 @@ const props = defineProps<{
 const emit = defineEmits<{
   copy: [text: string, selection: any]
   dict: [text: string, x: number, y: number, selection: any]
-  copyMark: [mark: Mark]
+  copyMarkOnly: [mark: Mark]
 }>()
 
-const SHAPES = PDF_SHAPE_OPTIONS
 const shapeColors = PDF_SHAPE_COLORS
-const noteRef = ref<HTMLTextAreaElement>()
 const sendSearch = ref('')
 const sendDocs = ref<any[]>([])
 let quickMarkCooldown = false
+let selectionDoc: Document | null = null
 
 const state = reactive({
   showMenu: false,
@@ -145,6 +124,7 @@ const state = reactive({
   currentMark: null as Mark | null,
   text: '',
   note: '',
+  tags: '',
   color: 'yellow' as HighlightColor,
   style: 'highlight' as 'highlight' | 'underline' | 'outline' | 'dotted' | 'dashed' | 'double' | 'squiggly',
   shapeType: 'rect' as 'rect' | 'circle' | 'triangle' | 'textbox',
@@ -153,12 +133,23 @@ const state = reactive({
 
 const isPdf = computed(() => (state.selection?.location.format || state.currentMark?.format) === 'pdf')
 const isShapeMark = computed(() => state.currentMark?.type === 'shape')
-const isInkMark = computed(() => state.currentMark?.type === 'ink')
 const isTextboxMark = computed(() => isShapeMark.value && state.shapeType === 'textbox')
 const quickDocs = computed(() => (window as any).__sireader_settings?.quickSendDocs || [])
 const colorOptions = computed(() => (state.currentMark?.type === 'shape' || state.currentMark?.type === 'ink')
   ? shapeColors.map(color => ({ key: color, value: color, bg: color }))
   : COLORS.map(color => ({ key: color.color, value: color.color, bg: color.bg })))
+const colorMap = Object.fromEntries(COLORS.map(color => [color.color, color.bg]))
+const currentMarkColor = computed(() => colorMap[state.color] || state.color || '#e0e0e0')
+const normalizeTags = (tags?: unknown[]) => Array.from(new Set((tags || []).map(tag => String(tag || '').trim()).filter(Boolean)))
+const parseTags = (value = '') => normalizeTags(value.split(/[#,，;；\n]/))
+const formatTags = (tags?: unknown[]) => normalizeTags(tags).join(', ')
+const displayTags = computed(() => state.isEditing ? parseTags(state.tags) : normalizeTags((state.currentMark as any)?.tags || []))
+const panelTagOptions = computed(() => Array.from(new Set([...normalizeTags((state.currentMark as any)?.tags || []), ...displayTags.value])).sort((a, b) => a.localeCompare(b)))
+const togglePanelTag = (tag: string) => {
+  const tags = displayTags.value
+  state.tags = formatTags(tags.includes(tag) ? tags.filter(item => item !== tag) : [...tags, tag])
+}
+const formatDateTime = (ts?: number) => ts ? new Date(ts).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''
 
 const placePopup = (x: number, y: number, w: number, h: number, preferAbove = false, clampBelow = false) => {
   const rect = document.querySelector('.reader-container')?.getBoundingClientRect()
@@ -205,6 +196,7 @@ const markData = (mark: any, extra: Record<string, any> = {}) => ({
   currentMark: mark,
   text: mark.text || (mark.type === 'shape' ? (mark.shapeType === 'textbox' ? '' : '形状标注') : mark.type === 'ink' ? '墨迹标注' : ''),
   note: mark.note || '',
+  tags: formatTags(mark.tags),
   color: mark.color || (mark.type === 'ink' ? '#ff0000' : 'yellow'),
   style: mark.style || 'highlight',
   shapeType: mark.shapeType || 'rect',
@@ -220,11 +212,6 @@ const addSelectionMark = async (text: string, color: HighlightColor, style: type
   const args = selectionArgs()
   return args && props.manager ? await props.manager.addHighlight(args[0], text.trim(), color, style, args[4], args[5]) : null
 }
-const focusNote = () => nextTick(() => {
-  noteRef.value?.focus()
-  noteRef.value?.setSelectionRange?.(noteRef.value.value.length, noteRef.value.value.length)
-})
-const focusNoteIfNeeded = () => { if (!isMobile()) focusNote() }
 const resetSendState = () => {
   sendSearch.value = ''
   sendDocs.value = []
@@ -248,8 +235,7 @@ const setPanelState = (panel: '' | 'card' | 'translate', extra: Record<string, a
 }
 const openSelectionEditor = () => {
   if (!state.selection) return
-  setPanelState('card', { currentMark: null, text: state.selection.text, note: '', isEditing: true })
-  focusNoteIfNeeded()
+  setPanelState('card', { currentMark: null, text: state.selection.text, note: '', tags: '', isEditing: true })
 }
 const closeAll = () => {
   props.ttsController?.cancelLoop()
@@ -263,11 +249,10 @@ const openSelectionPanel = async (selection: MarkSelection, anchor: SelectionAnc
   if (props.quickMarkMode) return await handleCopy(props.quickMarkColor, props.quickMarkStyle)
   if (sameSelection && state.showMenu && !state.showPanel && !state.showSendMenu) return
   closePanel()
-  Object.assign(state, { currentMark: null, isEditing: false, text: selection.text, note: '', showMenu: true, showSendMenu: false })
+  Object.assign(state, { currentMark: null, isEditing: false, text: selection.text, note: '', tags: '', showMenu: true, showSendMenu: false })
 }
 const openMarkPanel = (mark: Mark, x: number, y: number, edit = false) => {
   setPanelState('card', { ...markData(mark, { x, y, panelY: y, isEditing: edit }) })
-  if (edit) focusNoteIfNeeded()
 }
 
 const showShapeCard = (shape: any, pdfViewer: any) => {
@@ -301,13 +286,15 @@ const openMarkAtRect = (mark: Mark, rect: DOMRect, doc: Document, center = true,
   const anchor = getSelectionAnchor(rect, doc, center)
   openMarkPanel(mark, anchor.x, anchor.panelY || anchor.y, edit)
 }
-const checkSelection = (doc?: Document, _e?: MouseEvent) => {
+const checkSelection = (doc?: Document, e?: Event) => {
+  if (props.quickMarkMode && e && !['mouseup', 'touchend'].includes(e.type)) return
   const process = (targetDoc: Document, index?: number) => {
     const selection = targetDoc.defaultView?.getSelection()
     if (!selection || selection.isCollapsed || !selection.toString().trim()) {
       if (state.selection) {
         props.ttsController?.cancelLoop()
         state.selection = null
+        selectionDoc = null
       }
       if (state.showMenu && !state.showPanel && !state.showSendMenu) closeAll()
       return false
@@ -316,6 +303,7 @@ const checkSelection = (doc?: Document, _e?: MouseEvent) => {
       const range = selection.getRangeAt(0)
       const rect = range.getBoundingClientRect()
       const cfi = index !== undefined ? props.reader?.getView().getCFI(index, range) : undefined
+      selectionDoc = targetDoc
       openSelectionPanel({ text: selection.toString().trim(), location: { format: props.pdfViewer ? 'pdf' : 'epub', cfi } }, getSelectionAnchor(rect, targetDoc, index === undefined))
       return true
     } catch {
@@ -373,12 +361,14 @@ defineExpose({
 
 const handleCopy = async (color?: HighlightColor, style?: typeof state.style) => {
   if (!state.selection) return
-  const mark = await addSelectionMark(state.selection.text, color || 'blue', style || 'highlight')
-  if (mark) emit('copyMark', mark)
+  await addSelectionMark(state.selection.text, color || 'blue', style || 'highlight')
   if (!props.quickMarkMode) return closeAll()
   quickMarkCooldown = true
   setTimeout(() => { quickMarkCooldown = false }, 300)
+  selectionDoc?.defaultView?.getSelection()?.removeAllRanges()
   window.getSelection()?.removeAllRanges()
+  state.selection = null
+  selectionDoc = null
 }
 const toggleSendMenu = () => {
   state.showSendMenu = !state.showSendMenu
@@ -418,10 +408,10 @@ const handleTranslate = () => {
   setPanelState('translate')
 }
 const handleEdit = () => {
+  state.tags = formatTags((state.currentMark as any)?.tags)
   state.isEditing = true
-  focusNoteIfNeeded()
 }
-const handleCopyMark = () => state.currentMark ? emit('copyMark', state.currentMark) : emit('copy', state.text)
+const handleCopyMark = () => state.currentMark ? emit('copyMarkOnly', state.currentMark) : emit('copy', state.text)
 const handleOpenBlock = () => state.currentMark?.blockId && openBlock(state.currentMark.blockId)
 const handleShowFloat = (e: MouseEvent) => state.currentMark?.blockId && showFloat(state.currentMark.blockId, e.target as HTMLElement)
 const goToMark = () => {
@@ -433,7 +423,7 @@ const handleSave = async () => {
   if (!props.manager) return
   try {
     if (state.currentMark) {
-      const updates: any = { note: state.note.trim() || undefined, color: state.color }
+      const updates: any = { note: state.note.trim() || undefined, color: state.color, tags: parseTags(state.tags) }
       if (state.currentMark.type === 'shape') Object.assign(updates, { shapeType: state.shapeType, filled: isTextboxMark.value ? false : state.shapeFilled, text: isTextboxMark.value ? (state.text.trim() || '文本框') : undefined })
       else if (state.currentMark.type === 'ink') Object.assign(updates, { text: state.text.trim() || state.currentMark.text })
       else Object.assign(updates, { text: state.text.trim(), style: state.style })
@@ -442,14 +432,13 @@ const handleSave = async () => {
       Object.assign(state.currentMark, updates)
       showMessage(props.i18n?.saved || '已保存', 1000)
       state.isEditing = false
-      handleCopyMark()
       return
     }
     const args = selectionArgs()
     const pos = args?.[0]
     if (!pos) return showMessage('无法获取位置信息', 2000, 'error')
-    const mark = state.note.trim() ? await props.manager.addNote(pos, state.note.trim(), ...args.slice(1)) : await props.manager.addHighlight(...args)
-    if (mark) emit('copyMark', mark)
+    const tags = parseTags(state.tags)
+    await (state.note.trim() ? props.manager.addNote(pos, state.note.trim(), ...args.slice(1), tags) : props.manager.addHighlight(...args, tags))
     closeAll()
   } catch {
     showMessage(props.i18n?.saveError || '保存失败', 2000, 'error')
@@ -481,13 +470,11 @@ const handleImport = async () => {
 .send-input{margin:8px;width:calc(100% - 16px)}
 .send-empty{padding:16px 8px;text-align:center;color:var(--b3-theme-on-surface-variant);font-size:12px;opacity:.6}
 .send-item:hover{background:var(--b3-list-hover)}
-.sr-popup-panel{position:fixed;z-index:10002!important;width:340px;max-width:340px;pointer-events:auto;cursor:default;overflow:auto;box-sizing:border-box}
-.sr-popup-panel .sr-main{padding:12px;border-radius:8px;box-sizing:border-box;min-height:100%}
-.sr-popup-panel .sr-note{margin-bottom:8px;cursor:text}
-.sr-popup-panel .sr-btns{position:static;opacity:1;gap:8px}
-.sr-popup-panel .sr-btns button{display:flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:1px solid var(--b3-border-color);border-radius:4px;background:transparent}
-.sr-popup-panel .sr-btns button svg{width:14px;height:14px;display:block}
-.sr-popup-panel .sr-style-btn{width:36px;height:32px}
-.sr-popup-panel .sr-style-btn svg{width:16px;height:16px}
-.toolbar-divider{width:1px;height:24px;background:var(--b3-border-color);margin:0 4px}
+.sr-popup-panel{--sr-gap:4px;--sr-line:19px;position:fixed;z-index:10002!important;width:380px;max-width:min(380px,calc(100vw - 12px));pointer-events:auto;cursor:default;overflow:auto;box-sizing:border-box;padding:6px;border:1px solid #d8d8d8;border-radius:8px;background:#fff;box-shadow:none!important;transition:border-color .15s,background-color .15s}
+.sr-popup-panel:hover{border-color:#9fb0c1;background:#fbfdff;box-shadow:none!important}
+.sr-popup-panel>.sr-main{display:flex;flex-direction:column;gap:var(--sr-gap);box-sizing:border-box;min-height:100%}
+.sr-icon-actions{display:flex;align-items:center;gap:4px}
+.sr-icon-actions button{display:flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;border:none;border-radius:4px;background:transparent;color:#8a8a8a;line-height:1;cursor:pointer}
+.sr-icon-actions button:hover{background:#f4f4f4;color:#555}
+.sr-icon-actions svg{width:14px;height:14px}
 </style>

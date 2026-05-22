@@ -11,7 +11,7 @@ type HighlightColor='yellow'|'red'|'green'|'blue'|'purple'|'orange'|'pink'
 type MarkStyle='highlight'|'underline'|'outline'|'dotted'|'dashed'|'double'|'squiggly'
 type MarkType='bookmark'|'highlight'|'note'|'vocab'
 
-interface Mark{id:string;type:MarkType;format:Format;cfi?:string;section?:number;page?:number;rects?:Array<{page?:number;x:number;y:number;w:number;h:number}>;text?:string;color?:HighlightColor;style?:MarkStyle;note?:string;title?:string;timestamp:number;progress?:number;textOffset?:number;blockId?:string;chapter?:string;customOrder?:number}
+interface Mark{id:string;type:MarkType;format:Format;cfi?:string;section?:number;page?:number;rects?:Array<{page?:number;x:number;y:number;w:number;h:number}>;text?:string;color?:HighlightColor;style?:MarkStyle;note?:string;tags?:string[];title?:string;timestamp:number;progress?:number;textOffset?:number;blockId?:string;chapter?:string;customOrder?:number}
 
 export const COLORS=[{name:'黄色',color:'yellow'as const,bg:'#ffeb3b'},{name:'红色',color:'red'as const,bg:'#ef5350'},{name:'绿色',color:'green'as const,bg:'#66bb6a'},{name:'蓝色',color:'blue'as const,bg:'#42a5f5'},{name:'紫色',color:'purple'as const,bg:'#ab47bc'},{name:'橙色',color:'orange'as const,bg:'#ff9800'},{name:'粉色',color:'pink'as const,bg:'#ec407a'}]
 export const STYLES=[{type:'highlight'as const,name:'高亮',text:'A'},{type:'underline'as const,name:'下划线',text:'A'},{type:'outline'as const,name:'边框',text:'A'},{type:'dotted'as const,name:'点线',text:'A',pdfOnly:true},{type:'dashed'as const,name:'虚线',text:'A',pdfOnly:true},{type:'double'as const,name:'双线',text:'A',pdfOnly:true},{type:'squiggly'as const,name:'波浪线',text:'A',epubOnly:true}]
@@ -40,7 +40,7 @@ const getNoteColor=(color?:string)=>color==='purple'?'#ab47bc':'#2196f3'
 const getColorBg=(color?:HighlightColor)=>COLORS.find(c=>c.color===color)?.bg||'#ffeb3b'
 const cleanTooltips=(markId:string)=>document.querySelectorAll(`[data-note-tooltip][data-mark-id="${markId}"]`).forEach(el=>el.remove())
 const compactMarkRects=(rects?:Array<{page?:number;x:number;y:number;w:number;h:number}>)=>rects?.map(r=>({ ...r,x:compactNumber(r.x),y:compactNumber(r.y),w:compactNumber(r.w),h:compactNumber(r.h) }))
-
+const normalizeTags=(tags?:unknown[])=>Array.from(new Set((tags||[]).map(tag=>String(tag||'').trim()).filter(Boolean)))
 export const createTooltip=(config:{icon:string;iconColor:string;title:string;content:string;id?:string})=>{
   const{icon,iconColor,title,content,id}=config
   const header=`<div style="display:flex;align-items:center;gap:8px;padding:12px 14px;border-left:4px solid ${iconColor};background:linear-gradient(135deg,var(--b3-theme-surface) 0%,var(--b3-theme-background-light) 100%)"><svg style="width:16px;height:16px;color:${iconColor};flex-shrink:0;filter:drop-shadow(0 1px 2px ${iconColor}4d)"><use xlink:href="${icon}"/></svg><span style="font-size:13px;font-weight:600;color:var(--b3-theme-on-surface);text-shadow:0 1px 2px rgba(0,0,0,.05)">${title}</span>${id?`<span style="font-size:10px;color:var(--b3-theme-on-surface-variant);margin-left:auto;opacity:0.6;font-weight:400">${id}</span>`:''}</div>`
@@ -123,6 +123,7 @@ export class MarkManager{
           color:a.color as HighlightColor,
           style:data.style,
           note:a.note,
+          tags:normalizeTags(a.tags),
           timestamp:a.created,
           blockId:a.block,
           chapter:a.chapter,
@@ -148,6 +149,7 @@ export class MarkManager{
         loc:m.cfi||`${m.page||m.section||0}`,
         text:m.text||'',
         note:m.note||'',
+        tags:normalizeTags(m.tags),
         color:m.color||'yellow',
         data:{
           format:m.format,
@@ -173,7 +175,7 @@ export class MarkManager{
   }
 
   private add(m:Partial<Mark>):Mark{
-    const mark:Mark={id:m.id||`${m.type}-${Date.now()}-${Math.random().toString(36).slice(2,9)}`,format:this.format,type:m.type!,timestamp:Date.now(),...m}as Mark
+    const mark:Mark={id:m.id||`${m.type}-${Date.now()}-${Math.random().toString(36).slice(2,9)}`,format:this.format,type:m.type!,timestamp:Date.now(),...m,tags:normalizeTags(m.tags)}as Mark
     if(!mark.chapter&&mark.type!=='bookmark'){
       if(this.format==='pdf'&&mark.page){
         const view=this.pdfViewer?.getPDF?.(),toc=view?.flatToc||view?.toc
@@ -405,8 +407,8 @@ export class MarkManager{
 
 
 
-  async addHighlight(loc:string|number,text:string,color:HighlightColor,style:MarkStyle='highlight',rects?:any[],textOffset?:number):Promise<Mark>{
-    const m=this.add({type:'highlight',[typeof loc==='string'?'cfi':this.format==='pdf'?'page':'section']:loc,text,color,style,rects,textOffset})
+  async addHighlight(loc:string|number,text:string,color:HighlightColor,style:MarkStyle='highlight',rects?:any[],textOffset?:number,tags?:string[]):Promise<Mark>{
+    const m=this.add({type:'highlight',[typeof loc==='string'?'cfi':this.format==='pdf'?'page':'section']:loc,text,color,style,rects,textOffset,tags})
     this.undoStack.push({...m})
     if(this.undoStack.length>10)this.undoStack.shift()
     if(this.format==='pdf')this.renderPdfMark(m)
@@ -417,8 +419,8 @@ export class MarkManager{
     return m
   }
 
-  async addNote(loc:string|number,note:string,text:string,color:HighlightColor='blue',style:MarkStyle='outline',rects?:any[],textOffset?:number):Promise<Mark>{
-    const m=this.add({type:'note',[typeof loc==='string'?'cfi':this.format==='pdf'?'page':'section']:loc,text,note,color,style,rects,textOffset})
+  async addNote(loc:string|number,note:string,text:string,color:HighlightColor='blue',style:MarkStyle='outline',rects?:any[],textOffset?:number,tags?:string[]):Promise<Mark>{
+    const m=this.add({type:'note',[typeof loc==='string'?'cfi':this.format==='pdf'?'page':'section']:loc,text,note,color,style,rects,textOffset,tags})
     this.undoStack.push({...m})
     if(this.undoStack.length>10)this.undoStack.shift()
     if(this.format==='pdf')this.renderPdfMark(m)
@@ -432,8 +434,8 @@ export class MarkManager{
   private async tryAutoSync(m:Mark){
     if(m.type==='bookmark')return
     try{
-      const{autoSyncMark}=await import('@/utils/copy')
-      await autoSyncMark(m,{bookUrl:this.bookUrl,isPdf:this.format==='pdf',reader:this.reader,pdfViewer:this.pdfViewer,marks:this})
+      const{syncMarkOnCreate}=await import('@/utils/copy')
+      await syncMarkOnCreate(m,{bookUrl:this.bookUrl,isPdf:this.format==='pdf',reader:this.reader,pdfViewer:this.pdfViewer,marks:this})
     }catch(e){console.error('[AutoSync]',e)}
   }
 
@@ -455,6 +457,7 @@ export class MarkManager{
     const m=this.marksMap.get(keyOrMark)
     if(!m)return false
     Object.assign(m,updates)
+    m.tags=normalizeTags(m.tags)
     if(this.format==='pdf')this.renderPdfMark(m)
     else if(m.cfi){
       await this.view?.deleteAnnotation?.({value:m.cfi}).catch(()=>{})
@@ -488,12 +491,7 @@ export class MarkManager{
     if(!m||!await this.del(m.id))return false
     
     // 同步删除文档块
-    if(m.blockId){
-      try{
-        const{bookshelfManager}=await import('@/core/bookshelf'),book=await bookshelfManager.getBook(this.bookUrl)
-        if(book?.syncDelete){const{deleteBlock}=await import('@/api');await deleteBlock(m.blockId)}
-      }catch(e){console.error('[DeleteBlock]',e)}
-    }
+    if(m.blockId)try{await (await import('@/utils/copy')).syncMarkOnDelete(m)}catch(e){console.error('[DeleteBlock]',e)}
     
     // 删除词典卡包
     if(m.type==='vocab'&&m.text){

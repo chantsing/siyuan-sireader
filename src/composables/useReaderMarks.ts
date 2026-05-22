@@ -10,9 +10,9 @@ import { jump } from '@/utils/jump'
 
 type MarkSort = 'time' | 'date' | 'chapter' | 'page' | 'custom'
 type MarkType = 'highlight' | 'note' | 'bookmark' | 'ink' | 'shape'
-type MarkFilterKey = 'types' | 'colors' | 'textStyles' | 'shapeTypes' | 'note'
+type MarkFilterKey = 'types' | 'colors' | 'textStyles' | 'shapeTypes' | 'tags' | 'note'
 type MarkNoteFilter = 'all' | 'with-note'
-type FilterState = { types: MarkType[]; colors: string[]; textStyles: string[]; shapeTypes: string[]; note: MarkNoteFilter; sort: MarkSort }
+type FilterState = { types: MarkType[]; colors: string[]; textStyles: string[]; shapeTypes: string[]; tags: string[]; note: MarkNoteFilter; sort: MarkSort }
 
 export const MARK_SORT_OPTIONS = [
   { value: 'time', label: '时间' },
@@ -55,7 +55,7 @@ const COLOR_BUCKETS = [
 ] as const
 
 const ORDER_MAX = Number.MAX_SAFE_INTEGER
-const createFilter = (): FilterState => ({ types: [], colors: [], textStyles: [], shapeTypes: [], note: 'all', sort: 'time' })
+const createFilter = (): FilterState => ({ types: [], colors: [], textStyles: [], shapeTypes: [], tags: [], note: 'all', sort: 'time' })
 const isTextMark = (item: any) => item?.type === 'highlight' || item?.type === 'note'
 const isBookmark = (item: any) => item?.type === 'bookmark'
 const isVisualLeaf = (item: any) => item?.type === 'ink' || item?.type === 'shape'
@@ -65,7 +65,9 @@ const getType = (item: any): MarkType => item?.type === 'note' ? 'note' : item?.
 const rawColor = (item: any) => item?.color || item?.paths?.find((path: any) => path?.color)?.color || ''
 const colorBucket = (item: any) => COLOR_BUCKETS.find(bucket => bucket.aliases.includes(rawColor(item)))?.value || ''
 const toggleArray = (list: string[], value: string) => list.includes(value) ? list.splice(list.indexOf(value), 1) : list.push(value)
-
+const normalizeTags = (tags?: unknown[]) => Array.from(new Set((tags || []).map(tag => String(tag || '').trim()).filter(Boolean)))
+const parseTags = (value = '') => normalizeTags(value.split(/[#,，;；\n]/))
+const formatTags = (tags?: unknown[]) => normalizeTags(tags).join(', ')
 export const useReaderMarks = (i18n?: any) => {
   const { activeReader, activeView } = useReaderState()
   const keyword = ref('')
@@ -77,12 +79,11 @@ export const useReaderMarks = (i18n?: any) => {
   const dragState = ref({ from: '', over: '' })
   const refreshKey = ref(0)
   const editingId = ref('')
+  const syncingAll = ref(false)
   const editText = ref('')
   const editNote = ref('')
+  const editTags = ref('')
   const editColor = ref('yellow')
-  const editStyle = ref<'highlight' | 'underline' | 'outline' | 'dotted' | 'dashed' | 'double' | 'squiggly'>('highlight')
-  const editShapeType = ref<'rect' | 'circle' | 'triangle' | 'textbox'>('rect')
-  const editNoteRef = ref<HTMLTextAreaElement>()
   const shapeCache = new Map<string, string>()
   const inkCache = new Map<string, number>()
   const colors = getColorMap()
@@ -91,7 +92,6 @@ export const useReaderMarks = (i18n?: any) => {
   const isPdfMode = computed(() => !!(activeView.value as any)?.isPdf)
   const markSort = computed(() => markFilter.value.sort)
   const searchPlaceholder = '搜索标注、笔记、书签、墨迹、形状'
-  const shapeOptions = PDF_SHAPE_OPTIONS
   const getEditColorOptions = (isShape: boolean) => isShape
     ? PDF_SHAPE_COLORS.map(color => ({ key: color, value: color, bg: color }))
     : COLORS.map(color => ({ key: color.color, value: color.color, bg: color.bg }))
@@ -107,14 +107,15 @@ export const useReaderMarks = (i18n?: any) => {
     return [...bookmarks, ...annotations, ...inks, ...shapes]
   })
 
-  const searchText = (item: any) => [item?.title, item?.text, item?.note, item?.chapter, item?.key, item?.page && `page ${item.page}`].filter(Boolean).join(' ').toLowerCase()
-  const hasActiveFilters = computed(() => !!(markFilter.value.types.length || markFilter.value.colors.length || markFilter.value.textStyles.length || markFilter.value.shapeTypes.length || markFilter.value.note !== 'all' || markFilter.value.sort !== 'time' || markReverse.value))
+  const searchText = (item: any) => [item?.title, item?.text, item?.note, ...(item?.tags || []), item?.chapter, item?.key, item?.page && `page ${item.page}`].filter(Boolean).join(' ').toLowerCase()
+  const hasActiveFilters = computed(() => !!(markFilter.value.types.length || markFilter.value.colors.length || markFilter.value.textStyles.length || markFilter.value.shapeTypes.length || markFilter.value.tags.length || markFilter.value.note !== 'all' || markFilter.value.sort !== 'time' || markReverse.value))
   const filterLabel = computed(() => hasActiveFilters.value ? '筛选中' : '筛选')
   const typeMode = computed(() => TYPE_CYCLE.find(item => item.value === (markFilter.value.types.length === 1 ? markFilter.value.types[0] : null)) || TYPE_CYCLE[0])
   const toolbarMenuAction = computed(() => ({ id: 'type', icon: typeMode.value.icon, label: typeMode.value.label, tooltipDir: 'sw', active: !!typeMode.value.value }))
   const markGroupKeys = computed(() => Array.isArray(list.value) ? list.value.filter((item: any) => item?.isGroup).map((item: any) => item.key) : [])
   const markAllExpanded = computed(() => !!markGroupKeys.value.length && !markGroupKeys.value.some(key => !!collapsed.value[key]))
   const toolbarActions = computed(() => [
+    { id: 'syncAll', icon: '#iconDownload', label: i18n?.syncAll || '同步全部', active: syncingAll.value, show: pendingImportCount.value > 0 },
     { id: 'organize', icon: '#lucide-sliders-horizontal', label: filterLabel.value, active: showOrganize.value || hasActiveFilters.value },
     { id: 'expand', icon: markAllExpanded.value ? '#lucide-panel-top-close' : '#lucide-panel-top-open', label: markAllExpanded.value ? '折叠分组' : '展开分组', show: isGroupedMode.value },
     { id: 'reverse', icon: markReverse.value ? '#lucide-arrow-up-1-0' : '#lucide-arrow-down-0-1', label: markReverse.value ? '倒序' : '正序', active: markReverse.value },
@@ -125,6 +126,7 @@ export const useReaderMarks = (i18n?: any) => {
     (markFilter.value.colors.length && !markFilter.value.colors.includes(colorBucket(item))) ||
     (markFilter.value.textStyles.length && (!isTextMark(item) || !markFilter.value.textStyles.includes(item.style || 'highlight'))) ||
     (markFilter.value.shapeTypes.length && (item.type !== 'shape' || !markFilter.value.shapeTypes.includes(item.shapeType || 'rect'))) ||
+    (markFilter.value.tags.length && !markFilter.value.tags.some(tag => (item.tags || []).includes(tag))) ||
     (markFilter.value.note === 'with-note' && !item.note?.trim())
   )
 
@@ -187,13 +189,21 @@ export const useReaderMarks = (i18n?: any) => {
   const markFilterSections = computed(() => {
     const source = allEntries.value
     const countBy = (matcher: (item: any) => boolean) => source.filter(matcher).length
+    const tagCounts = new Map<string, number>()
+    source.forEach(item => normalizeTags(item?.tags || []).forEach(tag => tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1)))
     return [
       { key: 'types', label: '类型', options: TYPE_OPTIONS.map(opt => ({ ...opt, count: countBy(item => getType(item) === opt.value) })) },
       { key: 'colors', label: '颜色', options: COLOR_BUCKETS.map(opt => ({ value: opt.value, label: opt.label, count: countBy(item => colorBucket(item) === opt.value) })).filter(opt => opt.count > 0) },
       { key: 'textStyles', label: '文本样式', options: TEXT_STYLE_OPTIONS.map(opt => ({ ...opt, count: countBy(item => isTextMark(item) && (item.style || 'highlight') === opt.value) })).filter(opt => opt.count > 0) },
       { key: 'shapeTypes', label: '形状类型', options: SHAPE_TYPE_OPTIONS.map(opt => ({ ...opt, count: countBy(item => item.type === 'shape' && (item.shapeType || 'rect') === opt.value) })).filter(opt => opt.count > 0) },
+      { key: 'tags', label: '标签', options: [...tagCounts.entries()].map(([value, count]) => ({ value, label: `#${value}`, count })).sort((a, b) => b.count - a.count || a.value.localeCompare(b.value)).slice(0, 24) },
       { key: 'note', label: '附加条件', options: NOTE_OPTIONS.map(opt => ({ ...opt, count: opt.value === 'all' ? source.length : countBy(item => !!item.note?.trim()) })) },
     ] as Array<{ key: MarkFilterKey; label: string; options: Array<{ value: string; label: string; count: number }> }>
+  })
+  const markTagOptions = computed(() => {
+    const tags = new Set<string>()
+    allEntries.value.forEach(item => normalizeTags(item?.tags || []).forEach(tag => tags.add(tag)))
+    return [...tags].sort((a, b) => a.localeCompare(b)).slice(0, 24)
   })
 
   const emptyText = computed(() => keyword.value ? (i18n?.notFound || '未找到标注') : (i18n?.empty || '暂无标注'))
@@ -240,7 +250,6 @@ export const useReaderMarks = (i18n?: any) => {
 
   const isEditing = (item: any) => editingId.value === getKey(item)
   const showEditOptions = (item: any) => item?.type === 'shape' || item?.type === 'highlight' || item?.type === 'note' || !item?.type
-  const showTime = (item: any) => markSort.value === 'time' && !isVisualGroup(item)
   const getBarColor = (item: any) => item.type === 'ink-group' ? '#ff9800' : item.type === 'shape-group' ? '#2196f3' : (colors[isEditing(item) ? editColor.value : item.color] || 'var(--b3-theme-primary)')
   const mainText = (item: any) => {
     if (item.type === 'ink-group') return `墨迹标注 · 第${item.page}页`
@@ -248,31 +257,37 @@ export const useReaderMarks = (i18n?: any) => {
     return item.text || item.title || '无内容'
   }
   const canEdit = (item: any) => !isBookmark(item) && !isVisualGroup(item)
-  const canCopy = (item: any) => !isVisualGroup(item)
   const canImport = (item: any) => !isBookmark(item)
+  const pendingImportMarks = computed(() => allEntries.value.filter(item => canImport(item) && !item.blockId))
+  const pendingImportCount = computed(() => pendingImportMarks.value.length)
   const showMsg = (msg: string, type: 'info' | 'error' = 'info') => showMessage(msg, type === 'error' ? 3000 : 1500, type)
 
   const startEdit = (item: any) => {
     editingId.value = getKey(item)
     editText.value = item.text || ''
     editNote.value = item.note || ''
+    editTags.value = formatTags(item.tags)
     editColor.value = item.color || 'yellow'
-    editStyle.value = item.style || 'highlight'
-    editShapeType.value = item.shapeType || 'rect'
-    nextTick(() => editNoteRef.value?.focus())
   }
   const cancelEdit = () => editingId.value = ''
+  const editTagList = computed(() => parseTags(editTags.value))
+  const setEditTags = (tags: string[]) => editTags.value = formatTags(tags)
+  const toggleEditTag = (tag: string) => {
+    const tags = editTagList.value
+    setEditTags(tags.includes(tag) ? tags.filter(item => item !== tag) : [...tags, tag])
+  }
   const getUrl = () => (window as any).__currentBookUrl || ''
 
   const saveEdit = async (item: any) => {
     try {
-      const updates: any = { color: editColor.value, note: editNote.value.trim() || undefined }
+      const updates: any = { color: editColor.value, note: editNote.value.trim() || undefined, tags: parseTags(editTags.value) }
       if (item.type === 'shape') {
-        updates.shapeType = editShapeType.value
-        updates.text = editShapeType.value === 'textbox' ? (editText.value.trim() || '文本框') : undefined
+        updates.shapeType = item.shapeType || 'rect'
+        updates.filled = item.shapeType === 'textbox' ? false : !!item.filled
+        updates.text = item.shapeType === 'textbox' ? (editText.value.trim() || '文本框') : undefined
       } else {
         updates.text = editText.value.trim()
-        updates.style = editStyle.value
+        updates.style = item.style || 'highlight'
       }
       const { saveMarkEdit } = await import('@/utils/copy')
       await saveMarkEdit(item, updates, { marks: marks.value, bookUrl: getUrl(), isPdf: isPdfMode.value, reader: activeReader.value, pdfViewer: (activeView.value as any)?.viewer, shapeCache })
@@ -291,6 +306,27 @@ export const useReaderMarks = (i18n?: any) => {
     const url = getUrl()
     await doImport(item, { bookUrl: url, bookInfo: url ? await bookshelfManager.getBook(url) : null, isPdf: isPdfMode.value, reader: activeReader.value, pdfViewer: (activeView.value as any)?.viewer, shapeCache, showMsg, i18n, marks: marks.value })
     refreshKey.value++
+  }
+  const syncAllMarks = async () => {
+    if (syncingAll.value) return
+    const url = getUrl()
+    if (!url) return
+    const book = await bookshelfManager.getBook(url)
+    const items = pendingImportMarks.value.slice()
+    if (!items.length) return
+    syncingAll.value = true
+    try {
+      const { importMark: doImport } = await import('@/utils/copy')
+      let count = 0
+      for (const item of items) {
+        const blockId = await doImport(item, { bookUrl: url, bookInfo: book, isPdf: isPdfMode.value, reader: activeReader.value, pdfViewer: (activeView.value as any)?.viewer, shapeCache, showMsg: () => {}, i18n, marks: marks.value })
+        if (blockId) count++
+      }
+      refreshKey.value++
+      showMsg(count ? `${i18n?.syncAll || '同步全部'} ${count}/${items.length}` : (i18n?.importFailed || '导入失败'), count ? 'info' : 'error')
+    } finally {
+      syncingAll.value = false
+    }
   }
   const deleteMark = async (item: any) => {
     if (!marks.value) return showMsg('标注系统未初始化', 'error')
@@ -315,13 +351,15 @@ export const useReaderMarks = (i18n?: any) => {
   const isMarkFilterActive = (key: MarkFilterKey, value: string) => key === 'note' ? markFilter.value.note === value : markFilter.value[key].includes(value)
   const toggleMarkFilterItem = (key: MarkFilterKey, value: string) => key === 'note' ? markFilter.value.note = value as MarkNoteFilter : toggleArray(markFilter.value[key], value)
   const resetMarkOrganize = () => { markFilter.value = createFilter(); markReverse.value = false }
+  const getMarkTags = (item: any) => normalizeTags(item?.tags || [])
   const cycleTypeFilter = () => {
     const index = TYPE_CYCLE.findIndex(item => item.value === (markFilter.value.types.length === 1 ? markFilter.value.types[0] : null))
     const next = TYPE_CYCLE[(index + 1) % TYPE_CYCLE.length]
     markFilter.value.types = next.value ? [next.value] : []
   }
   const handleToolbarAction = (id: string) => {
-    if (id === 'organize') showOrganize.value = !showOrganize.value
+    if (id === 'syncAll') void syncAllMarks()
+    else if (id === 'organize') showOrganize.value = !showOrganize.value
     else if (id === 'type') cycleTypeFilter()
     else if (id === 'expand') toggleGroups()
     else if (id === 'reverse') markReverse.value = !markReverse.value
@@ -351,7 +389,6 @@ export const useReaderMarks = (i18n?: any) => {
 
   return {
     MARK_SORT_OPTIONS,
-    STYLES,
     keyword,
     searchPlaceholder,
     toolbarMenuAction,
@@ -370,28 +407,25 @@ export const useReaderMarks = (i18n?: any) => {
     dropMark,
     endMarkDrag,
     getBarColor,
-    markSort,
-    showTime,
     isVisualGroup,
     isExpanded,
     toggleExpand,
     isEditing,
     editText,
     editNote,
-    editNoteRef,
+    editTags,
+    editTagList,
     startEdit,
     cancelEdit,
     showEditOptions,
     getEditColorOptions,
     editColor,
-    shapeOptions,
-    editShapeType,
-    editStyle,
+    markTagOptions,
+    toggleEditTag,
     isPdfMode,
     saveEdit,
     mainText,
     copyMark,
-    canCopy,
     canEdit,
     isBookmark,
     openBlock,
@@ -406,6 +440,7 @@ export const useReaderMarks = (i18n?: any) => {
     isMarkFilterActive,
     toggleMarkFilterItem,
     resetMarkOrganize,
+    getMarkTags,
     goTo,
   }
 }

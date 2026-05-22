@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="sr-shell" :class="`nav-${props.navPosition || 'left'}`">
     <nav v-if="props.tabs?.length" class="sr-nav">
       <button

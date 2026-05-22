@@ -1,7 +1,7 @@
 <template>
   <DockShell
     class="sr-search"
-    body-class="sr-body-scroll sr-body-pad-12"
+    body-class="sr-body-scroll sr-body-pad-8"
     v-model:search-value="keyword"
     :search-placeholder="i18n.searchPlaceholder || TEXT.searchPlaceholder"
     :search-disabled="searching"
@@ -241,10 +241,6 @@ onUnmounted(() => window.removeEventListener('http-sources-updated', loadHttpSou
 @use './deck/deck.scss';
 
 .sr-search{position:relative;display:flex;flex-direction:column;height:100%;overflow:hidden;background:var(--b3-theme-background)}
-.sr-toolbar{display:flex;gap:8px;padding:8px 8px 0;align-items:center;border-bottom:1px solid var(--b3-border-color);flex-shrink:0}
-.sr-toolbar input{flex:1;min-width:0;height:28px;padding:0 10px;border:none;border-bottom:1px solid var(--b3-border-color);background:transparent;font-size:12px;outline:none;color:var(--b3-theme-on-background);transition:border-color .2s;box-sizing:border-box}
-.sr-toolbar input:focus{border-color:var(--b3-theme-primary)}
-.sr-toolbar input::placeholder{color:var(--b3-theme-on-surface-variant);opacity:.6}
 .sr-select{position:relative;display:flex;flex:0 0 auto}
 .sr-menu{position:absolute;top:34px;right:0;min-width:180px;padding:6px;background:var(--b3-theme-surface);border:1px solid var(--b3-border-color);border-radius:8px;box-shadow:0 8px 24px #0002;z-index:20}
 .sr-menu-item{padding:8px 10px;border-radius:6px;cursor:pointer;font-size:12px}

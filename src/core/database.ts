@@ -42,8 +42,6 @@ export interface Book {
   groups: string[]
   bindDocId?: string
   bindDocName?: string
-  autoSync?: boolean
-  syncDelete?: boolean
   annotationCount?: number
 }
 
@@ -56,6 +54,7 @@ export interface Annotation {
   loc: string
   text: string
   note: string
+  tags?: string[]
   color: string
   data: any
   created: number
@@ -103,8 +102,6 @@ const emptyBook = (book: Partial<Book> & Pick<Book, 'url' | 'title' | 'format' |
   groups: [],
   bindDocId: '',
   bindDocName: '',
-  autoSync: false,
-  syncDelete: false,
 })
 
 export class ReaderDatabase {
@@ -231,8 +228,6 @@ export class ReaderDatabase {
       groups: Array.from(new Set(book.groups || [])),
       bindDocId: book.bindDocId || '',
       bindDocName: book.bindDocName || '',
-      autoSync: !!book.autoSync,
-      syncDelete: !!book.syncDelete,
     }
   }
 
@@ -410,6 +405,7 @@ export class ReaderDatabase {
       loc: annotation.loc || '',
       text: annotation.text || '',
       note: annotation.note || '',
+      tags: Array.from(new Set((annotation.tags || []).map(tag => String(tag || '').trim()).filter(Boolean))),
       color: annotation.color || '',
       data: annotation.data || {},
       created: annotation.created || now,

@@ -53,7 +53,7 @@ index b648a0da4c07a85d04c53b9be5dbdc0c60b7d47a..bd39a397ee04ae843d016be8ea337632
      }
      #render(side = this.#side) {
 diff --git a/paginator.js b/paginator.js
-index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..01fa66916657dc1fbc6246f1f3de542685085063 100644
+index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..c99e03ad0460c3c2a9e7bcac385cfd3ac28cf926 100644
 --- a/paginator.js
 +++ b/paginator.js
 @@ -197,6 +197,31 @@ const setStylesImportant = (el, styles) => {
@@ -124,8 +124,250 @@ index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..01fa66916657dc1fbc6246f1f3de5426
              'margin': 'auto',
          })
          this.setImageSize()
-@@ -877,10 +903,16 @@ export class Paginator extends HTMLElement {
-     #onTouchStart(e) {
+@@ -423,9 +450,13 @@ export class Paginator extends HTMLElement {
+     #top
+     #background
+     #container
++    #preload
+     #header
+     #footer
++    #prevView
+     #view
++    #nextView
++    #prevBuffer
+     #vertical = false
+     #rtl = false
+     #margin = 0
+@@ -441,6 +472,11 @@ export class Paginator extends HTMLElement {
+     #touchState
+     #touchScrolled
+     #lastVisibleRange
++    #lastScrollValue = 0
++    #lastScrollDelta = 0
++    #windowAdjusting = false
++    #prevViewLoading
++    #nextViewLoading
+     constructor() {
+         super()
+         this.#root.innerHTML = `<style>
+@@ -500,10 +536,20 @@ export class Paginator extends HTMLElement {
+             grid-row: 2;
+             overflow: hidden;
+         }
++        #preload {
++            display: none;
++        }
+         :host([flow="scrolled"]) #container {
+             grid-column: 1 / -1;
+             grid-row: 1 / -1;
+             overflow: auto;
++            scrollbar-width: none;
++            -ms-overflow-style: none;
++        }
++        :host([flow="scrolled"]) #container::-webkit-scrollbar {
++            display: none;
++            width: 0;
++            height: 0;
+         }
+         #header {
+             grid-column: 3 / 4;
+@@ -537,6 +583,7 @@ export class Paginator extends HTMLElement {
+             <div id="background" part="filter"></div>
+             <div id="header"></div>
+             <div id="container" part="container"></div>
++            <div id="preload" aria-hidden="true"></div>
+             <div id="footer"></div>
+         </div>
+         `
+@@ -544,13 +591,20 @@ export class Paginator extends HTMLElement {
+         this.#top = this.#root.getElementById('top')
+         this.#background = this.#root.getElementById('background')
+         this.#container = this.#root.getElementById('container')
++        this.#preload = this.#root.getElementById('preload')
+         this.#header = this.#root.getElementById('header')
+         this.#footer = this.#root.getElementById('footer')
+ 
+         this.#observer.observe(this.#container)
+-        this.#container.addEventListener('scroll', () => this.dispatchEvent(new Event('scroll')))
++        this.#container.addEventListener('scroll', () => {
++            const value = this.containerPosition
++            this.#lastScrollDelta = value - this.#lastScrollValue
++            this.#lastScrollValue = value
++            this.dispatchEvent(new Event('scroll'))
++        })
+         this.#container.addEventListener('scroll', debounce(() => {
+             if (this.scrolled) {
++                if (this.#windowAdjusting) return
+                 if (this.#justAnchored) this.#justAnchored = false
+                 else this.#afterScroll('scroll')
+             }
+@@ -656,17 +710,147 @@ export class Paginator extends HTMLElement {
+                     `break-${x}: ${y ?? ''}column`))
+         })
+     }
+-    #createView() {
+-        if (this.#view) {
+-            this.#view.destroy()
+-            this.#container.removeChild(this.#view.element)
++    #removeView(view, unload = true) {
++        if (!view) return
++        try { view.destroy() } catch {}
++        if (view.element?.parentNode === this.#container)
++            this.#container.removeChild(view.element)
++        if (unload && Number.isInteger(view.index))
++            this.sections[view.index]?.unload?.()
++    }
++    #clearViews(unload = true) {
++        this.#removeView(this.#prevBuffer, unload)
++        this.#prevBuffer = null
++        this.#removeView(this.#prevView, unload)
++        this.#prevView = null
++        this.#removeView(this.#nextView, unload)
++        this.#nextView = null
++        this.#removeView(this.#view, unload)
++        this.#view = null
++    }
++    #getLoadedViews() {
++        return [this.#prevView, this.#view, this.#nextView].filter(Boolean)
++    }
++    #getViewSize(view) {
++        return view?.element?.getBoundingClientRect?.()[this.sideProp] ?? 0
++    }
++    #getViewOffset(target) {
++        let offset = 0
++        for (const view of this.#getLoadedViews()) {
++            if (view === target) return offset
++            offset += this.#getViewSize(view)
++        }
++        return offset
++    }
++    #getViewRange(target = this.#view) {
++        const start = this.#getViewOffset(target)
++        return { start, end: start + this.#getViewSize(target) }
++    }
++    #getSectionFraction(target = this.#view) {
++        const size = this.#getViewSize(target)
++        if (!size) return 0
++        const { start } = this.#getViewRange(target)
++        return Math.max(0, Math.min(1, (this.start - start) / size))
++    }
++    async #runWindowAdjustment(fn) {
++        this.#windowAdjusting = true
++        try {
++            return await fn()
++        } finally {
++            this.#lastScrollValue = this.containerPosition
++            this.#lastScrollDelta = 0
++            this.#windowAdjusting = false
++        }
++    }
++    async #ensurePrevView() {
++        if (!this.scrolled || !this.#view || this.#prevView || this.#prevBuffer) return
++        const index = this.#adjacentIndex(-1)
++        if (index == null) return
++        this.#prevBuffer = await (this.#prevViewLoading ??= this.#loadViewAt(index, {
++            prepend: true,
++            syncAnchor: false,
++            mount: 'preload',
++        })).finally(() => this.#prevViewLoading = null)
++    }
++    async #activatePrevBuffer() {
++        if (!this.#prevBuffer || this.#prevView) return
++        const view = this.#prevBuffer
++        this.#prevBuffer = null
++        const position = this.containerPosition
++        await this.#runWindowAdjustment(async () => {
++            this.#container.prepend(view.element)
++            this.#prevView = view
++            this.containerPosition = position + (this.#vertical ? -1 : 1) * this.#getViewSize(view)
++        })
++    }
++    async #ensureNextView() {
++        if (!this.scrolled || !this.#view) return
++        if (!this.#nextView) {
++            const index = this.#adjacentIndex(1)
++            if (index != null)
++                this.#nextView = await (this.#nextViewLoading ??= this.#loadViewAt(index, { syncAnchor: false }))
++                    .finally(() => this.#nextViewLoading = null)
++        }
++    }
++    async #ensureWindow() {
++        await this.#ensurePrevView()
++        await this.#ensureNextView()
++    }
++    async #shiftWindowBackward() {
++        if (!this.#prevView) return
++        const oldNext = this.#nextView
++        this.#nextView = this.#view
++        this.#view = this.#prevView
++        this.#prevView = null
++        this.#index = this.#view.index
++        if (oldNext) this.#removeView(oldNext)
++        await this.#ensureWindow()
++    }
++    async #shiftWindowForward() {
++        if (!this.#nextView) return
++        const oldPrev = this.#prevView
++        const shift = this.#getViewSize(oldPrev)
++        this.#prevView = this.#view
++        this.#view = this.#nextView
++        this.#nextView = null
++        this.#index = this.#view.index
++        if (oldPrev) {
++            this.#removeView(oldPrev)
++            this.containerPosition += this.#vertical ? shift : -shift
+         }
+-        this.#view = new View({
++        await this.#ensureWindow()
++    }
++    #createView(syncAnchor = true) {
++        return new View({
+             container: this,
+-            onExpand: () => this.#scrollToAnchor(this.#anchor),
++            onExpand: () => syncAnchor ? this.#scrollToAnchor(this.#anchor) : null,
+         })
+-        this.#container.append(this.#view.element)
+-        return this.#view
++    }
++    async #loadViewAt(index, { prepend = false, syncAnchor = true, onLoad, mount = 'container' } = {}) {
++        const view = this.#createView(syncAnchor)
++        view.index = index
++        const host = mount === 'preload' ? this.#preload : this.#container
++        if (mount === 'preload') host.append(view.element)
++        else prepend ? host.prepend(view.element) : host.append(view.element)
++        const afterLoad = doc => {
++            if (doc.head) {
++                const $styleBefore = doc.createElement('style')
++                doc.head.prepend($styleBefore)
++                const $style = doc.createElement('style')
++                doc.head.append($style)
++                this.#styleMap.set(doc, [$styleBefore, $style])
++            }
++            onLoad?.({ doc, index })
++        }
++        await view.load(await this.sections[index].load(), afterLoad, this.#beforeRender.bind(this))
++        this.dispatchEvent(new CustomEvent('create-overlayer', {
++            detail: {
++                doc: view.document, index,
++                attach: overlayer => view.overlayer = overlayer,
++            },
++        }))
++        this.setStyles(this.#styles)
++        return view
+     }
+     #replaceBackground(background, columnCount) {
+         const doc = this.#view?.document
+@@ -794,6 +978,9 @@ export class Paginator extends HTMLElement {
+         return this.#container.getBoundingClientRect()[this.sideProp]
+     }
+     get viewSize() {
++        if (this.scrolled)
++            return this.#getLoadedViews()
++                .reduce((sum, view) => sum + this.#getViewSize(view), 0)
+         return this.#view.element.getBoundingClientRect()[this.sideProp]
+     }
+     get start() {
+@@ -851,8 +1038,11 @@ export class Paginator extends HTMLElement {
          const touch = e.changedTouches[0]
          this.#touchState = {
              x: touch?.screenX, y: touch?.screenY,
@@ -137,8 +379,7 @@ index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..01fa66916657dc1fbc6246f1f3de5426
          }
      }
      #onTouchMove(e) {
-         const state = this.#touchState
-@@ -910,6 +942,8 @@ export class Paginator extends HTMLElement {
+@@ -876,6 +1066,8 @@ export class Paginator extends HTMLElement {
          const dt = e.timeStamp - state.t
          state.x = x
          state.y = y
@@ -147,7 +388,7 @@ index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..01fa66916657dc1fbc6246f1f3de5426
          state.t = e.timeStamp
          state.vx = dx / dt
          state.vy = dy / dt
-@@ -919,7 +953,22 @@ export class Paginator extends HTMLElement {
+@@ -886,7 +1078,28 @@ export class Paginator extends HTMLElement {
              this.scrollBy(0, dy)
          }
      }
@@ -172,6 +413,177 @@ index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..01fa66916657dc1fbc6246f1f3de5426
 +                return
 +            }
 +        }
++        const velocity = state ? { vx: state.vx, vy: state.vy } : { vx: 0, vy: 0 }
 +        this.#touchState = null
          this.#touchScrolled = false
          if (this.scrolled) return
+ 
+@@ -895,13 +1108,13 @@ export class Paginator extends HTMLElement {
+         // anything that doesn't work
+         requestAnimationFrame(() => {
+             if (globalThis.visualViewport.scale === 1)
+-                this.snap(this.#touchState.vx, this.#touchState.vy)
++                this.snap(velocity.vx, velocity.vy)
+         })
+     }
+     // allows one to process rects as if they were LTR and horizontal
+-    #getRectMapper() {
++    #getRectMapper(view = this.#view) {
+         if (this.scrolled) {
+-            const size = this.viewSize
++            const size = this.#getViewSize(view)
+             const margin = this.#margin
+             return this.#vertical
+                 ? ({ left, right }) =>
+@@ -918,7 +1131,7 @@ export class Paginator extends HTMLElement {
+     }
+     async #scrollToRect(rect, reason) {
+         if (this.scrolled) {
+-            const offset = this.#getRectMapper()(rect).left - this.#margin
++            const offset = this.#getViewOffset(this.#view) + this.#getRectMapper(this.#view)(rect).left - this.#margin
+             return this.#scrollTo(offset, reason)
+         }
+         const offset = this.#getRectMapper()(rect).left
+@@ -968,7 +1181,9 @@ export class Paginator extends HTMLElement {
+         }
+         // if anchor is a fraction
+         if (this.scrolled) {
+-            await this.#scrollTo(anchor * this.viewSize, reason)
++            const { start, end } = this.#getViewRange(this.#view)
++            const size = end - start
++            await this.#scrollTo(start + anchor * size, reason)
+             return
+         }
+         const { pages } = this
+@@ -978,13 +1193,28 @@ export class Paginator extends HTMLElement {
+         await this.#scrollToPage(newPage + 1, reason)
+     }
+     #getVisibleRange() {
+-        if (this.scrolled) return getVisibleRange(this.#view.document,
+-            this.start + this.#margin, this.end - this.#margin, this.#getRectMapper())
++        if (this.scrolled) {
++            const { start, end } = this.#getViewRange(this.#view)
++            const viewStart = Math.max(0, this.start - start) + this.#margin
++            const viewEnd = Math.min(end - start, this.end - start) - this.#margin
++            return getVisibleRange(this.#view.document,
++                Math.max(0, viewStart), Math.max(0, viewEnd), this.#getRectMapper(this.#view))
++        }
+         const size = this.#rtl ? -this.size : this.size
+         return getVisibleRange(this.#view.document,
+             this.start - size, this.end - size, this.#getRectMapper())
+     }
+-    #afterScroll(reason) {
++    async #afterScroll(reason) {
++        if (this.scrolled) {
++            if (!this.#prevView && this.#prevBuffer && this.start <= this.size * 0.75)
++                await this.#activatePrevBuffer()
++            const midpoint = this.start + this.size / 2
++            const current = this.#getViewRange(this.#view)
++            if (this.#prevView && midpoint < current.start)
++                await this.#shiftWindowBackward()
++            else if (this.#nextView && midpoint >= current.end)
++                await this.#shiftWindowForward()
++        }
+         const range = this.#getVisibleRange()
+         this.#lastVisibleRange = range
+         // don't set new anchor if relocation was to scroll to anchor
+@@ -994,7 +1224,7 @@ export class Paginator extends HTMLElement {
+ 
+         const index = this.#index
+         const detail = { reason, range, index }
+-        if (this.scrolled) detail.fraction = this.start / this.viewSize
++        if (this.scrolled) detail.fraction = this.#getSectionFraction()
+         else if (this.pages > 0) {
+             const { page, pages } = this
+             this.#header.style.visibility = page > 1 ? 'visible' : 'hidden'
+@@ -1008,7 +1238,13 @@ export class Paginator extends HTMLElement {
+         this.#index = index
+         const hasFocus = this.#view?.document?.hasFocus()
+         if (src) {
++            this.#clearViews(false)
++            this.#lastScrollValue = 0
++            this.#lastScrollDelta = 0
++            this.#windowAdjusting = false
+             const view = this.#createView()
++            this.#view = view
++            this.#container.append(view.element)
+             const afterLoad = doc => {
+                 if (doc.head) {
+                     const $styleBefore = doc.createElement('style')
+@@ -1021,6 +1257,7 @@ export class Paginator extends HTMLElement {
+             }
+             const beforeRender = this.#beforeRender.bind(this)
+             await view.load(src, afterLoad, beforeRender)
++            view.index = index
+             this.dispatchEvent(new CustomEvent('create-overlayer', {
+                 detail: {
+                     doc: view.document, index,
+@@ -1031,6 +1268,8 @@ export class Paginator extends HTMLElement {
+         }
+         await this.scrollToAnchor((typeof anchor === 'function'
+             ? anchor(this.#view.document) : anchor) ?? 0, select)
++        await this.#ensureNextView()
++        this.#ensurePrevView().catch(() => {})
+         if (hasFocus) this.focusView()
+     }
+     #canGoToIndex(index) {
+@@ -1125,40 +1364,35 @@ export class Paginator extends HTMLElement {
+         return this.goTo({ index })
+     }
+     getContents() {
+-        if (this.#view) return [{
+-            index: this.#index,
+-            overlayer: this.#view.overlayer,
+-            doc: this.#view.document,
+-        }]
++        const views = [this.#prevView, this.#view, this.#nextView].filter(Boolean)
++        if (views.length) return views.map(view => ({
++            index: view.index,
++            overlayer: view.overlayer,
++            doc: view.document,
++        }))
+         return []
+     }
+     setStyles(styles) {
+         this.#styles = styles
+-        const $$styles = this.#styleMap.get(this.#view?.document)
+-        if (!$$styles) return
+-        const [$beforeStyle, $style] = $$styles
+-        if (Array.isArray(styles)) {
+-            const [beforeStyle, style] = styles
+-            $beforeStyle.textContent = beforeStyle
+-            $style.textContent = style
+-        } else $style.textContent = styles
+-
+-        // NOTE: needs `requestAnimationFrame` in Chromium
+-        requestAnimationFrame(() => {
+-            this.#replaceBackground(this.#view.docBackground, this.columnCount)
+-        })
+-
+-        // needed because the resize observer doesn't work in Firefox
+-        this.#view?.document?.fonts?.ready?.then(() => this.#view.expand())
++        for (const view of [this.#prevView, this.#view, this.#nextView].filter(Boolean)) {
++            const $$styles = this.#styleMap.get(view?.document)
++            if (!$$styles) continue
++            const [$beforeStyle, $style] = $$styles
++            if (Array.isArray(styles)) {
++                const [beforeStyle, style] = styles
++                $beforeStyle.textContent = beforeStyle
++                $style.textContent = style
++            } else $style.textContent = styles
++            view?.document?.fonts?.ready?.then(() => view.expand())
++        }
++        requestAnimationFrame(() => this.#replaceBackground(this.#view?.docBackground, this.columnCount))
+     }
+     focusView() {
+         this.#view.document.defaultView.focus()
+     }
+     destroy() {
+         this.#observer.unobserve(this)
+-        this.#view.destroy()
+-        this.#view = null
+-        this.sections[this.#index]?.unload?.()
++        this.#clearViews()
+         this.#mediaQuery.removeEventListener('change', this.#mediaQueryListener)
+     }
+ }

@@ -512,8 +512,6 @@ const normalizeLegacyBook = (row: any) => {
     groups: [] as string[],
     bindDocId: asString(row.bindDocId),
     bindDocName: asString(row.bindDocName),
-    autoSync: asBool(row.autoSync),
-    syncDelete: asBool(row.syncDelete),
   }
 }
 
@@ -636,8 +634,6 @@ async function migrateBook(bookIndex: any, raw: any) {
     groups: data.groups || ['default'],
     bindDocId: data.bindDocId || '',
     bindDocName: data.bindDocName || '',
-    autoSync: !!data.autoSync,
-    syncDelete: !!data.syncDelete,
   }
 
   return {
@@ -817,7 +813,7 @@ async function migrateFromLegacyDb(files: Array<{ key: typeof DB_KEYS[number], b
   const legacyBooks = queryRowsSafe(legacy, 'books', [
     'url', 'bookUrl', 'id', 'title', 'name', 'author', 'cover', 'coverUrl', 'format', 'path', 'filePath', 'size', 'fileSize',
     'added', 'addTime', 'read', 'durChapterTime', 'finished', 'status', 'progress', 'epubProgress', 'time', 'chapter',
-    'durChapterIndex', 'total', 'totalChapterNum', 'pos', 'source', 'rating', 'meta', 'bindDocId', 'bindDocName', 'autoSync', 'syncDelete',
+    'durChapterIndex', 'total', 'totalChapterNum', 'pos', 'source', 'rating', 'meta', 'bindDocId', 'bindDocName',
   ], 'added DESC')
   const tags = getTableColumns(legacy, 'tags').length ? queryRowsSafe(legacy, 'tags', ['book', 'tag']) : []
   const groups = getTableColumns(legacy, 'groups').length ? queryRowsSafe(legacy, 'groups', ['book', 'gid']) : []

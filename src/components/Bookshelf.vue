@@ -9,27 +9,27 @@
     @click="closePopups"
     @toolbar-action="handleToolbarAction"
   >
-    <Transition name="fade" mode="out-in">
-      <div v-if="!displayItems.length" key="empty" class="sr-empty">
-        <div>{{ keyword ? '未找到内容' : '暂无内容' }}</div>
-        <div v-if="!keyword" class="sr-empty-hint">暂无书籍，点击右上角添加内容</div>
-      </div>
+      <Transition name="fade">
+        <div v-if="!displayItems.length" class="sr-empty">
+          <div>{{ keyword ? '未找到内容' : '暂无内容' }}</div>
+          <div v-if="!keyword" class="sr-empty-hint">暂无书籍，点击右上角添加内容</div>
+        </div>
 
-      <component
-        :is="View"
-        v-else
-        :key="viewMode === 'grid' ? 'grid' : viewMode"
-        v-bind="viewProps"
-        @select-group="setGroup"
-        @book-click="readBook"
-        @book-menu="showContextMenu"
-        @group-menu="showGroupMenu"
-        @clear-delete="clearConfirmDelete"
-        @remove-book="removeBook"
-        @move-book-group="moveBookToGroup"
-        @move-book-home="moveBookToHome"
-      />
-    </Transition>
+        <component
+          :is="View"
+          v-else
+          :key="`${viewMode}-${currentGroup || 'root'}`"
+          v-bind="viewProps"
+          @select-group="setGroup"
+          @book-click="readBook"
+          @book-menu="showContextMenu"
+          @group-menu="showGroupMenu"
+          @clear-delete="clearConfirmDelete"
+          @remove-book="removeBook"
+          @move-book-group="moveBookToGroup"
+          @move-book-home="moveBookToHome"
+        />
+      </Transition>
 
     <template #overlay>
       <Transition name="fade">
@@ -92,9 +92,9 @@
                 <span class="ft__secondary">现有分组</span>
                 <template v-for="g in groups" :key="g.id">
                   <div class="sr-group-item">
-                    <button class="b3-button b3-button--outline sr-grow sr-group-label" type="button" @click="setGroup(g.id, true)">
+                    <button class="b3-button sr-grow sr-group-label" :class="g.type === 'smart' ? 'b3-button--cancel' : 'b3-button--outline'" type="button" @click="setGroup(g.id, true)">
                       <strong>{{ g.name }}</strong>
-                      <span class="sr-entry-meta"> · {{ g.type === 'smart' ? '智能分组' : '普通分组' }} · {{ groupCounts[g.id] || 0 }} 本</span>
+                      <span class="sr-entry-meta">{{ groupCounts[g.id] || 0 }} 本</span>
                     </button>
                     <span class="sr-inline" @click.stop>
                       <span class="block__icon block__icon--show sr-icon-btn sr-icon-btn--sm" aria-label="打开分组" @click="setGroup(g.id, true)">
@@ -225,10 +225,6 @@
                     <span class="sr-chip is-active">{{ editForm.bindDocName }}</span>
                     <button class="sr-chip is-danger" type="button" @click="unbindDoc">解绑</button>
                   </div>
-                  <div class="sr-chips">
-                    <button class="sr-chip" :class="{ 'is-active': editForm.autoSync }" type="button" @click="editForm.autoSync = !editForm.autoSync">添加时同步</button>
-                    <button class="sr-chip" :class="{ 'is-active': editForm.syncDelete }" type="button" @click="editForm.syncDelete = !editForm.syncDelete">删除时同步</button>
-                  </div>
                 </div>
               </template>
             </label>
@@ -328,6 +324,7 @@ const viewProps = computed(() => ({
   groupCounts: groupCounts.value,
   statusMap: STATUS_MAP,
   getCoverUrl,
+  getGroupCoverUrls,
   getProgress,
   currentGroup: currentGroup.value,
 }))
@@ -356,7 +353,11 @@ const filterSections = computed(() => buildFilterSections(stats.value, allTags.v
 const importDisplayItems = computed(() => importItems.value.map(item => ({ type: 'import' as const, data: item })))
 const batchRatingOptions = computed(() => [...RATING_OPTIONS, [0, '清除评分']] as Array<[number, string]>)
 const filterMap = { status: filterStatus, rating: filterRating, format: filterFormats, tags: filterTags }
-const setGroup = (id: string | null, close = false) => { currentGroup.value = id; close && closePopups() }
+const setGroup = (id: string | null, close = false) => {
+  currentGroup.value = id
+  close && closePopups()
+  void loadBooks(id)
+}
 const clearConfirmDelete = () => { confirmDelete.value = null }
 const confirmGroupDelete = (group: GroupConfig) => { modalMode.value = 'manage'; confirmDelete.value = { type: 'group', id: group.id, item: group } }
 const handleToolbarAction = (id: string) => {
@@ -366,6 +367,7 @@ const handleToolbarAction = (id: string) => {
   else if (id === 'manage') { modalMode.value = 'manage'; importMode.value = 'file' }
 }
 const getCoverUrl = (book: Book) => bookshelfManager.getCoverUrl(book)
+const getGroupCoverUrls = (group: GroupConfig) => books.value.filter(book => bookInGroup(book, group)).map(getCoverUrl).filter(Boolean).slice(0, 4)
 const getProgress = (book: Book) => `${book.progress || 0}%`
 const toggleArrayItem = (arr: any[], value: any) => { const i = arr.indexOf(value); i > -1 ? arr.splice(i, 1) : arr.push(value) }
 const toggleFilterItem = (key: string, value: any) => key === 'rating' ? filterMap[key].value = value : toggleArrayItem(filterMap[key].value, value)
@@ -373,12 +375,16 @@ const isFilterActive = (key: string, value: any) => key === 'rating' ? filterMap
 const closePopups = () => { modalMode.value = null; editingGroup.value = null; batchMode.value = null; clearConfirmDelete(); resetImport() }
 const resetOrganize = () => { filterStatus.value = []; filterRating.value = 0; filterFormats.value = []; filterTags.value = []; sortType.value = 'time'; sortReverse.value = false; viewMode.value = 'grid'; batchMode.value = null }
 const refreshGroups = async () => { const { groups: nextGroups, counts } = await bookshelfManager.getGroupDisplayState(); groups.value = nextGroups; groupCounts.value = counts }
-const loadBooks = async () => { const state = await bookshelfManager.getBookshelfState({ currentGroup: currentGroup.value, keyword: keyword.value, sortBy: sortType.value, reverse: sortReverse.value, status: filterStatus.value, rating: filterRating.value, formats: filterFormats.value, tags: filterTags.value }); books.value = state.books; stats.value = state.stats }
+const loadBooks = async (group = currentGroup.value) => {
+  const state = await bookshelfManager.getBookshelfState({ currentGroup: group, keyword: keyword.value, sortBy: sortType.value, reverse: sortReverse.value, status: filterStatus.value, rating: filterRating.value, formats: filterFormats.value, tags: filterTags.value })
+  books.value = state.books
+  stats.value = state.stats
+}
 const refresh = () => Promise.all([loadBooks(), refreshGroups()])
 const showResult = (success: number, failed: number, ok: string, fail = `成功${success}本，失败${failed}本`, time = 2000) => showMessage(failed ? fail : ok, time, failed ? 'error' : 'info')
 const ratingItems = (handler: (rating: number) => void | Promise<void>, clearLabel = '清除') => [1, 2, 3, 4, 5].map(value => ({ icon: 'iconStar', label: `${'★'.repeat(value)} ${value}星`, click: () => handler(value) })).concat([{ type: 'separator' }, { icon: 'iconClose', label: clearLabel, click: () => handler(0) }])
 const statusItems = (handler: (status: BookStatus) => void | Promise<void>) => STATUS_OPTIONS.map(([k, v]) => ({ icon: MENU_ICONS.status[k], label: v, click: () => handler(k) }))
-const assignEditForm = (book: Book) => { const b = book as any; Object.assign(editForm.value, { title: b.title, author: b.author, tags: b.tags.join(', '), rating: b.rating || 0, status: b.status, cover: b.cover || '', groups: b.groups || [], bindDocId: b.bindDocId || '', bindDocName: b.bindDocName || '', autoSync: b.autoSync || false, syncDelete: b.syncDelete || false }) }
+const assignEditForm = (book: Book) => { const b = book as any; Object.assign(editForm.value, { title: b.title, author: b.author, tags: b.tags.join(', '), rating: b.rating || 0, status: b.status, cover: b.cover || '', groups: b.groups || [], bindDocId: b.bindDocId || '', bindDocName: b.bindDocName || '' }) }
 
 const createGroupDraft = (type: GroupType): GroupConfig => ({ id: `group_${Date.now()}`, name: '', icon: type === 'smart' ? '⚡' : '📁', order: groups.value.length, type, rules: createDefaultGroupRules() })
 const startEditGroup = (g?: GroupConfig, type: GroupType = 'folder') => {
@@ -508,7 +514,7 @@ onMounted(async () => {
   window.addEventListener('sireader:bookshelf-updated', handleBookshelfUpdated)
 })
 onUnmounted(() => { window.removeEventListener('sireader:bookshelf-updated', handleBookshelfUpdated); settingTimers.forEach(timer => clearTimeout(timer)); settingTimers.clear() })
-watch([filterStatus, filterRating, filterFormats, filterTags, sortType, sortReverse, currentGroup], loadBooks, { deep: true })
+watch([filterStatus, filterRating, filterFormats, filterTags, sortType, sortReverse], loadBooks, { deep: true })
 watch(sortType, v => settingsLoaded && saveUiSetting('bookshelf_sortType', v))
 watch(sortReverse, v => settingsLoaded && saveUiSetting('bookshelf_sortReverse', v))
 watch(viewMode, v => settingsLoaded && saveUiSetting('bookshelf_viewMode', v))
@@ -546,7 +552,7 @@ button.sr-chip:hover{background:var(--b3-list-hover)}
 .sr-grow{flex:1;min-width:0}
 .sr-inline{display:flex;align-items:center;gap:4px;flex:0 0 auto;flex-wrap:nowrap}
 .sr-group-item{display:flex;align-items:center;gap:8px;margin-top:8px}
-.sr-group-label{display:flex;align-items:center;justify-content:flex-start;gap:4px;min-width:0;min-height:32px;padding:0 12px}
+.sr-group-label{display:flex;align-items:center;justify-content:flex-start;gap:4px;min-width:0;min-height:32px;padding:0 12px;font-size:12px}
 .sr-group-label strong,.sr-group-label .sr-entry-meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sr-section-line{padding-top:12px;border-top:1px solid var(--b3-border-color)}
 .sr-confirm{display:flex;align-items:center;gap:var(--sr-gap);margin:6px 0 8px;padding:var(--sr-gap);border:1px solid var(--b3-border-color);border-radius:var(--b3-border-radius-b);background:var(--b3-theme-background)}
@@ -559,6 +565,6 @@ button.sr-chip:hover{background:var(--b3-list-hover)}
 .sr-panel-cover{width:124px;height:176px;margin:0 auto 4px;overflow:hidden;border-radius:var(--b3-border-radius);background:var(--b3-theme-surface)}
 .sr-panel-cover img{width:100%;height:100%;object-fit:cover}
 .mono{font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;word-break:break-all}
-.fade-enter-active,.fade-leave-active{transition:opacity .15s}
+.fade-enter-active,.fade-leave-active{transition:opacity .18s ease}
 .fade-enter-from,.fade-leave-to{opacity:0}
 </style>

@@ -55,7 +55,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { showMessage } from 'siyuan'
+import { Menu, showMessage } from 'siyuan'
 import DeckHub from './deck/DeckHub.vue'
 import DockShell from './ui/DockShell.vue'
 import { useReaderState } from '@/core/epub/state'
@@ -109,7 +109,7 @@ const filterToc = (items: TOCItem[], query: string): TOCItem[] => {
   if (!query) return items
   return items.reduce<TOCItem[]>((result, item) => {
     const children = item.subitems?.length ? filterToc(item.subitems, query) : []
-    const text = `${tocLabel(item)}`.toLowerCase()
+    const text = tocLabel(item).toLowerCase()
     if (text.includes(query) || children.length) result.push({ ...item, subitems: children.length ? children : undefined })
     return result
   }, [])
@@ -258,16 +258,37 @@ const scheduleInit = () => {
   })
 }
 
-const exportTocItem = async (href: string, label: string) => {
+const sendTocItem = async (href: string, label: string, clipboard = false) => {
   try {
     const bookUrl = getUrl() || ''
     await exportBookLink(
       { chapter: label, cfi: href },
-      { bookUrl, bookInfo: bookUrl ? await bookshelfManager.getBook(bookUrl) : null, reader: activeReader.value, showMsg },
+      {
+        bookUrl,
+        bookInfo: bookUrl ? await bookshelfManager.getBook(bookUrl) : null,
+        reader: activeReader.value,
+        settings: clipboard ? { ...((window as any).__sireader_settings || {}), noteInsertTarget: 'clipboard' } : undefined,
+        showMsg,
+      },
     )
   } catch (error: any) {
-    showMsg(error.message || '导出失败', 'error')
+    showMsg(error.message || (clipboard ? '复制失败' : '导出失败'), 'error')
   }
+}
+
+const copyTocText = async (label: string) => {
+  await navigator.clipboard.writeText(label)
+  showMsg('已复制文本')
+}
+
+const openTocMenu = (event: MouseEvent, href: string, label: string) => {
+  const m = new Menu()
+  ;[
+    { icon: 'iconUpload', label: '导出', click: () => void sendTocItem(href, label) },
+    { icon: 'iconCopy', label: '复制链接', click: () => void sendTocItem(href, label, true) },
+    { icon: 'iconCopy', label: '复制文本', click: () => void copyTocText(label) },
+  ].forEach(item => m.addItem(item))
+  m.open({ x: event.clientX, y: event.clientY })
 }
 
 const toggleBookmark = async (href: string, label: string) => {
@@ -305,8 +326,16 @@ const onTocClick = async (event: MouseEvent) => {
   const href = row.dataset.href ? decodeURIComponent(row.dataset.href) : ''
   const label = row.dataset.label ? decodeURIComponent(row.dataset.label) : row.textContent?.trim() || ''
   const hasChild = row.dataset.hasChild === 'true'
-  if (action?.dataset.act === 'export' && href) return void exportTocItem(href, label)
-  if (action?.dataset.act === 'bookmark' && href) return void toggleBookmark(href, label)
+  if (action?.dataset.act === 'export' && href) {
+    event.preventDefault()
+    event.stopPropagation()
+    return void openTocMenu(event, href, label)
+  }
+  if (action?.dataset.act === 'bookmark' && href) {
+    event.preventDefault()
+    event.stopPropagation()
+    return void toggleBookmark(href, label)
+  }
   if (target.closest('.b3-list-item__toggle') && hasChild) return void toggleTocNode(key)
   if (href) await goToLocation(href)
   else if (hasChild) toggleTocNode(key)

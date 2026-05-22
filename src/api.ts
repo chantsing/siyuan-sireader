@@ -80,20 +80,6 @@ export async function createDoc(
   return request(url, data);
 }
 
-export async function createDocWithMd(
-  notebook: NotebookId,
-  path: string,
-  markdown: string
-): Promise<DocumentId> {
-  let data = {
-    notebook: notebook,
-    path: path,
-    markdown: markdown,
-  };
-  let url = "/api/filetree/createDocWithMd";
-  return request(url, data);
-}
-
 export async function renameDoc(
   notebook: NotebookId,
   path: string,
@@ -148,6 +134,16 @@ export async function getHPathByID(id: BlockId): Promise<string> {
     id: id,
   };
   let url = "/api/filetree/getHPathByID";
+  return request(url, data);
+}
+
+export async function getPathByID(
+  id: BlockId
+): Promise<{ path: string; notebook: NotebookId }> {
+  let data = {
+    id: id,
+  };
+  let url = "/api/filetree/getPathByID";
   return request(url, data);
 }
 
@@ -336,8 +332,9 @@ export async function getBlockByID(blockId: string): Promise<Block> {
 }
 
 export async function searchDocs(keyword: string): Promise<any[]> {
-  const url = "/api/search/fullTextSearchBlock";
-  return request(url, { query: keyword, types: { document: true } });
+  const url = "/api/filetree/searchDocs";
+  const data = await request(url, { k: keyword });
+  return Array.isArray(data) ? data : [];
 }
 
 // **************************************** Template ****************************************

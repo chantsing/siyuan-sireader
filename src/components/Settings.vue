@@ -1,34 +1,25 @@
-
+﻿
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { showMessage } from 'siyuan'
 import type { ReaderSettings, FontFileInfo } from '@/composables/useSetting'
 import { PRESET_THEMES, UI_CONFIG, useSetting, useConfirm, useDocSearch, useNotebooks, LINK_FORMAT_PRESETS } from '@/composables/useSetting'
-import BookShelf from './BookShelf.vue'
-import ReaderToc from './ReaderToc.vue'
-import ReaderMarks from './ReaderMarks.vue'
-import DockShell from './ui/DockShell.vue'
 import { bookshelfManager } from '@/core/bookshelf'
 import { offlineDictManager, onlineDictManager } from '@/utils/dictionary'
 import { usePlugin } from '@/main'
-import { useReaderState } from '@/core/epub/state'
 import { useLicense } from '@/composables/useLicense'
 import { focusMobileEditable } from '@/utils/mobile'
-
-const BookSearch = defineAsyncComponent(() => import('./BookSearch.vue'))
 
 const props = defineProps<{modelValue:ReaderSettings;i18n:any;onSave:()=>Promise<void>}>()
 const emit = defineEmits<{'update:modelValue':[value:ReaderSettings]}>()
 
 // 基础状态
 const settings = ref<ReaderSettings>(props.modelValue),
-  activeTab = ref<'appearance'|'bookshelf'|'search'|'toc'|'mark'|'deck'>('bookshelf'),
   previewExpanded = ref(localStorage.getItem('sr-preview-expanded')!=='0'),
   activeAccordion = ref(''),
   activeSub = ref(''),
   licenseRef = ref<HTMLElement>()
 const plugin = usePlugin()
-const {canShowToc} = useReaderState()
 const {customFonts,isLoadingFonts,loadCustomFonts,resetStyles:resetStylesRaw} = useSetting(plugin)
 const {interfaceItems,customThemeItems,appearanceGroups,ttsItems,ttsOptions} = UI_CONFIG
 const {confirming:resetConfirm,handleClick:handleReset} = useConfirm(() => {resetStylesRaw();save()})
@@ -80,6 +71,7 @@ const noteTargetOptions = ['clipboard','current','notebook','document','dailynot
   linkFormatPresetOptions = Object.keys(LINK_FORMAT_PRESETS) as (keyof typeof LINK_FORMAT_PRESETS)[]
 const noteModeLabels = { insertBlock: 'noteInsertModeCursor', prependBlock: 'noteInsertModeBefore', appendBlock: 'noteInsertModeAfter', updateBlock: 'noteInsertModeReplace', prependDoc: 'noteInsertModeDocTop', appendDoc: 'noteInsertModeDocBottom' } as const
 const selectField = (key:string, label:string, value:string, options:any[], set:(value:string)=>void, show=true, empty='') => ({ key, type: 'select', label, value, options, set, show, empty })
+const checkboxField = (key:string, label:string, value:boolean, set:(value:boolean)=>void, show=true, hint='') => ({ key, type: 'checkbox', label, value, set, show, hint })
 const searchField = (key:string, label:string, docs:any[], input:string, results:any[], setInput:(value:string)=>void, search:()=>void, select:(doc:any)=>void, remove:(doc:any,i:number)=>void, show=true, hint='', drag?:'quickDoc') => ({ key, type: 'search', label, docs, input, results, setInput, search, select, remove, show, hint, drag })
 const dictSections = computed(() => [
   {
@@ -103,6 +95,8 @@ const voiceSections = computed(() => [
   }
 ])
 const noteFields = computed(() => [
+  checkboxField('annotationSyncOnAdd', props.i18n.annotationSyncOnAdd || '添加时同步', settings.value.annotationSyncOnAdd, value => (settings.value.annotationSyncOnAdd = value, save()), true, props.i18n.annotationSyncOnAddDesc || '新增标注时自动同步到已绑定文档'),
+  checkboxField('annotationSyncOnDelete', props.i18n.annotationSyncOnDelete || '删除时同步', settings.value.annotationSyncOnDelete, value => (settings.value.annotationSyncOnDelete = value, save()), true, props.i18n.annotationSyncOnDeleteDesc || '删除标注时同步删除已绑定块'),
   selectField('noteInsertTarget', props.i18n.noteInsertTarget || '插入位置', settings.value.noteInsertTarget, noteTargetOptions.map(value => ({ value, label: props.i18n[`noteInsertTarget${value.charAt(0).toUpperCase()}${value.slice(1)}`] || value })), value => (settings.value.noteInsertTarget = value as any, save())),
   selectField('noteInsertMode', props.i18n.noteInsertMode || '插入方式', settings.value.noteInsertMode, noteModeOptions.map(value => ({ value, label: props.i18n[noteModeLabels[value]] || value })), value => (settings.value.noteInsertMode = value as any, save()), settings.value.noteInsertTarget === 'current'),
   selectField('notebookId', props.i18n.notebookId || props.i18n.notebook || '笔记本', settings.value.notebookId || '', notebooks.value.map((nb:any) => ({ value: nb.id, label: nb.name })), value => (settings.value.notebookId = value, save()), ['notebook', 'dailynote'].includes(settings.value.noteInsertTarget), props.i18n.notSelected || '未选择'),
@@ -175,9 +169,6 @@ const navItems = computed(() => (settings.value.navItems || [
   { id: 'mark', icon: 'lucide-square-pen', tip: '标注', enabled: true, order: 4 },
   { id: 'appearance', icon: 'lucide-settings-2', tip: '设置', enabled: true, order: 7 }
 ]).filter(item => item.id !== 'dictionary').sort((a, b) => a.order - b.order))
-const tooltipDir = computed(() => ({ left: 'e', right: 'w', top: 's', bottom: 'n' }[settings.value.navPosition] || 'n'))
-const tabs = computed(() => navItems.value.filter(item => item.enabled && (item.id === 'appearance' || item.id === 'bookshelf' || item.id === 'search' || item.id === 'deck' || canShowToc.value)).map(item => ({id:item.id as any,icon:item.icon,tip:item.tip})))
-
 // 预览样式
 const previewStyle = computed(() => {
   const theme = settings.value.theme === 'custom' ? settings.value.customTheme : PRESET_THEMES[settings.value.theme]
@@ -193,15 +184,13 @@ const save = async () => (emit('update:modelValue',settings.value),await props.o
 const debouncedSave = (() => {let t:any;return () => (clearTimeout(t),t=setTimeout(save,300))})()
 const setFont = (f?:FontFileInfo) => (settings.value.textSettings.fontFamily=f?'custom':'inherit',settings.value.textSettings.customFont=f?{fontFamily:f.displayName,fontFile:f.name}:{fontFamily:'',fontFile:''},f?debouncedSave():save())
 const saveTheme = () => { if (!can.value('reader-theme')) return settings.value.theme='default', showUpgrade('主题配色'); save() }
-const handleReadOnline = async (book:any) => (await import('@/utils/bookOpen')).openOrActivateBook(plugin,book,settings.value)
 const togglePreview = () => (previewExpanded.value=!previewExpanded.value,localStorage.setItem('sr-preview-expanded',previewExpanded.value?'1':'0'))
 const openPage = (url:string) => window.open(url,'_blank')
 const openPurchasePage = () => openPage('https://pay.ldxp.cn/shop/J7MJJ8YR/lillyt')
 const openMembershipInfo = () => openPage('https://sireader.745201.xyz')
 
 // 打开授权面板
-;(window as any)._openLicense = () => {
-  activeTab.value = 'appearance'
+;(window as any)._openLicenseContent = () => {
   activeAccordion.value = 'license'
   setTimeout(() => {
     licenseRef.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -217,20 +206,11 @@ onMounted(() => {
   offlineDictManager.init(plugin).then(() => {offlineDicts.value=offlineDictManager.getDicts();onlineDicts.value=onlineDictManager.getDicts()}).finally(() => loadingDict.value=false)
   loadLicense()
 })
-watch(canShowToc,(show) => !show&&['toc','mark'].includes(activeTab.value)&&(activeTab.value='bookshelf'))
 </script>
 
 <template>
-  <DockShell
-    :active-tab="activeTab"
-    :nav-position="settings.navPosition"
-    :tooltip-dir="tooltipDir"
-    :tabs="tabs.map(tab => ({ ...tab, tip: i18n?.[tab.tip] || tab.tip }))"
-    body-class="sr-settings-body"
-    @update:activeTab="activeTab = $event as any"
-  >
-    <div v-if="activeTab === 'appearance'" class="fn__flex-1 fn__flex-column sy__file bs-view bs-tree">
-      <div class="fn__flex-1 bs-tree__scroll" @contextmenu.prevent.stop>
+  <div class="fn__flex-1 fn__flex-column sy__file bs-view bs-tree">
+    <div class="fn__flex-1 bs-tree__scroll" @contextmenu.prevent.stop>
         <ul class="b3-list b3-list--background">
           <li class="b3-list-item" data-type="navigation-root" @click="togglePreview">
             <span class="b3-list-item__toggle b3-list-item__toggle--hl">
@@ -557,6 +537,7 @@ watch(canShowToc,(show) => !show&&['toc','mark'].includes(activeTab.value)&&(act
                     <option v-if="field.empty" value="">{{ field.empty }}</option>
                     <option v-for="opt in (field.options || [])" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                   </select>
+                  <label v-else-if="field.type === 'checkbox'" class="fn__flex-center"><input :checked="field.value" type="checkbox" class="b3-switch" @change="field.set(($event.target as HTMLInputElement).checked)"></label>
                 </div>
                 <textarea v-if="field.type === 'textarea'" v-model="settings.linkFormat" class="b3-text-field" rows="3" @input="debouncedSave"></textarea>
                 <template v-else-if="field.type === 'search'">
@@ -676,27 +657,20 @@ watch(canShowToc,(show) => !show&&['toc','mark'].includes(activeTab.value)&&(act
           </template>
         </ul>
 
-        <div class="sr-settings-actions">
+      <div class="sr-settings-actions">
         <template v-if="resetConfirm">
           <button class="b3-button b3-button--cancel" @click="resetConfirm = false">{{ i18n.cancel || 'Cancel' }}</button>
           <button class="b3-button" @click="handleReset">{{ i18n.confirm || 'Confirm' }}</button>
         </template>
         <button v-else class="b3-button" @click="handleReset">{{ i18n.resetDefault || 'Reset' }}</button>
-        </div>
       </div>
     </div>
-
-    <BookSearch v-show="activeTab === 'search'" :i18n="i18n" />
-    <BookShelf v-show="activeTab === 'bookshelf'" :i18n="i18n" :cover-size="settings.bookshelfCoverSize" :open-doc-assets="settings.openDocAssets" @read="handleReadOnline" />
-    <ReaderToc v-if="['toc', 'deck'].includes(activeTab)" :mode="activeTab === 'deck' ? 'deck' : 'toc'" :i18n="props.i18n" />
-    <ReaderMarks v-if="activeTab === 'mark'" :i18n="props.i18n" />
-  </DockShell>
+  </div>
 </template>
 
 <style scoped lang="scss">
 @use './deck/deck.scss';
 
-:deep(.sr-settings-body){padding-top:8px;box-sizing:border-box}
 .bs-view{min-height:0;height:100%;padding:0;box-sizing:border-box}
 .bs-tree{overflow:hidden;--bs-tree-border:color-mix(in srgb,var(--b3-theme-on-surface-light) 30%,transparent);--b3-list-hover:color-mix(in srgb,var(--b3-theme-primary) 12%,transparent)}
 .bs-tree__scroll{display:flex;flex-direction:column;gap:6px;min-height:0;overflow:auto;scrollbar-gutter:stable;padding:8px 0 8px 8px;box-sizing:border-box}

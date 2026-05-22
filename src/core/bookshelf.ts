@@ -29,7 +29,7 @@ export type BookshelfModalMode = 'detail' | 'edit' | 'manage' | 'organize' | nul
 export interface BookshelfOption { value: string | number; label: string; count?: number }
 export interface BookshelfSection { key: string; label: string; options: BookshelfOption[] }
 export interface BookshelfDetailField { label: string; value: string; mono?: boolean }
-export interface BookshelfEditForm { title: string; author: string; tags: string; rating: number; status: BookStatus; cover: string; groups: string[]; bindDocId: string; bindDocName: string; autoSync: boolean; syncDelete: boolean }
+export interface BookshelfEditForm { title: string; author: string; tags: string; rating: number; status: BookStatus; cover: string; groups: string[]; bindDocId: string; bindDocName: string }
 
 // ===== 常量 =====
 export const SORTS = [['time','最近阅读'],['added','最近添加'],['progress','阅读进度'],['rating','评分'],['readTime','阅读时长'],['name','书名'],['author','作者'],['update','最近更新']] as const;
@@ -44,7 +44,7 @@ export const STAR_OPTIONS = [1, 2, 3, 4, 5] as const;
 export const STATUS_SELECT_OPTIONS = STATUS_OPTIONS.map(([value, label]) => ({ value, label }));
 export const FORMAT_SELECT_OPTIONS = FORMAT_OPTIONS.map(value => ({ value, label: value.toUpperCase() }));
 export const createDefaultGroupRules = () => ({ tags: [] as string[], format: [] as BookFormat[], status: [] as BookStatus[], rating: 0 });
-export const createDefaultEditForm = (): BookshelfEditForm => ({ title: '', author: '', tags: '', rating: 0, status: 'unread', cover: '', groups: [], bindDocId: '', bindDocName: '', autoSync: false, syncDelete: false });
+export const createDefaultEditForm = (): BookshelfEditForm => ({ title: '', author: '', tags: '', rating: 0, status: 'unread', cover: '', groups: [], bindDocId: '', bindDocName: '' });
 export const bookInGroup = (book: Pick<any, 'tags' | 'format' | 'status' | 'rating' | 'groups'>, group: GroupConfig) => {
   if (group.type === 'folder') return book.groups?.includes(group.id)
   const { tags = [], format = [], status = [], rating = 0 } = group.rules || {}
@@ -154,8 +154,6 @@ class BookshelfManager {
     groups: info.groups || [],
     bindDocId: info.bindDocId || '',
     bindDocName: info.bindDocName || '',
-    autoSync: info.autoSync || false,
-    syncDelete: info.syncDelete || false,
   });
   private fileBaseName = (path: string, fallback = '未知书籍') => path.split(/[/\\]/).pop()?.split('?')[0]?.replace(/\.[^.]+$/, '') || fallback
   private resolvedTitle = (meta: any, name: string) => normalizeBookTitle(meta.title || name) || name
@@ -382,11 +380,11 @@ class BookshelfManager {
   // ===== 书籍操作 =====
   async updateBookField(url: string, field: 'rating' | 'status' | 'group', value: any) { return field === 'rating' ? this.updateRating(url, value) : field === 'status' ? this.updateStatus(url, value) : this.updateBook(url, { groups: value === 'home' ? [] : [value] }) }
   
-  async updateBookInfo(url: string, formData: { title: string; author: string; tags: string; rating: number; status: BookStatus; cover: string; groups: string[]; bindDocId?: string; bindDocName?: string; autoSync?: boolean; syncDelete?: boolean }) {
+  async updateBookInfo(url: string, formData: { title: string; author: string; tags: string; rating: number; status: BookStatus; cover: string; groups: string[]; bindDocId?: string; bindDocName?: string }) {
     const book = await this.getBook(url)
     if (!book || !formData.title.trim()) return { success: false, error: '书名不能为空' }
     const tags = formData.tags.split(/[,，]/).map(t => t.trim()).filter(t => t)
-    await this.updateBook(url, { title: formData.title.trim(), author: formData.author.trim(), tags, rating: formData.rating || undefined, status: formData.status, cover: formData.cover.trim() || '', groups: formData.groups, bindDocId: formData.bindDocId || '', bindDocName: formData.bindDocName || '', autoSync: formData.autoSync || false, syncDelete: formData.syncDelete || false })
+    await this.updateBook(url, { title: formData.title.trim(), author: formData.author.trim(), tags, rating: formData.rating || undefined, status: formData.status, cover: formData.cover.trim() || '', groups: formData.groups, bindDocId: formData.bindDocId || '', bindDocName: formData.bindDocName || '' })
     return { success: true }
   }
   
@@ -428,7 +426,9 @@ class BookshelfManager {
     }
     
     // 常规路径：需要下载文件提取元数据
-    const { filePath, name, format, meta } = parsedMeta ? { filePath: url, name: parsedMeta.title || this.fileBaseName(url), format: this.getFormat(url), meta: parsedMeta } : await this.parseUrlBook(url)
+    const { filePath, name, format, meta } = parsedMeta
+      ? { filePath: url, name: parsedMeta.title || this.fileBaseName(url), format: this.getFormat(url), meta: parsedMeta }
+      : await this.parseUrlBook(url)
     const file = await loadBookFile(filePath)
     const path = await saveBookFile(file, filePath)
     let cover = await this.downloadCover(coverUrl, filePath)

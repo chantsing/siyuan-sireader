@@ -64,7 +64,7 @@ export const createKeyboardHandler = (handlers: KeyboardHandlers, isPdfMode: () 
 export const setupEpubKeyboard = (
   reader: any,
   handler: (e: KeyboardEvent) => void,
-  onSelectionChange?: (doc: Document) => void,
+  onSelectionChange?: (doc: Document, e?: Event) => void,
   onTapZone?: (x: number, doc: Document, target: EventTarget | null) => void,
   prev?: () => void,
   next?: () => void
@@ -73,10 +73,10 @@ export const setupEpubKeyboard = (
     if (!doc || (doc as any).__sireaderKeyboardSetup) return
     ;(doc as any).__sireaderKeyboardSetup = true
     let selectionTimer: any
-    const triggerSelection = () => {
+    const triggerSelection = (e?: Event) => {
       if (!onSelectionChange) return
       clearTimeout(selectionTimer)
-      selectionTimer = setTimeout(() => onSelectionChange(doc), 120)
+      selectionTimer = setTimeout(() => onSelectionChange(doc, e), 120)
     }
     const isInteractive = (target: EventTarget | null) =>
       target instanceof HTMLElement &&

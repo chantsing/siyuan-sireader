@@ -1,6 +1,6 @@
 /**
  * Foliate Reader - 统一阅读器
- * 整合 View 创建、配置、标记管理等所有功能
+ * 整合 View 创建、配置、标记管理等功能
  */
 
 import type { Plugin } from 'siyuan'
@@ -33,12 +33,12 @@ const isBackLink = (el: Element | null | undefined, types: Set<string>, roles: S
   types.has('backlink') || roles.has('doc-backlink') || /back|return/i.test((el as HTMLElement | null)?.className || '')
 const getNoteType = (i: any, roles: Set<string>, types: Set<string>, cls: string) => {
   const key = [...roles, ...types, cls].join()
-  return /endnote|rearnote/i.test(key) ? i.endnote || '灏炬敞'
-    : /footnote/i.test(key) ? i.footnote || '鑴氭敞'
-    : /biblio|reference/i.test(key) ? i.reference || '鍙傝€?'
-    : /gloss|definition/i.test(key) ? i.glossary || '鏈'
-    : /note/i.test(key) ? i.annotation || '娉ㄩ噴'
-    : i.note || '娉ㄩ噴'
+  return /endnote|rearnote/i.test(key) ? i.endnote || '尾注'
+    : /footnote/i.test(key) ? i.footnote || '脚注'
+    : /biblio|reference/i.test(key) ? i.reference || '参考'
+    : /gloss|definition/i.test(key) ? i.glossary || '术语'
+    : /note/i.test(key) ? i.annotation || '注释'
+    : i.note || '注释'
 }
 
 const watchTheme = (cb: () => void) => {
@@ -49,6 +49,15 @@ const watchTheme = (cb: () => void) => {
 
 const getStyleTag = (id: string) =>
   document.getElementById(id) || Object.assign(document.head.appendChild(document.createElement('style')), { id })
+const noteRefNumberPattern = /^[\[\(]?\d+[\]\)]?$/
+const noteRefSymbolPattern = /^[\[\(]?[*†‡]+[\]\)]?$/
+
+const readText = (value: any): string => {
+  if (typeof value === 'string') return value.trim()
+  if (Array.isArray(value)) return value.map(readText).find(Boolean) || ''
+  if (value && typeof value === 'object') return readText(value.label ?? value.name ?? value.value ?? value.text ?? '')
+  return ''
+}
 
 function createFoliateView(container: HTMLElement): FoliateView {
   const view = document.createElement('foliate-view') as FoliateView
@@ -58,20 +67,33 @@ function createFoliateView(container: HTMLElement): FoliateView {
   return view
 }
 
+function getLayoutMetrics(settings: ReaderSettings) {
+  const { viewMode = 'single', layoutSettings: layout = { gap: 0, headerFooterMargin: 0 } } = settings
+  const scroll = viewMode === 'scroll'
+  const columns = isMobile() || scroll ? 1 : viewMode === 'double' ? 2 : 1
+  return {
+    scroll,
+    columns,
+    gap: Math.max(0, layout.gap || 0),
+    margin: Math.max(0, layout.headerFooterMargin || 0),
+    maxInlineSize: layout.maxInlineSize || 0,
+    maxBlockSize: layout.maxBlockSize || 0,
+  }
+}
+
 function configureView(view: FoliateView, settings: ReaderSettings) {
   const renderer = view.renderer
   if (!renderer) return
-  const { viewMode = 'single', pageAnimation = 'slide', layoutSettings: layout = { headerFooterMargin: 0 }, visualSettings } = settings
-  const mobile = isMobile()
-  const scroll = viewMode === 'scroll'
+  const { pageAnimation = 'slide', visualSettings } = settings
+  const { scroll, columns, gap, margin, maxInlineSize, maxBlockSize } = getLayoutMetrics(settings)
   const set = (name: string, value: string) => renderer.setAttribute(name, value)
   set('flow', scroll ? 'scrolled' : 'paginated')
-  set('max-column-count', mobile ? '1' : viewMode === 'double' ? '2' : '1')
+  set('max-column-count', String(columns))
   !scroll && pageAnimation === 'slide' ? set('animated', '') : renderer.removeAttribute('animated')
-  set('gap', '0%')
-  set('margin', `${layout.headerFooterMargin || 0}px`)
-  layout.maxInlineSize ? set('max-inline-size', `${layout.maxInlineSize}px`) : renderer.removeAttribute('max-inline-size')
-  layout.maxBlockSize ? set('max-block-size', `${layout.maxBlockSize}px`) : renderer.removeAttribute('max-block-size')
+  gap > 0 ? set('gap', `${gap}%`) : renderer.removeAttribute('gap')
+  margin > 0 ? set('margin', `${margin}px`) : renderer.removeAttribute('margin')
+  maxInlineSize ? set('max-inline-size', `${maxInlineSize}px`) : renderer.removeAttribute('max-inline-size')
+  maxBlockSize ? set('max-block-size', `${maxBlockSize}px`) : renderer.removeAttribute('max-block-size')
   applyVisualFilter(visualSettings)
   applyViewTheme(view, getTheme(settings))
 }
@@ -94,14 +116,17 @@ function applyViewTheme(view: FoliateView, theme: any) {
   const bg = getViewBackground(theme)
   view.style.setProperty('--sr-epub-bg', bg)
   Object.assign(view.style, { background: bg, color: theme.color })
+  Object.assign(view.renderer?.style || {}, {
+    background: bg,
+    color: theme.color,
+  })
   if (view.parentElement) view.parentElement.style.background = bg
 }
 
 function applyCustomCSS(view: FoliateView, settings: ReaderSettings) {
   const {
     textSettings: text = { fontFamily: 'inherit', fontSize: 16, letterSpacing: 0, customFont: { fontFamily: '', fontFile: '' } },
-    paragraphSettings: paragraph = { lineHeight: 1.8, textIndent: 2, paragraphSpacing: 1 },
-    layoutSettings: layout = { marginHorizontal: 40, marginVertical: 20 }
+    paragraphSettings: paragraph = { lineHeight: 1.8, textIndent: 2, paragraphSpacing: 1 }
   } = settings
   const theme = getTheme(settings)
   const mobile = isMobile()
@@ -122,19 +147,24 @@ function applyCustomCSS(view: FoliateView, settings: ReaderSettings) {
       min-width:100%!important;
       min-height:100%!important;
       box-sizing:border-box!important;
+      scrollbar-width:none!important;
+      -ms-overflow-style:none!important;
       ${mobile ? '-webkit-touch-callout:none!important;' : ''}
     }
+    html::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}
     body{
       background:transparent!important;
       color:${theme.color}!important;
       font-family:${font}!important;
       font-size:${text.fontSize}px!important;
       letter-spacing:${text.letterSpacing}em!important;
-      padding:${layout.marginVertical}px ${layout.marginHorizontal}px!important;
       margin:0!important;
       box-sizing:border-box!important;
+      scrollbar-width:none!important;
+      -ms-overflow-style:none!important;
       ${mobile ? 'width:100%!important;min-width:100%!important;max-width:none!important;display:block!important;' : ''}
     }
+    body::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}
     *{font-family:${font}!important;font-size:inherit!important}
     body,p,div,span,a,li,td,th,blockquote,pre,code,h1,h2,h3,h4,h5,h6{font-family:${font}!important}
     h1,h2,h3,h4,h5,h6,p,div,span,li,td,th{font-size:inherit!important}
@@ -155,6 +185,10 @@ function applyCustomCSS(view: FoliateView, settings: ReaderSettings) {
     [role~="doc-endnote"]{display:none!important}
   `
   ].join(''))
+  Object.assign((view.renderer as HTMLElement | undefined)?.style || {}, {
+    scrollbarWidth: 'none',
+    msOverflowStyle: 'none',
+  })
 }
 
 function getCurrentLocation(view: FoliateView): Location | null {
@@ -169,85 +203,112 @@ function getCurrentLocation(view: FoliateView): Location | null {
   }
 }
 
+const applyMarginal = (el: HTMLElement | undefined, text: string, margin = 48) => {
+  if (!el) return
+  el.textContent = text
+  Object.assign(el.style, {
+    textAlign: 'start',
+    fontSize: `${Math.max(0, Math.min(12, margin * 0.75))}px`,
+    lineHeight: '1',
+  })
+}
+
+function updateMarginals(view: FoliateView) {
+  const renderer = view.renderer as any
+  const head = renderer?.heads?.[0] as HTMLElement | undefined
+  const foot = renderer?.feet?.[0] as HTMLElement | undefined
+  if (!head || !foot) return
+  const margin = parseFloat(getComputedStyle(renderer).getPropertyValue('--_margin')) || 48
+  const title = readText(view.book?.metadata?.title)
+  const chapter = readText(view.lastLocation?.tocItem?.label) || title
+  const chapterPages = Number.isFinite(renderer?.page) && Number.isFinite(renderer?.pages) && renderer.pages > 2
+    ? `${Math.min(renderer.pages - 2, Math.max(1, renderer.page))}/${renderer.pages - 2}`
+    : ''
+  const totalFraction = view.lastLocation?.fraction
+  const footer = [chapterPages, typeof totalFraction === 'number' ? `${Math.round(totalFraction * 100)}%` : '']
+    .filter(Boolean)
+    .join(' · ')
+  applyMarginal(head, chapter || title, margin)
+  applyMarginal(foot, footer, margin)
+}
+
+function refreshMarginals(view: FoliateView) {
+  requestAnimationFrame(() => requestAnimationFrame(() => updateMarginals(view)))
+  setTimeout(() => updateMarginals(view), 0)
+}
+
+function refreshRenderer(view: FoliateView) {
+  requestAnimationFrame(() => {
+    ;(view.renderer as any)?.render?.()
+    refreshMarginals(view)
+  })
+}
+
 export class FoliateReader {
   private view: FoliateView
+  private container: HTMLElement
   private settings: ReaderSettings
   private plugin: Plugin
   private eventListeners = new Map<string, Set<Function>>()
   private themeObserver?: MutationObserver
+  private resizeObserver?: ResizeObserver
   private syncThemeObserver = (auto: boolean) => auto
     ? this.themeObserver ||= watchTheme(() => this.applySettings())
     : (this.themeObserver?.disconnect(), this.themeObserver = undefined)
 
-  // 统一标记管理器（从外部设置）
   public marks: any
-
-  // 搜索管理器
   public searchManager: EPUBSearch
 
   constructor(options: ReaderOptions) {
+    this.container = options.container
     this.settings = options.settings
     this.plugin = options.plugin
-    // 创建 View 创建搜索管理器
     this.view = createFoliateView(options.container)
     this.searchManager = new EPUBSearch(this.view)
-
-    // 设置事件监听
     this.setupEventListeners()
-
-    // 监听设置变化
+    this.resizeObserver = new ResizeObserver(() => requestAnimationFrame(() => this.applySettings()))
+    this.resizeObserver.observe(this.container)
     this.listenToSettingsChanges()
   }
 
-  // 打开书籍
   async open(file: File | string | any) {
     await this.view.open(file)
+    const renderer = this.view.renderer as any
+    if (renderer && !renderer.__sireaderMarginalsBound) {
+      renderer.__sireaderMarginalsBound = true
+      const refresh = () => refreshMarginals(this.view)
+      renderer.addEventListener('load', refresh)
+      renderer.addEventListener('relocate', refresh)
+    }
     this.applySettings()
-    this.bindScrolledSectionBridge()
+    refreshMarginals(this.view)
     if (this.marks) await this.marks.init()
     this.emit('loaded', { book: this.view.book })
   }
 
-  private bindScrolledSectionBridge() {
-    const r = this.view.renderer as any
-    if (!r || r.__sireaderScrollBridge) return
-    const pos = () => Number(r.start ?? 0)
-    let start = pos(), busy = false
-    const reset = () => { start = pos() }
-    r.__sireaderScrollBridge = true
-    this.view.addEventListener('load', reset as EventListener)
-    r.addEventListener('scroll', async () => {
-      const next = pos(), delta = next - start
-      start = next
-      const dir = !busy && r.getAttribute?.('flow') === 'scrolled' && Math.abs(delta) >= 1
-        ? delta > 0 && Number(r.viewSize ?? 0) - Number(r.end ?? 0) <= 2 ? 1 : delta < 0 && next <= 2 ? -1 : 0
-        : 0
-      if (!dir) return
-      busy = true
-      try { await this.view[dir > 0 ? 'next' : 'prev']() } finally { reset(); busy = false }
-    })
-  }
-
-  // 应用设置
   private applySettings() {
     configureView(this.view, this.settings)
     applyCustomCSS(this.view, this.settings)
+    refreshRenderer(this.view)
   }
 
-  // 设置事件监听
   private setupEventListeners() {
-    for (const event of ['relocate', 'load', 'external-link']) {
-      this.view.addEventListener(event, ((e: CustomEvent) => this.emit(event, e.detail)) as EventListener)
-    }
+    this.view.addEventListener('relocate', ((e: CustomEvent) => {
+      refreshMarginals(this.view)
+      this.emit('relocate', e.detail)
+    }) as EventListener)
+    this.view.addEventListener('load', ((e: CustomEvent) => {
+      refreshMarginals(this.view)
+      this.emit('load', e.detail)
+    }) as EventListener)
+    this.view.addEventListener('external-link', ((e: CustomEvent) => this.emit('external-link', e.detail)) as EventListener)
 
-    // 图片加载错误处理
     this.view.addEventListener('load', ((e: CustomEvent) => {
       const { doc } = e.detail || {}
       if (!doc) return
       doc.querySelectorAll('img').forEach((img: HTMLImageElement) => { img.onerror = () => { img.style.display = 'none' } })
     }) as EventListener)
 
-    // 脚注处理
     this.view.addEventListener('link', ((e: CustomEvent) => {
       const { a, href } = e.detail
       if (!a || !href) return this.emit('link', e.detail)
@@ -264,7 +325,7 @@ export class FoliateReader {
           && (
             /note|foot|end|ref|annotation|comment|fn/i.test(cls + id)
             || ((isSuper(a) || (a.children.length === 1 && isSuper(a.children[0] as HTMLElement)) || isSuper(a.parentElement as HTMLElement))
-              && (/^[\[\(]?\d+[\]\)]?$/.test(txt) || /^[\[\(]?[*鈥犫€÷?]+[\]\)]?$/.test(txt)))
+              && (/^[\[\(]?\d+[\]\)]?$/.test(txt) || /^[\[\(]?[*†‡]+[\]\)]?$/.test(txt)))
           )
         )
       if (!isRef) return this.emit('link', e.detail)
@@ -344,13 +405,11 @@ export class FoliateReader {
     }
   }
 
-  // 监听设置变化
   private listenToSettingsChanges() {
     window.addEventListener('sireaderSettingsUpdated', ((e: CustomEvent) => this.updateSettings(e.detail)) as EventListener)
     this.syncThemeObserver(this.settings.theme === 'auto')
   }
 
-  // 导航方法
   private check = () => this.view.renderer || (console.warn('[Reader] Renderer not ready'), null)
 
   async goTo(target: string | number | Location) { this.check() && await this.view.goTo(target) }
@@ -361,17 +420,14 @@ export class FoliateReader {
   async next() { this.check() && await this.view.next() }
   async goToFraction(fraction: number) { this.check() && await this.view.goToFraction(fraction) }
 
-  // 位置和进度
   getLocation = () => getCurrentLocation(this.view)
   getProgress = () => this.view.lastLocation
 
-  // 历史导航
   canGoBack = () => this.view.history?.canGoBack ?? false
   canGoForward = () => this.view.history?.canGoForward ?? false
   goBack = () => this.view.history?.back()
   goForward = () => this.view.history?.forward()
 
-  // 搜索
   async *search(query: string, options?: any) {
     yield* this.searchManager.search(query, options)
   }
@@ -382,14 +438,12 @@ export class FoliateReader {
   getSearchResults = () => this.searchManager.getResults()
   getCurrentSearchResult = () => this.searchManager.getCurrent()
 
-  // 选择文本
   async select(target: string | Location) {
     if ((this.view as any).select) await (this.view as any).select(target)
   }
 
   deselect = () => (this.view as any).deselect?.()
 
-  //获取选中的文本
   getSelectedText(): { text: string; range: Range } | null {
     try {
       for (const { doc } of this.view.renderer?.getContents?.() || []) {
@@ -402,7 +456,6 @@ export class FoliateReader {
     return null
   }
 
-  //事件系统
   on(event: string, cb: Function) {
     (this.eventListeners.get(event) || (this.eventListeners.set(event, new Set()), this.eventListeners.get(event)!)).add(cb)
   }
@@ -414,7 +467,6 @@ export class FoliateReader {
     })
   }
 
-  //设置和信息
   updateSettings(settings: ReaderSettings) {
     this.syncThemeObserver(settings.theme === 'auto')
     this.settings = settings
@@ -424,16 +476,15 @@ export class FoliateReader {
   getBook = () => this.view.book
   getView = () => this.view
 
-  // 销毁
   async destroy() {
     await this.marks?.destroy()
     this.themeObserver?.disconnect()
+    this.resizeObserver?.disconnect()
     this.eventListeners.clear()
     try { this.view.remove() } catch {}
   }
 }
 
-//创建 Reader 实例
 export function createReader(options: ReaderOptions): FoliateReader {
   return new FoliateReader(options)
 }

@@ -60,7 +60,12 @@
         @drop="handleGroupDrop(item, $event)"
       >
       <div class="bs-cover" :class="{ 'is-drop-target': isGroupDropTarget(item) }">
-        <img :src="coverSrc(item)" :alt="mainText(item)" loading="lazy" decoding="async">
+        <template v-if="groupCoverUrls(item).length">
+          <div class="bs-group-cover">
+            <img v-for="(src, index) in groupCoverUrls(item)" :key="`${item.data.id}-${index}`" :src="src" :alt="mainText(item)" loading="lazy" decoding="async">
+          </div>
+        </template>
+        <img v-else :src="coverSrc(item)" :alt="mainText(item)" loading="lazy" decoding="async">
         <template v-if="isBook(item)">
           <span v-if="item.data.rating" class="bs-badge bs-badge--left">{{ starText(item.data.rating) }}</span>
           <span class="bs-badge bs-badge--right">{{ item.data.format.toUpperCase() }}</span>
@@ -75,7 +80,7 @@
           <span class="bs-watermark bs-watermark--group">分组</span>
         </template>
       </div>
-      <div class="bs-title" :title="mainText(item)">{{ mainText(item) }}</div>
+      <div class="bs-title ariaLabel" :aria-label="mainText(item)">{{ mainText(item) }}</div>
       <div v-if="isBook(item) && confirmDeleteId === item.data.url" class="bs-confirm" @click.stop>
         <button class="b3-button b3-button--outline" type="button" @click="emit('clear-delete')">取消</button>
         <button class="b3-button b3-button--remove" type="button" @click="emit('remove-book', item.data)">删除</button>
@@ -102,7 +107,12 @@
         @drop="handleGroupDrop(item, $event)"
       >
       <div class="bs-row__cover">
-        <img :src="coverSrc(item)" :alt="mainText(item)" loading="lazy" decoding="async">
+        <template v-if="groupCoverUrls(item).length">
+          <div class="bs-group-cover">
+            <img v-for="(src, index) in groupCoverUrls(item)" :key="`${item.data.id}-${index}`" :src="src" :alt="mainText(item)" loading="lazy" decoding="async">
+          </div>
+        </template>
+        <img v-else :src="coverSrc(item)" :alt="mainText(item)" loading="lazy" decoding="async">
         <span
           v-if="isImport(item)"
           class="block__icon block__icon--show bs-import-check"
@@ -111,31 +121,31 @@
         >
           <svg><use :xlink:href="item.data.selected ? '#iconCheck' : '#iconUncheck'" /></svg>
         </span>
-        <span v-if="isBook(item)" class="bs-watermark bs-watermark--mini" :class="watermarkClass(item.data.status)">{{ statusMap[item.data.status] }}</span>
       </div>
 
       <div class="b3-list-item__text bs-row__main">
         <div class="bs-row__head">
-          <div class="bs-row__title" :title="mainText(item)">{{ mainText(item) }}</div>
+          <div class="bs-row__title ariaLabel" :aria-label="mainText(item)">{{ mainText(item) }}</div>
           <div v-if="isBook(item)" class="bs-row__progress">{{ getProgress(item.data) }}</div>
         </div>
 
-        <div class="bs-row__author" :title="authorText(item)">{{ authorText(item) }}</div>
+        <div class="bs-row__author ariaLabel" :aria-label="authorText(item)">{{ authorText(item) }}</div>
 
-        <div v-if="isBook(item)" class="bs-tags">
+        <div v-if="isBook(item)" class="bs-tags" :class="{ 'is-stacked': bookTags(item.data).length > 1 }">
           <span class="bs-tag bs-tag--type">{{ item.data.format.toUpperCase() }}</span>
-          <span v-for="tag in item.data.tags.slice(0, 4)" :key="tag" class="bs-tag" :style="tagStyle(tag)">{{ tag }}</span>
+          <span class="bs-tag bs-tag--state" :class="`bs-tag--${item.data.status}`">{{ statusMap[item.data.status] }}</span>
+          <span v-for="tag in bookTags(item.data)" :key="tag" class="bs-tag" :style="tagStyle(tag)">{{ tag }}</span>
         </div>
         <div v-else-if="isGroup(item) && item.data.type === 'smart'" class="bs-tags">
           <span v-for="text in groupChips(item.data)" :key="text" class="bs-tag bs-tag--type">{{ text }}</span>
         </div>
 
         <div v-if="isBook(item)" class="bs-row__meta">
-          <span v-if="annotationText(item.data)">{{ annotationText(item.data) }}</span>
+          <span v-if="annotationText(item.data)" class="ariaLabel" :aria-label="annotationText(item.data)">{{ annotationText(item.data) }}</span>
           <span v-if="annotationText(item.data) && chapterText(item.data)">·</span>
-          <span v-if="chapterText(item.data)">{{ chapterText(item.data) }}</span>
+          <span v-if="chapterText(item.data)" class="ariaLabel" :aria-label="chapterText(item.data)">{{ chapterText(item.data) }}</span>
           <span v-if="(annotationText(item.data) || chapterText(item.data)) && lastReadText(item.data.read)">·</span>
-          <span v-if="lastReadText(item.data.read)">{{ lastReadText(item.data.read) }}</span>
+          <span v-if="lastReadText(item.data.read)" class="ariaLabel" :aria-label="lastReadText(item.data.read)">{{ lastReadText(item.data.read) }}</span>
         </div>
 
         <div v-if="isImport(item) && item.data.error" class="ft__error">{{ item.data.error }}</div>
@@ -173,6 +183,7 @@ const props = withDefaults(defineProps<{
   groupCounts?: Record<string, number>
   statusMap: Record<BookStatus, string>
   getCoverUrl: (book: Book) => string
+  getGroupCoverUrls: (group: GroupConfig) => string[]
   getProgress: (book: Book) => string
   currentGroup?: string | null
 }>(), { gridStyle: () => ({}), confirmDeleteId: null, groupCounts: () => ({}), currentGroup: null })
@@ -334,6 +345,8 @@ const authorText = (item: Item) => isGroup(item) ? (item.data.type === 'smart' ?
 const onCompactHover = (event: MouseEvent) => (event.target as HTMLElement).hasAttribute('data-playlist-item') && event.stopPropagation()
 const compactMeta = (item: Item) => isGroup(item) ? countText(groupCount(item.data)) : isBook(item) ? props.getProgress(item.data) : importStateText(item.data)
 const sideTexts = (item: Item) => isGroup(item) ? [countText(groupCount(item.data))] : isBook(item) ? [] : [importStateText(item.data)]
+const groupCoverUrls = (item: Item) => isGroup(item) ? props.getGroupCoverUrls(item.data) : []
+const bookTags = (book: Book) => book.tags.slice(0, 4)
 const coverSrc = (item: Item) => (isBook(item) ? props.getCoverUrl(item.data) : isImport(item) ? item.data.preview?.cover || '' : '') || placeholderCover(item)
 const placeholderCover = (item: Item) => {
   const kind = isGroup(item) ? 'group' : isBook(item) ? item.data.format : item.data.preview?.format || 'book'
@@ -375,7 +388,7 @@ const tagStyle = (tag: string) => {
 <style scoped lang="scss">
 .bs-view{min-height:0;height:100%;padding:0;box-sizing:border-box}
 .bs-tree{overflow:hidden;--bs-tree-border:color-mix(in srgb,var(--b3-theme-on-surface-light) 30%,transparent);--b3-list-hover:color-mix(in srgb,var(--b3-theme-primary) 12%,transparent)}
-.bs-tree__scroll{display:flex;flex-direction:column;gap:6px;min-height:0;overflow:auto;scrollbar-gutter:stable;padding:8px 0 8px 8px;box-sizing:border-box}
+.bs-tree__scroll{display:flex;flex-direction:column;gap:6px;min-height:0;overflow:auto;scrollbar-gutter:stable;padding:0 0 8px 8px;box-sizing:border-box}
 .bs-tree :deep(.b3-list),.bs-list{margin:0;background:transparent}
 .bs-tree__home{display:block;max-height:0;overflow:hidden;opacity:0;transition:max-height .18s ease,opacity .18s ease;margin:0}
 .bs-tree__home.is-visible{max-height:52px;opacity:.9}
@@ -399,7 +412,8 @@ const tagStyle = (tag: string) => {
 .bs-cover.is-drop-target::after{content:'';position:absolute;inset:0;background:color-mix(in srgb,var(--b3-theme-primary) 18%,transparent);pointer-events:none}
 .bs-cover,.bs-row__cover{position:relative;overflow:hidden;background:var(--b3-theme-surface-lighter);box-shadow:inset 0 0 0 1px var(--b3-border-color)}
 .bs-cover{aspect-ratio:2/3;border-radius:6px}
-.bs-cover img,.bs-row__cover img{display:block;width:100%;height:100%;object-fit:cover;background:inherit}
+.bs-cover img,.bs-row__cover img{display:block;width:100%;height:100%;object-fit:cover;background:inherit;animation:bs-cover-fade .18s ease}
+.bs-group-cover{display:grid;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(2,1fr);width:100%;height:100%;gap:1px;background:var(--b3-border-color);border-radius:inherit;overflow:hidden}
 .bs-import-check{position:absolute;top:4px;left:4px;z-index:2}
 .bs-title,.bs-row__title,.bs-row__author,.bs-row .ft__error{color:var(--b3-theme-on-surface);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bs-title{padding-top:3px;font-size:13px;line-height:1.4}
@@ -411,20 +425,28 @@ const tagStyle = (tag: string) => {
 .bs-watermark--unread{color:#f59e0b}
 .bs-watermark--reading{color:var(--b3-theme-primary)}
 .bs-watermark--finished{color:var(--b3-card-success-color,#2aa775)}
-.bs-watermark--mini{right:-.15em;bottom:-.16em;font-size:25px;opacity:inherit}
 .bs-list{display:flex;flex-direction:column;gap:6px;overflow:auto;scrollbar-gutter:stable;padding:8px 0 8px 8px;box-sizing:border-box}
-.bs-row{position:relative;display:flex;align-items:stretch;gap:10px;min-height:98px;padding:0 12px 0 0;border:1px solid color-mix(in srgb,var(--b3-border-color) 92%, transparent);border-radius:12px;background:linear-gradient(180deg,color-mix(in srgb,var(--b3-theme-background) 96%, white),var(--b3-theme-background));box-sizing:border-box;overflow:hidden}
-.bs-row__cover{align-self:stretch;flex:0 0 auto;width:64px;border-right:1px solid color-mix(in srgb,var(--b3-border-color) 88%, transparent)}
+.bs-row{position:relative;display:flex;align-items:stretch;gap:10px;min-height:98px;padding:0 12px 0 0;border:1px solid color-mix(in srgb,var(--b3-border-color) 92%, transparent);border-radius:8px;background:linear-gradient(180deg,color-mix(in srgb,var(--b3-theme-background) 96%, white),var(--b3-theme-background));box-sizing:border-box;overflow:hidden}
+.bs-row__cover{align-self:stretch;flex:0 0 auto;width:64px;margin:2px;border-right:1px solid color-mix(in srgb,var(--b3-border-color) 88%, transparent);border-radius:8px}
 .bs-row__main{display:flex;flex:1;flex-direction:column;justify-content:flex-start;gap:5px;min-width:0;padding:10px 0 9px}
 .bs-row__head{display:flex;align-items:flex-start;gap:8px;min-width:0}
 .bs-row__title{flex:1;min-width:0;font-size:13px;line-height:1.3;font-weight:600;letter-spacing:0}
 .bs-row__progress{flex:0 0 auto;padding-top:1px;font-size:11px;line-height:1.2;color:var(--b3-theme-on-surface-variant);font-variant-numeric:tabular-nums}
-.bs-row__author{font-size:11px;line-height:1.25;color:var(--b3-theme-on-surface-variant)}
-.bs-tags{display:flex;flex-wrap:wrap;gap:4px}
+.bs-row__author{font-size:11px;line-height:1.25;color:var(--b3-theme-on-surface-variant);min-height:14px}
+.bs-tags{display:flex;flex-wrap:nowrap;gap:4px;min-height:16px;overflow:hidden}
 .bs-tag{display:inline-flex;align-items:center;max-width:78px;padding:0 6px;height:16px;border-radius:5px;border:1px solid var(--bs-tag-border);background:var(--bs-tag-bg);color:var(--bs-tag-color);font-size:9px;font-weight:500;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-sizing:border-box}
-.bs-tag--type{background:var(--b3-list-hover);border-color:color-mix(in srgb,var(--b3-border-color) 90%, transparent);color:var(--b3-theme-on-surface-variant)}
-.bs-row__meta{display:flex;flex-wrap:wrap;gap:4px;font-size:10px;line-height:1.2;color:var(--b3-theme-on-surface-variant)}
+.bs-row .bs-tag{position:relative;max-width:78px;flex:0 0 auto}
+.bs-row .bs-tags.is-stacked{gap:0}
+.bs-row .bs-tags.is-stacked .bs-tag{margin-right:-10px;transition:margin-right .15s ease,max-width .15s ease;z-index:1}
+.bs-row .bs-tags.is-stacked .bs-tag:hover{max-width:160px;margin-right:4px;overflow:visible;text-overflow:clip;z-index:2}
+.bs-tag--type,.bs-tag--state{background:var(--b3-list-hover);border-color:color-mix(in srgb,var(--b3-border-color) 90%, transparent)}
+.bs-tag--type{color:var(--b3-theme-on-surface-variant)}
+.bs-tag--unread{color:var(--b3-card-warning-color);background:var(--b3-card-warning-background);border-color:color-mix(in srgb,var(--b3-card-warning-color) 24%,transparent)}
+.bs-tag--reading{color:var(--b3-theme-primary);background:var(--b3-theme-primary-lightest);border-color:color-mix(in srgb,var(--b3-theme-primary) 24%,transparent)}
+.bs-tag--finished{color:var(--b3-card-success-color,#2aa775);background:var(--b3-card-success-background, color-mix(in srgb,var(--b3-card-success-color,#2aa775) 14%, transparent));border-color:color-mix(in srgb,var(--b3-card-success-color,#2aa775) 24%,transparent)}
+.bs-row__meta{display:flex;flex-wrap:nowrap;gap:4px;margin-top:auto;font-size:10px;line-height:1.2;color:var(--b3-theme-on-surface-variant);white-space:nowrap;overflow:hidden}
 .bs-row__side{display:flex;flex:0 0 auto;flex-direction:column;align-items:flex-end;justify-content:center;gap:8px;padding:12px 0 12px 8px;margin-left:auto}
 .bs-row__side .ft__secondary{max-width:100%;font-size:11px;line-height:1.2;text-align:right;color:var(--b3-theme-on-surface-variant)}
 .bs-confirm{position:absolute;right:6px;bottom:6px;z-index:2;display:flex;gap:4px;padding:4px;border:1px solid var(--b3-border-color);border-radius:var(--b3-border-radius);background:var(--b3-theme-background)}
+@keyframes bs-cover-fade{from{opacity:0}to{opacity:1}}
 </style>
