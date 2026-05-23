@@ -40,47 +40,36 @@
               :editing="isEditing(mark)"
               :editable="canEdit(mark)"
               :text="isEditing(mark) ? editText : mainText(mark)"
-              :chapter="isEditing(mark) ? '' : mark.chapter"
+              :chapter="getMarkChapter(mark)"
               :note="isEditing(mark) ? editNote : mark.note"
               :mark-color="getBarColor(mark)"
               :color-value="editColor"
-              :color-options="isEditing(mark) && showEditOptions(mark) ? getEditColorOptions(mark.type === 'shape') : []"
+              :color-options="isEditing(mark) && showEditOptions(mark) ? getEditColorOptions(mark.type === 'shape' || mark.type === 'ink') : []"
+              :style-value="editStyle"
+              :style-options="isEditing(mark) ? getMarkStyleOptions(mark) : []"
               :bookmark="isBookmark(mark)"
               @update:tag-input="editTags = $event"
-              @update:text="editText = $event"
               @update:note="editNote = $event"
               @update:color-value="editColor = $event"
+              @update:style-value="editStyle = $event"
               @toggle-tag="toggleEditTag"
-              @go="isVisualGroup(mark) ? null : goTo(mark)"
+              @go="goTo(mark)"
               @edit="startEdit(mark)"
               @cancel="cancelEdit"
               @save="saveEdit(mark)"
             >
               <template #actions>
-                <div v-if="!isVisualGroup(mark)" class="sr-head-actions">
+                <div class="sr-head-actions">
                   <button class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.copy || '复制'" @click.stop="copyMark(mark)"><svg><use xlink:href="#iconCopy" /></svg></button>
                   <button v-if="mark.blockId && !isBookmark(mark)" class="b3-tooltips b3-tooltips__nw" aria-label="打开块" @click.stop="openBlock(mark.blockId)" @mouseenter="onBlockEnter($event, mark.blockId)" @mouseleave="hideFloat"><svg><use xlink:href="#iconRef" /></svg></button>
                   <button v-else-if="canImport(mark)" class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.import || '导入'" @click.stop="importMark(mark)"><svg><use xlink:href="#iconDownload" /></svg></button>
                   <button class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.delete || '删除'" @click.stop="deleteMark(mark)"><svg><use xlink:href="#iconTrashcan" /></svg></button>
                 </div>
-                <button v-if="isVisualGroup(mark)" class="sr-expand-btn b3-tooltips b3-tooltips__nw" :aria-label="isExpanded(mark) ? '收起' : '展开'" @click.stop="toggleExpand(mark)">
-                  <svg><use :xlink:href="isExpanded(mark) ? '#iconUp' : '#iconDown'" /></svg>
-                </button>
-              </template>
-              <template #meta>
-                <span v-if="isVisualGroup(mark)" class="sr-meta">第 {{ mark.page }} 页 · {{ (mark.inks || mark.shapes).length }} 条</span>
               </template>
               <template #extra>
-                <canvas v-if="mark.type === 'ink-group'" :data-page="mark.page" class="sr-preview sr-group-preview" width="240" height="80"></canvas>
-
-                <Transition name="expand">
-                  <div v-if="isExpanded(mark)" class="sr-sub-list">
-                    <div v-for="sub in mark.inks || mark.shapes" :key="sub.id" class="sr-sub-item">
-                      <canvas v-if="mark.type === 'ink-group'" :data-ink-id="sub.id" class="sr-preview" width="240" height="40" @click.stop="goTo(sub)"></canvas>
-                      <canvas v-else :data-shape-id="sub.id" class="sr-preview" width="240" height="40" @click.stop="goTo(sub)"></canvas>
-                    </div>
-                  </div>
-                </Transition>
+                <canvas v-if="mark.type === 'ink'" :data-ink-id="mark.id" class="sr-preview" width="240" height="48" @click.stop="goTo(mark)"></canvas>
+                <canvas v-else-if="mark.type === 'shape' && mark.shapeType !== 'textbox'" :data-shape-id="mark.id" class="sr-preview" width="240" height="48" @click.stop="goTo(mark)"></canvas>
+                <img v-else-if="mark.image" class="sr-image-preview" :src="mark.image" :alt="mainText(mark)" @click.stop="goTo(mark)">
               </template>
             </MarkCard>
           </div>
@@ -162,9 +151,6 @@ const {
   dropMark,
   endMarkDrag,
   getBarColor,
-  isVisualGroup,
-  isExpanded,
-  toggleExpand,
   isEditing,
   editText,
   editNote,
@@ -174,7 +160,10 @@ const {
   cancelEdit,
   showEditOptions,
   getEditColorOptions,
+  getEditStyleOptions,
+  getEditShapeOptions,
   editColor,
+  editStyle,
   markTagOptions,
   toggleEditTag,
   saveEdit,
@@ -198,6 +187,8 @@ const {
   goTo,
 } = useReaderMarks(props.i18n)
 const formatDateTime = (ts: number) => new Date(ts).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+const getMarkChapter = (mark: any) => isEditing(mark) ? '' : [mark?.chapter || (mark?.page ? `第${mark.page}页` : ''), mark?.type === 'ink' ? '墨迹标注' : mark?.type === 'shape' ? (mark.shapeType === 'textbox' ? '文本标注' : '形状标注') : ''].filter(Boolean).join(' ')
+const getMarkStyleOptions = (mark: any) => mark?.type === 'shape' ? getEditShapeOptions() : (mark?.type === 'highlight' || mark?.type === 'note' || !mark?.type) ? getEditStyleOptions() : []
 </script>
 
 <style scoped lang="scss">
@@ -216,8 +207,8 @@ const formatDateTime = (ts: number) => new Date(ts).toLocaleString('zh-CN', { ye
 .sr-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .sr-actions-end{justify-content:flex-end}
 .sr-section-line{padding-top:12px;border-top:1px solid var(--b3-border-color)}
-.sr-card{--sr-gap:4px;--sr-line:19px;display:flex;gap:var(--sr-gap);padding:6px;margin-bottom:6px;border:1px solid #d8d8d8;border-radius:8px;background:#fff;position:relative;transform:none!important;box-shadow:none!important;transition:border-color .15s,background-color .15s}
-.sr-card:hover{border-color:#9fb0c1;background:#fbfdff;transform:none!important;box-shadow:none!important}
+.sr-card{--sr-gap:4px;--sr-line:19px;display:flex;gap:var(--sr-gap);padding:6px;margin-bottom:6px;border:1px solid color-mix(in srgb,var(--b3-border-color) 92%,transparent);border-radius:8px;background:linear-gradient(180deg,color-mix(in srgb,var(--b3-theme-background) 96%,white),var(--b3-theme-background));color:var(--b3-theme-on-surface);position:relative;transform:none!important;box-shadow:none!important;transition:border-color .15s}
+.sr-card:hover{border-color:var(--b3-theme-primary);transform:none!important;box-shadow:none!important}
 .sr-card-drag{cursor:grab}
 .sr-card.is-dragging{opacity:.45}
 .sr-card.is-drag-over{border-color:var(--b3-theme-primary);box-shadow:0 0 0 1px var(--b3-theme-primary) inset}
@@ -228,16 +219,11 @@ const formatDateTime = (ts: number) => new Date(ts).toLocaleString('zh-CN', { ye
 .sr-bar{width:4px;border-radius:999px;background:var(--b3-theme-primary);flex-shrink:0}
 .sr-bar.collapsed{opacity:.4}
 .sr-head-actions{display:flex;align-items:center;gap:4px;flex-shrink:0}
-.sr-head-actions button,.sr-expand-btn{display:flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;border:none;background:transparent;border-radius:4px;line-height:1;cursor:pointer;color:#8a8a8a}
-.sr-head-actions button:hover,.sr-expand-btn:hover{background:#f4f4f4;color:#555}
+.sr-head-actions button{display:flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;border:none;background:transparent;border-radius:4px;line-height:1;cursor:pointer;color:var(--b3-theme-on-surface-variant)}
+.sr-head-actions button:hover{background:var(--b3-list-hover);color:var(--b3-theme-primary)}
 .sr-head-actions svg{width:14px;height:14px}
-.sr-meta{margin-left:8px;font-size:11px;font-weight:400;color:var(--b3-theme-on-surface-variant)}
 .sr-preview{width:100%;background:var(--b3-theme-background)}
-.sr-group-preview{height:80px}
-.sr-sub-list{display:flex;flex-direction:column;gap:var(--sr-gap)}
-.sr-sub-item{padding:6px;border:1px solid #e2e2e2;border-radius:6px;box-shadow:none;background:#fafafa}
+.sr-image-preview{display:block;max-width:100%;max-height:180px;object-fit:contain;border-radius:6px;background:var(--b3-theme-background);cursor:pointer}
 .fade-enter-active,.fade-leave-active{transition:opacity .2s}
 .fade-enter-from,.fade-leave-to{opacity:0}
-.expand-enter-active,.expand-leave-active{transition:all .2s ease}
-.expand-enter-from,.expand-leave-to{opacity:0;max-height:0;overflow:hidden}
 </style>

@@ -35,13 +35,17 @@ export default class PluginSample extends Plugin {
     init(this)
     this.addHotkeys()
 
-    import('@/utils/migration')
+    let reading = false
+    window.addEventListener('reader:open', () => reading = true)
+    window.addEventListener('reader:close', () => reading = false)
+    const idle = (fn: () => void) => (window as any).requestIdleCallback ? (window as any).requestIdleCallback(fn, { timeout: 10000 }) : setTimeout(fn, 10000)
+    const defer = (fn: () => void) => idle(() => reading ? defer(fn) : fn())
+    defer(() => import('@/utils/migration')
       .then(({ ensureMigrationCompleted }) => ensureMigrationCompleted())
-      .catch(error => console.error('[SiReader] Migration init failed:', error))
-
-    import('@/components/deck/siyuan-card')
+      .catch(error => console.error('[SiReader] Migration init failed:', error)))
+    idle(() => import('@/components/deck/siyuan-card')
       .then(({ enableAutoSync }) => enableAutoSync())
-      .catch(error => console.error('[SiReader] Deck autosync init failed:', error))
+      .catch(error => console.error('[SiReader] Deck autosync init failed:', error)))
   }
 
   private addHotkeys() {
@@ -69,7 +73,6 @@ export default class PluginSample extends Plugin {
 
   async onunload() {
     destroy()
-    console.log('[SiReader] plugin unloaded')
   }
 
   async uninstall() {
@@ -79,7 +82,6 @@ export default class PluginSample extends Plugin {
     await clearStoredPluginData(books)
     await this.removeData('config.json')
     await this.removeData('stats.json')
-    console.log('[SiReader] plugin data removed')
   }
 
   openSetting() {

@@ -12,7 +12,6 @@
           class="sr-tag-input-inline"
       placeholder="输入标签，逗号分隔；下方点击选择"
           @click.stop
-          @mousedown.stop
           @pointerdown.stop
           @input="emit('update:tagInput', ($event.target as HTMLInputElement).value)"
         />
@@ -40,16 +39,26 @@
           @click.stop="emit('update:colorValue', color.value)"
         />
       </div>
-      <div
-        class="sr-title"
-        contenteditable
-        :style="{ '--mark-color': markColor }"
-        @input="emit('update:text', ($event.target as HTMLElement).textContent || '')"
-      >{{ text }}</div>
+      <div v-if="styleOptions.length" class="sr-style-picker">
+        <button
+          v-for="style in styleOptions"
+          :key="style.value"
+          class="sr-style-btn"
+          :class="{ active: styleValue === style.value }"
+          :title="style.label"
+          @click.stop="emit('update:styleValue', style.value)"
+        >
+          <svg v-if="style.icon" class="sr-style-svg"><use :xlink:href="style.icon" /></svg>
+          <span v-else class="sr-style-icon" :data-type="style.value">A</span>
+        </button>
+      </div>
+      <div class="sr-title" :style="{ '--mark-color': markColor }">
+        <div class="sr-title-text">{{ text }}</div>
+      </div>
     </div>
     <div v-else class="sr-title" :class="{ 'sr-title-bookmark': bookmark }" :style="{ '--mark-color': markColor }">
       <div v-if="chapter" class="sr-inline-chapter">{{ chapter }}</div>
-      <div class="sr-title-text">{{ text || '无内容' }}</div>
+      <div v-if="text" class="sr-title-text">{{ text }}</div>
       <slot name="meta" />
     </div>
 
@@ -85,10 +94,22 @@
   </div>
 </template>
 
+<script lang="ts">
+const normalizeMarkTags = (tags?: unknown[]) => Array.from(new Set((tags || []).map(tag => String(tag || '').trim()).filter(Boolean)))
+export const parseMarkTags = (value = '') => normalizeMarkTags(value.split(/[#,，;；\n]/))
+export const formatMarkTags = (tags?: unknown[]) => normalizeMarkTags(tags).join(', ')
+export const getMarkTags = (item: any) => normalizeMarkTags(item?.tags || [])
+export const collectMarkTags = (source: any[] | any = [], extra: unknown[] = []) => {
+  const items = Array.isArray(source) ? source : [...(source?.getAll?.() || []), ...(source?.getInkAnnotations?.() || []), ...(source?.getShapeAnnotations?.() || [])]
+  return [...new Set([...items.flatMap(getMarkTags), ...normalizeMarkTags(extra)])].sort((a, b) => a.localeCompare(b)).slice(0, 24)
+}
+</script>
+
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
 
 type ColorOption = { key: string; value: string; bg: string }
+type StyleOption = { value: string; label: string; icon?: string }
 
 const props = withDefaults(defineProps<{
   time: string
@@ -104,6 +125,8 @@ const props = withDefaults(defineProps<{
   markColor?: string
   colorValue?: string
   colorOptions?: ColorOption[]
+  styleValue?: string
+  styleOptions?: StyleOption[]
   bookmark?: boolean
 }>(), {
   tags: () => [],
@@ -116,13 +139,15 @@ const props = withDefaults(defineProps<{
   markColor: '#e0e0e0',
   colorValue: '',
   colorOptions: () => [],
+  styleValue: 'highlight',
+  styleOptions: () => [],
 })
 
 const emit = defineEmits<{
   'update:tagInput': [value: string]
-  'update:text': [value: string]
   'update:note': [value: string]
   'update:colorValue': [value: string]
+  'update:styleValue': [value: string]
   'toggle-tag': [tag: string]
   edit: []
   cancel: []
@@ -131,11 +156,12 @@ const emit = defineEmits<{
 }>()
 
 const noteRef = ref<HTMLTextAreaElement | null>(null)
+const getLineHeight = (el: HTMLElement) => Number.parseFloat(getComputedStyle(el).lineHeight) || 19
 const resizeNote = () => {
   const textarea = noteRef.value
   if (!textarea) return
   textarea.style.height = 'auto'
-  textarea.style.height = `${textarea.scrollHeight}px`
+  textarea.style.height = `${Math.max(getLineHeight(textarea), textarea.scrollHeight)}px`
 }
 const onNoteInput = (event: Event) => {
   emit('update:note', (event.target as HTMLTextAreaElement).value)
@@ -145,32 +171,44 @@ watch(() => [props.editing, props.note], () => nextTick(resizeNote), { immediate
 </script>
 
 <style scoped lang="scss">
-.sr-main{display:flex;flex:1;flex-direction:column;gap:var(--sr-gap,4px)!important;min-width:0}
+.sr-main{display:flex;flex:1;flex-direction:column;gap:var(--sr-gap,4px)!important;min-width:0;padding-left:0;position:static;z-index:auto}
 .sr-main>*{flex:0 0 auto;margin:0!important}
 .sr-head{display:flex;align-items:center;justify-content:space-between;gap:var(--sr-gap,4px);min-height:18px}
-.sr-time{font-size:12px;line-height:18px;color:#6b6b6b;white-space:nowrap;flex-shrink:0}
+.sr-time{font-size:12px;line-height:18px;color:var(--b3-theme-on-surface-variant);white-space:nowrap;flex-shrink:0}
 .sr-tag-list{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sr-gap,4px);min-height:var(--sr-line,19px)}
 .sr-tag-editor{flex-direction:column;align-items:stretch}
 .sr-tag-options{display:flex;flex-wrap:wrap;gap:var(--sr-gap,4px)}
-.sr-tag-chip{display:inline-flex;align-items:center;height:18px;padding:0 6px;border:0;border-radius:2px;background:#eef5ff;color:#415c7a;font-size:12px;line-height:18px;cursor:default}
+.sr-tag-chip{display:inline-flex;align-items:center;height:18px;padding:0 6px;border:0;border-radius:2px;background:var(--b3-theme-primary-lightest);color:var(--b3-theme-primary);font-size:12px;line-height:18px;cursor:default}
 button.sr-tag-chip{cursor:pointer;opacity:.58}
-button.sr-tag-chip.active{opacity:1;background:#dfeeff;color:#244966}
-.sr-tag-input-inline{width:100%;height:20px;padding:0 4px;border:0;border-bottom:1px solid #d7d7d7;background:transparent;color:#333;font-size:12px;line-height:20px;outline:none;box-sizing:border-box}
+button.sr-tag-chip.active{opacity:1;background:var(--b3-theme-primary-lightest);color:var(--b3-theme-primary)}
+.sr-tag-input-inline{width:100%;height:20px;padding:0 4px;border:0;border-bottom:1px solid var(--b3-border-color);background:transparent;color:var(--b3-theme-on-surface);font-size:12px;line-height:20px;outline:none;box-sizing:border-box}
 .sr-title,.sr-note{flex:0 0 auto;min-height:var(--sr-line,19px);font-size:13px;line-height:var(--sr-line,19px);overflow:hidden}
-.sr-title{display:flex;flex-direction:column;gap:var(--sr-gap,4px);padding:0 0 0 6px;border-left:3px solid var(--mark-color,#e0e0e0);background:#fff;color:#888;font-weight:500;cursor:pointer}
-.sr-title[contenteditable="true"]{outline:none}
+.sr-title{position:relative;display:flex;flex-direction:column;gap:var(--sr-gap,4px);padding:0 0 0 9px;background:transparent;color:var(--b3-theme-on-surface-variant);font-weight:500;cursor:pointer}
+.sr-title::before{content:"";position:absolute;left:0;top:1px;bottom:1px;width:3px;border-radius:999px;background:var(--mark-color,#e0e0e0)}
+.sr-title:focus,.sr-title:focus-visible{outline:none!important;box-shadow:none!important}
 .sr-title-bookmark{color:var(--b3-theme-primary)}
 .sr-title-text,.sr-inline-chapter{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sr-inline-chapter{color:#aaa;font-weight:500}
+.sr-inline-chapter{color:var(--b3-theme-on-surface-variant);font-weight:500}
 .sr-title-edit{display:flex;flex-direction:column;gap:var(--sr-gap,4px);min-width:0}
-.sr-color-picker{display:flex;align-items:center;gap:5px}
+.sr-color-picker{display:flex;align-items:center;gap:var(--sr-gap,4px)}
 .sr-color-swatch{width:18px;height:18px;padding:0;border:1px solid #0001;border-radius:5px;cursor:pointer;box-shadow:inset 0 0 0 1px #fff8}
-.sr-color-swatch.active{border-color:#555;box-shadow:0 0 0 1px #555,inset 0 0 0 1px #fff}
-.sr-note{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:#333;cursor:text;white-space:normal}
-.sr-note-edit{width:100%;height:auto;min-height:var(--sr-line,19px);padding:0;border:0;background:transparent;box-sizing:border-box;resize:none;outline:none;overflow:hidden;font-family:inherit;field-sizing:content}
+.sr-color-swatch.active{border-color:var(--b3-theme-primary);box-shadow:0 0 0 1px var(--b3-theme-primary),inset 0 0 0 1px #fff}
+.sr-style-picker{display:flex;align-items:center;gap:var(--sr-gap,4px)}
+.sr-style-btn{display:inline-flex;align-items:center;justify-content:center;width:22px;height:20px;padding:0;border:1px solid var(--b3-border-color);border-radius:5px;background:var(--b3-theme-surface);color:var(--b3-theme-on-surface-variant);cursor:pointer}
+.sr-style-btn.active{border-color:var(--b3-theme-primary);background:var(--b3-theme-primary-lightest);color:var(--b3-theme-primary)}
+.sr-style-svg{width:13px;height:13px}
+.sr-style-icon{font-size:12px;font-weight:700;line-height:1}
+.sr-style-icon[data-type="underline"]{text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:3px}
+.sr-style-icon[data-type="outline"]{padding:0 2px;border:1px solid currentColor;border-radius:2px}
+.sr-style-icon[data-type="dotted"]{border-bottom:2px dotted currentColor}
+.sr-style-icon[data-type="dashed"]{border-bottom:2px dashed currentColor}
+.sr-style-icon[data-type="double"]{border-bottom:3px double currentColor}
+.sr-style-icon[data-type="squiggly"]{text-decoration:underline wavy;text-decoration-thickness:1px;text-underline-offset:3px}
+.sr-note{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:var(--b3-theme-on-surface);cursor:text;white-space:normal}
+.sr-note-edit{flex:0 0 auto;display:block;width:100%;height:auto;min-height:var(--sr-line,19px);padding:0;border:0;background:transparent;box-sizing:border-box;resize:none;outline:none;overflow:hidden;color:var(--b3-theme-on-surface);font:inherit;font-size:13px;line-height:var(--sr-line,19px);white-space:pre-wrap}
 .sr-card-foot{display:flex;align-items:center;justify-content:space-between;gap:var(--sr-gap,4px)}
-.sr-text-btn{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0;border:none;background:transparent;color:#777;font-size:12px;line-height:1;cursor:pointer}
+.sr-text-btn{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0;border:none;background:transparent;color:var(--b3-theme-on-surface-variant);font-size:12px;line-height:1;cursor:pointer}
 .sr-text-btn svg{width:14px;height:14px;flex-shrink:0}
-.sr-text-btn--primary{height:22px;padding:0 5px;border:1px solid #d7d7d7;border-radius:5px;background:#fff;color:#444}
-.sr-meta{margin-left:8px;font-size:11px;font-weight:400;color:var(--b3-theme-on-surface-variant)}
+.sr-text-btn--primary{height:22px;padding:0 5px;border:1px solid var(--b3-border-color);border-radius:5px;background:var(--b3-theme-surface);color:var(--b3-theme-on-surface)}
 </style>
+

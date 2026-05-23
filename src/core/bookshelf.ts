@@ -257,14 +257,14 @@ class BookshelfManager {
   // 恢复阅读进度
   async restoreProgress(url:string,reader?:any,pdfViewer?:any,view?:any){
     try{
-      const b=await this.getBook(url),cfi=b?.pos?.cfi,chapter=b?.chapter||0
+      const b=await this.getBook(url),cfi=b?.pos?.cfi,chapter=Number.isInteger(b?.chapter)?b.chapter:undefined
       if(!b)return
       if(pdfViewer){
         const t=pdfViewer.getPageCount(),page=chapter>=1&&chapter<=t?chapter:cfi?.startsWith('#page-')?parseInt(cfi.slice(6)):0
         if(page>=1&&page<=t)pdfViewer.goToPage(page)
         return
       }
-      const tgt=reader||view,loc=cfi||chapter
+      const tgt=reader||view,loc=chapter??cfi
       if(!tgt)return
       if(!loc)return void ((b.progress||0)<=0&&await reader?.goToTextStart?.())
       await new Promise(r=>setTimeout(r,300))

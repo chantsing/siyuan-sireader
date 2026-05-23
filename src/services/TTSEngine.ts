@@ -218,9 +218,23 @@ export interface TTSVoice {
 }
 
 let voiceCache: { at: number; voices: TTSVoice[] } | null = null
+let onlineVoiceTask: Promise<TTSVoice[]> | null = null
+let localVoiceTask: Promise<TTSVoice[]> | null = null
+let localVoiceCache: TTSVoice[] | null = null
+const readVoiceCache = () => {
+  if (voiceCache) return voiceCache
+  try { return voiceCache = JSON.parse(localStorage.getItem('sireader:tts:voices') || 'null') } catch { return null }
+}
+const writeVoiceCache = (voices: TTSVoice[]) => {
+  voiceCache = { at: Date.now(), voices }
+  try { localStorage.setItem('sireader:tts:voices', JSON.stringify(voiceCache)) } catch {}
+}
 
 export async function loadOnlineVoices(): Promise<TTSVoice[]> {
-  if (voiceCache && Date.now() - voiceCache.at < CACHE_TTL) return voiceCache.voices
+  const cached = readVoiceCache()
+  if (cached && Date.now() - cached.at < CACHE_TTL) return cached.voices
+  if (onlineVoiceTask) return onlineVoiceTask
+  onlineVoiceTask = (async () => {
   try {
     const res = await fetch(VOICES_URL)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -232,15 +246,20 @@ export async function loadOnlineVoices(): Promise<TTSVoice[]> {
       gender: v.Gender === 'Male' ? 'Male' : 'Female',
       isLocal: false
     }))
-    voiceCache = { at: Date.now(), voices }
+    writeVoiceCache(voices)
     return voices
   } catch (error) {
-    return voiceCache?.voices || []
+    return cached?.voices || []
   }
+  })().finally(() => onlineVoiceTask = null)
+  return onlineVoiceTask
 }
 
 export async function loadLocalVoices(): Promise<TTSVoice[]> {
   if (!('speechSynthesis' in window)) return []
+  if (localVoiceCache) return localVoiceCache
+  if (localVoiceTask) return localVoiceTask
+  localVoiceTask = (async () => {
   let voices = window.speechSynthesis.getVoices()
   if (!voices.length) {
     voices = await new Promise<SpeechSynthesisVoice[]>((resolve) => {
@@ -255,10 +274,12 @@ export async function loadLocalVoices(): Promise<TTSVoice[]> {
       setTimeout(() => {
         window.speechSynthesis.removeEventListener('voiceschanged', handler)
         resolve(window.speechSynthesis.getVoices())
-      }, 2000)
+      }, 800)
     })
   }
-  return voices.map(v => ({ name: v.name, displayName: v.name, locale: v.lang || '', gender: 'Female' as const, isLocal: true }))
+  return localVoiceCache = voices.map(v => ({ name: v.name, displayName: v.name, locale: v.lang || '', gender: 'Female' as const, isLocal: true }))
+  })().finally(() => localVoiceTask = null)
+  return localVoiceTask
 }
 
 // ============ Edge TTS 核心 ============

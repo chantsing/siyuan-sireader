@@ -12,6 +12,7 @@ export interface InkConfig{color:string;width:number;opacity:number;smoothing:bo
 
 const isValidRect=(r:any):r is[number,number,number,number]=>Array.isArray(r)&&r.length===4
 const isValidPaths=(p:any):p is InkPath[]=>Array.isArray(p)&&p.length>0
+const rectGap=(a:[number,number,number,number],b:[number,number,number,number])=>Math.max(0,Math.max(a[0],b[0])-Math.min(a[2],b[2]),Math.max(a[1],b[1])-Math.min(a[3],b[3]))
 const compactPoint=(pt:InkPoint):InkPoint=>({x:compactNumber(pt.x),y:compactNumber(pt.y)})
 const compactPath=(path:InkPath):InkPath=>({
   ...path,
@@ -45,33 +46,18 @@ export const drawInk=(canvas:HTMLCanvasElement,paths:InkPath[],rect:[number,numb
     ctx.globalAlpha=p.opacity??1
     ctx.lineWidth=(p.width||2)*s
     ctx.beginPath()
-    ctx.moveTo(p.points[0].x*s+ox,p.points[0].y*s+oy)
-    p.points.forEach(pt=>ctx.lineTo(pt.x*s+ox,pt.y*s+oy))
+    ctx.moveTo(p.points[0].x*s+ox,(y1+y2-p.points[0].y)*s+oy)
+    p.points.forEach(pt=>ctx.lineTo(pt.x*s+ox,(y1+y2-pt.y)*s+oy))
     ctx.stroke()
   })
 }
 
 /** 批量渲染墨迹Canvas */
 export const renderInkCanvas=(list:any[],cache:Map<string,number>,draw=drawInk)=>{
-  document.querySelectorAll('[data-page].sr-group-preview').forEach(el=>{
-    const c=el as HTMLCanvasElement,p=+(c.dataset.page||0),k=`g${p}`
-    if(cache.has(k))return
-    const g=list.find(i=>i.type==='ink-group'&&i.page===p)
-    if(!g?.inks)return
-    let x1=Infinity,y1=Infinity,x2=-Infinity,y2=-Infinity,paths:InkPath[]=[]
-    g.inks.forEach((ink:any)=>{
-      if(isValidRect(ink.rect)){
-        const[a,b,c,d]=ink.rect
-        x1=Math.min(x1,a);y1=Math.min(y1,b);x2=Math.max(x2,c);y2=Math.max(y2,d)
-      }
-      if(isValidPaths(ink.paths))paths.push(...ink.paths)
-    })
-    if(paths.length&&x1!==Infinity){draw(c,paths,[x1,y1,x2,y2]);cache.set(k,1)}
-  })
   document.querySelectorAll('[data-ink-id]').forEach(el=>{
     const c=el as HTMLCanvasElement,id=c.dataset.inkId
     if(!id||cache.has(id))return
-    const ink=list.find(i=>i.type==='ink-group'&&i.inks?.some((k:any)=>k.id===id))?.inks?.find((i:any)=>i.id===id)
+    const ink=list.find(i=>i.type==='ink'&&i.id===id)
     if(ink&&isValidPaths(ink.paths)&&isValidRect(ink.rect)){draw(c,ink.paths,ink.rect);cache.set(id,1)}
   })
 }
@@ -161,22 +147,34 @@ export class InkDrawer{
 export class InkManager{
   private annotations=new Map<string,InkAnnotation>()
   private history:string[]=[]
-  currentAnnotation:InkAnnotation|null=null
+  private lastId=''
 
   constructor(private page:number){}
 
-  startAnnotation(){this.currentAnnotation={id:`ink_${Date.now()}_${Math.random().toString(36).slice(2,11)}`,type:'ink',page:this.page,paths:[],timestamp:Date.now()}}
-  addPath(path:InkPath){this.currentAnnotation?.paths.push(path)}
-  endAnnotation():InkAnnotation|null{
-    if(!this.currentAnnotation?.paths.length){this.currentAnnotation=null;return null}
-    this.currentAnnotation.rect=InkDrawer.calculateRect(this.currentAnnotation.paths)
-    this.annotations.set(this.currentAnnotation.id,this.currentAnnotation)
-    this.history.push(this.currentAnnotation.id)
-    const ann=this.currentAnnotation
-    this.currentAnnotation=null
+  addPath(path:InkPath):InkAnnotation|null{
+    const rect=InkDrawer.calculateRect([path])
+    const last=this.lastId?this.annotations.get(this.lastId):null
+    const sameStyle=last?.paths?.[0]&&last.paths[0].color===path.color&&last.paths[0].width===path.width
+    const merge=last&&sameStyle&&last.rect&&Date.now()-(last.timestamp||0)<8000&&rectGap(last.rect,rect)<90
+    const ann=merge?last:{id:`ink_${Date.now()}_${Math.random().toString(36).slice(2,11)}`,type:'ink',page:this.page,paths:[],timestamp:Date.now()}
+    ann.paths.push(path)
+    ann.rect=InkDrawer.calculateRect(ann.paths)
+    ann.timestamp=Date.now()
+    this.annotations.set(ann.id,ann)
+    this.history.push(ann.id)
+    this.lastId=ann.id
     return ann
   }
-  undo():boolean{const id=this.history.pop();return id?this.annotations.delete(id):false}
+  undo():boolean{
+    const id=this.history.pop()
+    const ann=id&&this.annotations.get(id)
+    if(!ann)return false
+    ann.paths.pop()
+    if(!ann.paths.length)this.annotations.delete(id)
+    else ann.rect=InkDrawer.calculateRect(ann.paths)
+    this.lastId=this.history[this.history.length-1]||''
+    return true
+  }
   getAnnotations():InkAnnotation[]{return Array.from(this.annotations.values())}
   setAnnotation(annotation:InkAnnotation){this.annotations.set(annotation.id,annotation)}
   deleteAnnotation(id:string):boolean{return this.annotations.delete(id)}
@@ -278,20 +276,11 @@ export class InkController{
       })
     })
     if(pdfPath.points.length<2){this.resetDrawing();return}
-    const m=this.getManager(page)
-    if(!m.currentAnnotation)m.startAnnotation()
-    m.addPath(pdfPath)
-    const annotation=m.endAnnotation()
-    await this.onSave?.()
-    const canvas=this.redrawPage(page,viewer)
+    const annotation=this.getManager(page).addPath(pdfPath)
+    const save=this.onSave?.()
+    save?.catch(()=>{})
+    this.redrawPage(page,viewer)
     this.resetDrawing()
-    if(annotation&&canvas&&isValidRect(annotation.rect)){
-      const[x1,y1,x2,y2]=pdfRectToScreenRect(viewport,annotation.rect)
-      const rectBox=canvas.getBoundingClientRect()
-      const x=rectBox.left+(x1+x2)/2
-      const y=rectBox.top+Math.max(y1,y2)+10
-      setTimeout(()=>window.dispatchEvent(new CustomEvent('ink-created',{detail:{ink:annotation,x,y,edit:true}})),50)
-    }
   }
 
   render(page:number,canvas:HTMLCanvasElement,viewer?:any){
@@ -335,6 +324,7 @@ export class InkController{
 
   async toggle(active:boolean){
     if(!this.container)return
+    active ? this.container.dataset.pdfInkTool='true' : delete this.container.dataset.pdfInkTool
     this.container.style.userSelect=active?'none':'text'
     this.container.style.cursor=active?'crosshair':'default'
     setPdfLayerInteractivity('pdf-ink-layer',active)
@@ -421,6 +411,7 @@ export class InkToolManager{
     this.controller=new InkController(async()=>{
       const inks=this.controllerData
       await this.persistController()
+      window.dispatchEvent(new Event('sireader:marks-updated'))
       if(inks.length)try{
         const{syncMarkOnCreate}=await import('@/utils/copy')
         await syncMarkOnCreate(inks[inks.length-1],{bookUrl:this.bookUrl,isPdf:true,pdfViewer:this.viewer,inkManager:this})

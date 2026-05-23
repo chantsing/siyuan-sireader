@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI translation, Anki flashcards
 
-[![Version](https://img.shields.io/badge/version-1.2.5-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,60 @@ Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI tr
 ---
 
 ## 📝 Latest Updates
+
+### v1.3.0 (2026.5.23)
+
+**Added**
+
+- EPUB image copy/export and annotation browsing.
+- Font weight controls for finer reading-text tuning.
+- Custom reading background image selection.
+- Header and footer display with chapter title, reading progress, and overall progress.
+- Annotation tags with add/edit support in both the reader popup and annotation panel.
+- Annotation tag filtering with multi-tag combinations and reuse of existing tags.
+- Batch note import with block-ID binding detection.
+- Open note documents from floating block windows, with automatic note creation and binding.
+- Global "sync on add" and "sync on delete" settings, no longer tied to per-book configuration.
+- Bilingual offline dictionary usage notes.
+
+**Improved**
+
+- Default startup now opens the bookshelf view.
+- More compact settings layout with a more unified look.
+- Clearer settings icons and visual hierarchy.
+- Faster font and voice loading in settings, reducing wait time when opening settings.
+- Faster font application in the reader, so font switching feels more immediate.
+- Faster book loading and opening, including Docker environments.
+- Removed settings preview so changes can be reviewed directly in the reader, reducing duplicated UI and maintenance cost.
+- Offline dictionary import and lookup now use clearer file/folder selection, with multiple dictionaries shown separately.
+- Better offline dictionary names and definitions, with simplified/traditional Chinese matching.
+- Faster offline dictionary loading with the new storage location.
+- Refactored annotation cards and panels for a unified presentation and editing experience across the reader popup, sidebar list, and PDF annotations.
+- Unified PDF text, shape, and ink annotation logic, with shapes and ink also using the same annotation card for viewing and editing.
+- Improved PDF text-box annotation display and export to fit text content and avoid oversized regions.
+- Improved PDF ink annotation interaction so continuous writing merges into a single ink annotation, with unified display and export.
+- Improved PDF toolbar and annotation saving logic to reduce flicker and page jumping after annotations.
+- Unified table-of-contents styling in the reader and added the ability to show reading settings inside the TOC area.
+- Improved continuous-scroll rendering for a cleaner reading state.
+- Improved the readable translation logic for `sireader://open` links.
+- Improved import-page grouping style, bookshelf cover four-grid layout, label stacking in list view, and element tooltips.
+- Improved group navigation interaction to reduce switching flicker.
+
+**Fixed**
+
+- Fixed missing chapter anchors when copying exported outlines.
+- Fixed low-contrast dark-mode titles in some places.
+- Fixed occasional blank bookshelf sidebar after sync.
+- Fixed custom reading backgrounds not applying.
+- Fixed some offline dictionaries importing successfully but failing on lookup.
+- Fixed incorrect offline dictionary names and result display.
+- Fixed PDF text selection offset, half-character selection, and misselection of blank areas.
+- Fixed unstable toolbar visibility on the reading page.
+- Fixed invalid reading-layout settings.
+- Fixed repeated note insertion when a quick-annotation selection area was not cleared.
+- Fixed quick-annotation drops landing before drag end.
+- Fixed local book-link import failures.
+- Fixed confirmation issues when deleting books in tree view.
 
 ### v1.2.5 (2026.5.17)
 

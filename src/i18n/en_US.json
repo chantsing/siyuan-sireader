@@ -160,6 +160,7 @@
   "textSettings": "Text Settings",
   "fontFamily": "Font",
   "fontSize": "Font Size",
+  "fontWeight": "Font Weight",
   "letterSpacing": "Letter Spacing",
   "fontTip": "Refresh font list",
   "loadingFonts": "Loading...",

@@ -197,42 +197,14 @@ class TextLayerOptimizer {
         range.compareBoundaryPoints(Range.START_TO_END, this.prev) === 0
       )
 
-      const insertWall = (layer: HTMLElement, anchor: Node, offset: number, before: boolean) => {
-        const end = this.layers.get(layer)
-        if (!end) return
+      let anchor = modStart ? range.startContainer : range.endContainer
+      if (anchor.nodeType === Node.TEXT_NODE) anchor = anchor.parentNode as Node
+      const layer = (anchor as HTMLElement).parentElement?.closest('.textLayer') as HTMLElement | null
+      const end = layer && this.layers.get(layer)
+      if (end) {
         end.style.width = layer.style.width
         end.style.height = layer.style.height
-        if (anchor.nodeType === Node.TEXT_NODE) anchor = anchor.parentNode as Node
-        const pos = before ? anchor
-          : (offset === 0 && anchor.previousSibling) ? anchor.previousSibling.nextSibling : anchor.nextSibling
-        ;(anchor as HTMLElement).parentElement?.insertBefore(end, pos)
-      }
-
-      if (active.size === 1) {
-        const anchor = modStart ? range.startContainer : range.endContainer
-        const offset = modStart ? range.startOffset : range.endOffset
-        const layer = ((anchor.nodeType === Node.TEXT_NODE ? anchor.parentNode : anchor) as HTMLElement)?.closest('.textLayer') as HTMLElement
-        if (layer) insertWall(layer, anchor, offset, !!modStart)
-      } else {
-        const getTextLayer = (node: Node) => ((node.nodeType === Node.TEXT_NODE ? node.parentNode : node) as HTMLElement)?.closest('.textLayer') as HTMLElement
-        const startTextLayer = getTextLayer(range.startContainer)
-        const endTextLayer = getTextLayer(range.endContainer)
-
-        for (const layer of active) {
-          const end = this.layers.get(layer)
-          if (!end) continue
-
-          if (layer === startTextLayer && modStart) {
-            insertWall(layer, range.startContainer, range.startOffset, true)
-          } else if (layer === endTextLayer && !modStart) {
-            insertWall(layer, range.endContainer, range.endOffset, false)
-          } else {
-            end.style.width = layer.style.width
-            end.style.height = layer.style.height
-            const spans = layer.querySelectorAll('span[role="presentation"]')
-            if (spans.length) spans[spans.length - 1].parentElement?.insertBefore(end, spans[spans.length - 1].nextSibling)
-          }
-        }
+        ;(anchor as HTMLElement).parentElement?.insertBefore(end, modStart ? anchor : anchor.nextSibling)
       }
       this.prev = range.cloneRange()
     }, { signal })
@@ -349,6 +321,7 @@ export const initPdfAnnotationEvents = (
     return { page, x: e.clientX - rect.left, y: e.clientY - rect.top }
   }
 
+  const isPdfToolActive = () => container.dataset.pdfInkTool === 'true' || container.dataset.pdfShapeTool === 'true'
   const setDragging = (active: boolean) => active ? (container.dataset[PDF_DRAG_KEY] = 'true') : delete container.dataset[PDF_DRAG_KEY]
   const getEditorPos = (e: MouseEvent) => ({ x: e.clientX, y: e.clientY + 10 })
   const moveDrag = (state: DragState, dx: number, dy: number) => state.type === 'mark'
@@ -395,11 +368,12 @@ export const initPdfAnnotationEvents = (
   }
   const openEditor = (item: any, x: number, y: number) => {
     if (!item) return false
-    window.dispatchEvent(new CustomEvent('sireader:edit-mark', { detail: { item, position: { x, y } } }))
+    window.dispatchEvent(new CustomEvent('sireader:edit-mark', { detail: { item, position: { x, y }, edit: false } }))
     return true
   }
   const tryOpenTargetEditor = (e: MouseEvent) => openEditor(findTarget(getPageInfo(e), e.target)?.item, getEditorPos(e).x, getEditorPos(e).y)
   const handleDragStart = (e: MouseEvent) => {
+    if (isPdfToolActive()) return
     if (e.button !== 0) return
     const pageInfo = getPageInfo(e)
     const target = findTarget(pageInfo, e.target)
@@ -437,6 +411,7 @@ export const initPdfAnnotationEvents = (
   }
 
   const handleMouseDown = (e: MouseEvent) => {
+    if (isPdfToolActive()) return
     handleDragStart(e)
     if (dragState) return
     const target = document.elementFromPoint(e.clientX, e.clientY)
@@ -445,6 +420,7 @@ export const initPdfAnnotationEvents = (
   }
 
   const handleMouseUp = (e?: MouseEvent) => {
+    if (isPdfToolActive()) return
     if (dragState) {
       handleDragEnd(e as MouseEvent)
       return

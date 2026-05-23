@@ -27,6 +27,13 @@ const resolveTheme = (theme: any) => ({ ...theme, bg: resolveColor(theme.bg), co
 const getTheme = (settings: ReaderSettings) =>
   resolveTheme(settings.theme === 'custom' ? settings.customTheme : PRESET_THEMES[settings.theme] || PRESET_THEMES.default)
 const getViewBackground = (theme: any) => theme.bgImg ? `${theme.bg} url("${theme.bgImg}") center/cover no-repeat` : theme.bg
+const isDark = (c = '') => { const m = c.match(/\d+(\.\d+)?/g)?.slice(0, 3).map(Number); return !!m && (m[0] * 299 + m[1] * 587 + m[2] * 114) / 1000 < 128 }
+const preloadedFonts = new Set<string>()
+const preloadFont = (url: string) => {
+  if (preloadedFonts.has(url)) return
+  preloadedFonts.add(url)
+  document.head.appendChild(Object.assign(document.createElement('link'), { rel: 'preload', as: 'font', href: url, crossOrigin: 'anonymous' }))
+}
 const getAttrSet = (el: Element | null | undefined, ns: string | null, name: string) =>
   new Set((ns ? el?.getAttributeNS?.(ns, name) : el?.getAttribute?.(name))?.split(' '))
 const isBackLink = (el: Element | null | undefined, types: Set<string>, roles: Set<string>) =>
@@ -49,6 +56,7 @@ const watchTheme = (cb: () => void) => {
 
 const getStyleTag = (id: string) =>
   document.getElementById(id) || Object.assign(document.head.appendChild(document.createElement('style')), { id })
+const setAttr = (el: Element, name: string, value: string, on: any = true) => on ? el.setAttribute(name, value) : el.removeAttribute(name)
 const noteRefNumberPattern = /^[\[\(]?\d+[\]\)]?$/
 const noteRefSymbolPattern = /^[\[\(]?[*†‡]+[\]\)]?$/
 
@@ -86,14 +94,13 @@ function configureView(view: FoliateView, settings: ReaderSettings) {
   if (!renderer) return
   const { pageAnimation = 'slide', visualSettings } = settings
   const { scroll, columns, gap, margin, maxInlineSize, maxBlockSize } = getLayoutMetrics(settings)
-  const set = (name: string, value: string) => renderer.setAttribute(name, value)
-  set('flow', scroll ? 'scrolled' : 'paginated')
-  set('max-column-count', String(columns))
-  !scroll && pageAnimation === 'slide' ? set('animated', '') : renderer.removeAttribute('animated')
-  gap > 0 ? set('gap', `${gap}%`) : renderer.removeAttribute('gap')
-  margin > 0 ? set('margin', `${margin}px`) : renderer.removeAttribute('margin')
-  maxInlineSize ? set('max-inline-size', `${maxInlineSize}px`) : renderer.removeAttribute('max-inline-size')
-  maxBlockSize ? set('max-block-size', `${maxBlockSize}px`) : renderer.removeAttribute('max-block-size')
+  setAttr(renderer, 'flow', scroll ? 'scrolled' : 'paginated')
+  setAttr(renderer, 'max-column-count', String(columns))
+  setAttr(renderer, 'animated', '', !scroll && pageAnimation === 'slide')
+  setAttr(renderer, 'gap', `${gap}%`, gap > 0)
+  setAttr(renderer, 'margin', `${margin}px`, margin > 0)
+  setAttr(renderer, 'max-inline-size', `${maxInlineSize}px`, maxInlineSize)
+  setAttr(renderer, 'max-block-size', `${maxBlockSize}px`, maxBlockSize)
   applyVisualFilter(visualSettings)
   applyViewTheme(view, getTheme(settings))
 }
@@ -107,40 +114,42 @@ function applyVisualFilter(visual: any = {}) {
     visual.invert && 'invert(1) hue-rotate(180deg)'
   ].filter(Boolean)
   getStyleTag('sireader-visual-filter').textContent = `
-    foliate-view::part(container),foliate-view::part(filter){background:var(--sr-epub-bg)!important}
+    foliate-view::part(container),foliate-view::part(filter){background:var(--sr-epub-page-bg)!important}
     foliate-view::part(filter){${filters.length ? `filter:${filters.join(' ')}` : ''}}
   `
 }
 
 function applyViewTheme(view: FoliateView, theme: any) {
   const bg = getViewBackground(theme)
+  const pageBg = theme.bgImg ? 'transparent' : bg
   view.style.setProperty('--sr-epub-bg', bg)
+  view.style.setProperty('--sr-epub-page-bg', pageBg)
   Object.assign(view.style, { background: bg, color: theme.color })
-  Object.assign(view.renderer?.style || {}, {
-    background: bg,
-    color: theme.color,
-  })
+  Object.assign(view.renderer?.style || {}, { background: pageBg, color: theme.color })
   if (view.parentElement) view.parentElement.style.background = bg
 }
 
 function applyCustomCSS(view: FoliateView, settings: ReaderSettings) {
   const {
-    textSettings: text = { fontFamily: 'inherit', fontSize: 16, letterSpacing: 0, customFont: { fontFamily: '', fontFile: '' } },
+    textSettings: text = { fontFamily: 'inherit', fontSize: 16, fontWeight: 400, letterSpacing: 0, customFont: { fontFamily: '', fontFile: '' } },
     paragraphSettings: paragraph = { lineHeight: 1.8, textIndent: 2, paragraphSpacing: 1 }
   } = settings
   const theme = getTheme(settings)
   const mobile = isMobile()
+  const forceColor = isDark(theme.bg) ? `p,li,dd,blockquote{color:${theme.color}!important}` : ''
+  const transparentContent = theme.bgImg ? 'html,body,section,article,main,div,p,blockquote,ul,ol,li,table,thead,tbody,tr,td,th{background-color:transparent!important}' : ''
+  const darkText = ['#000', '#000000', 'black', 'rgb(0,0,0)', 'rgb(0, 0, 0)'].map(c => `font[color="${c}"],[style*="color:${c}"],[style*="color: ${c}"]`).join(',')
   const customFont = text.fontFamily === 'custom' ? text.customFont?.fontFamily : ''
   const font = customFont ? `"${customFont}", sans-serif` : text.fontFamily || 'inherit'
-  const fontFace = customFont
-    ? `@font-face{font-family:"${customFont}";src:url("${location.origin}/plugins/custom-fonts/${text.customFont.fontFile}")}`
-    : ''
-  view.renderer?.setStyles?.([
+  const fontUrl = customFont ? `${location.origin}/plugins/custom-fonts/${text.customFont.fontFile}` : ''
+  fontUrl && preloadFont(fontUrl)
+  const fontFace = customFont ? `@font-face{font-family:"${customFont}";src:url("${fontUrl}");font-display:swap}` : ''
+  const css = [
     `@namespace epub "http://www.idpf.org/2007/ops";`,
     fontFace,
     `
     html{
-      background:${getViewBackground(theme)}!important;
+      background:${theme.bgImg ? 'transparent' : getViewBackground(theme)}!important;
       color:${theme.color}!important;
       ${mobile ? '' : 'color-scheme:light dark'}
       width:100%!important;
@@ -153,10 +162,11 @@ function applyCustomCSS(view: FoliateView, settings: ReaderSettings) {
     }
     html::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}
     body{
-      background:transparent!important;
+      background-color:transparent!important;
       color:${theme.color}!important;
       font-family:${font}!important;
       font-size:${text.fontSize}px!important;
+      font-weight:${text.fontWeight}!important;
       letter-spacing:${text.letterSpacing}em!important;
       margin:0!important;
       box-sizing:border-box!important;
@@ -165,10 +175,15 @@ function applyCustomCSS(view: FoliateView, settings: ReaderSettings) {
       ${mobile ? 'width:100%!important;min-width:100%!important;max-width:none!important;display:block!important;' : ''}
     }
     body::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}
-    *{font-family:${font}!important;font-size:inherit!important}
-    body,p,div,span,a,li,td,th,blockquote,pre,code,h1,h2,h3,h4,h5,h6{font-family:${font}!important}
-    h1,h2,h3,h4,h5,h6,p,div,span,li,td,th{font-size:inherit!important}
-    p,li,blockquote,dd{line-height:${paragraph.lineHeight}!important;text-align:start;text-indent:${paragraph.textIndent}em!important;margin-bottom:${paragraph.paragraphSpacing}em!important}
+    body,body>*{background-size:cover!important;background-position:center!important;background-repeat:no-repeat!important}
+    ${transparentContent}
+    body,body *{font-family:${font}!important}
+    p,li,dd,blockquote,span,div{font-weight:${text.fontWeight}!important}
+    p:not(:has(img)),li,blockquote,dd{line-height:${paragraph.lineHeight}!important;text-align:start;text-indent:${paragraph.textIndent}em!important;margin-bottom:${paragraph.paragraphSpacing}em!important}
+    img,svg,p:has(img),figure,figure *{background-color:transparent!important}
+    p:has(img){text-indent:0!important;margin:0!important}
+    ${forceColor}
+    ${darkText}{color:${theme.color}!important}
     ${mobile ? 'body>*{max-width:100%!important}img,svg,video,table,pre,code{max-width:100%!important}' : ''}
     [align="left"]{text-align:left!important}
     [align="right"]{text-align:right!important}
@@ -184,19 +199,20 @@ function applyCustomCSS(view: FoliateView, settings: ReaderSettings) {
     [role~="doc-footnote"],
     [role~="doc-endnote"]{display:none!important}
   `
-  ].join(''))
-  Object.assign((view.renderer as HTMLElement | undefined)?.style || {}, {
-    scrollbarWidth: 'none',
-    msOverflowStyle: 'none',
-  })
+  ].join('')
+  const renderer = view.renderer as any
+  if (renderer?.__sireaderStyleSig !== css) {
+    renderer?.setStyles?.(css)
+    renderer && (renderer.__sireaderStyleSig = css)
+  }
+  Object.assign((view.renderer as HTMLElement | undefined)?.style || {}, { scrollbarWidth: 'none', msOverflowStyle: 'none' })
 }
 
 function getCurrentLocation(view: FoliateView): Location | null {
   try {
     const renderer = view.renderer as any
     if (renderer?.index !== undefined) return { index: renderer.index ?? 0, fraction: renderer.fraction ?? 0, cfi: view.lastLocation?.cfi }
-    if (view.lastLocation) return { index: view.lastLocation.index ?? 0, fraction: view.lastLocation.fraction ?? 0, cfi: view.lastLocation.cfi }
-    return null
+    return view.lastLocation ? { index: view.lastLocation.index ?? 0, fraction: view.lastLocation.fraction ?? 0, cfi: view.lastLocation.cfi } : null
   } catch (error) {
     console.error('[FoliateView] Failed to get location:', error)
     return null
@@ -238,10 +254,7 @@ function refreshMarginals(view: FoliateView) {
 }
 
 function refreshRenderer(view: FoliateView) {
-  requestAnimationFrame(() => {
-    ;(view.renderer as any)?.render?.()
-    refreshMarginals(view)
-  })
+  requestAnimationFrame(() => { ;(view.renderer as any)?.render?.(); refreshMarginals(view) })
 }
 
 export class FoliateReader {
@@ -281,7 +294,6 @@ export class FoliateReader {
       renderer.addEventListener('relocate', refresh)
     }
     this.applySettings()
-    refreshMarginals(this.view)
     if (this.marks) await this.marks.init()
     this.emit('loaded', { book: this.view.book })
   }
@@ -292,22 +304,31 @@ export class FoliateReader {
     refreshRenderer(this.view)
   }
 
+  private handleLoad(detail: any) { refreshMarginals(this.view); this.bindContentImages(detail?.doc, detail?.index); this.emit('load', detail) }
+
+  private bindContentImages(doc?: Document, index?: number) {
+    if (!doc) return
+    doc.querySelectorAll('img').forEach((img: HTMLImageElement) => { img.onerror = () => { img.style.display = 'none' } })
+    if ((doc as any).__sireaderImageMenu) return
+    ;(doc as any).__sireaderImageMenu = true
+    doc.addEventListener('contextmenu', ((event: MouseEvent) => {
+      const img = (event.target as HTMLElement)?.closest?.('img') as HTMLImageElement | null
+      if (!img) return
+      event.preventDefault(); event.stopPropagation()
+      let cfi = ''
+      try { const range = doc.createRange(); range.selectNode(img); cfi = index !== undefined ? (this.view as any).getCFI(index, range) : '' } catch {}
+      const rect = (doc.defaultView?.frameElement as HTMLIFrameElement | null)?.getBoundingClientRect()
+      this.emit('image-menu', { item: { id: '', type: 'note', format: 'epub', cfi, text: img.alt || img.title || '图片标注', image: img.currentSrc || img.src, chapter: this.view.lastLocation?.tocItem?.label || '' }, x: event.clientX + (rect?.left || 0), y: event.clientY + (rect?.top || 0) })
+    }) as EventListener)
+  }
+
   private setupEventListeners() {
     this.view.addEventListener('relocate', ((e: CustomEvent) => {
       refreshMarginals(this.view)
       this.emit('relocate', e.detail)
     }) as EventListener)
-    this.view.addEventListener('load', ((e: CustomEvent) => {
-      refreshMarginals(this.view)
-      this.emit('load', e.detail)
-    }) as EventListener)
+    this.view.addEventListener('load', ((e: CustomEvent) => this.handleLoad(e.detail)) as EventListener)
     this.view.addEventListener('external-link', ((e: CustomEvent) => this.emit('external-link', e.detail)) as EventListener)
-
-    this.view.addEventListener('load', ((e: CustomEvent) => {
-      const { doc } = e.detail || {}
-      if (!doc) return
-      doc.querySelectorAll('img').forEach((img: HTMLImageElement) => { img.onerror = () => { img.style.display = 'none' } })
-    }) as EventListener)
 
     this.view.addEventListener('link', ((e: CustomEvent) => {
       const { a, href } = e.detail
@@ -325,7 +346,7 @@ export class FoliateReader {
           && (
             /note|foot|end|ref|annotation|comment|fn/i.test(cls + id)
             || ((isSuper(a) || (a.children.length === 1 && isSuper(a.children[0] as HTMLElement)) || isSuper(a.parentElement as HTMLElement))
-              && (/^[\[\(]?\d+[\]\)]?$/.test(txt) || /^[\[\(]?[*†‡]+[\]\)]?$/.test(txt)))
+              && (noteRefNumberPattern.test(txt) || noteRefSymbolPattern.test(txt)))
           )
         )
       if (!isRef) return this.emit('link', e.detail)

@@ -160,6 +160,7 @@
   "textSettings": "文本设置",
   "fontFamily": "字体",
   "fontSize": "字号",
+  "fontWeight": "字重",
   "letterSpacing": "字距",
   "fontTip": "刷新字体列表",
   "loadingFonts": "加载中...",

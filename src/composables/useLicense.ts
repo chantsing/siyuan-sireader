@@ -86,7 +86,7 @@ export function useLicense(i18n: any) {
   const showUpgrade = (featureName: string) => {
     showMessage(
       `${featureName}需要升级会员<div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
-        <button class="b3-button b3-button--text" onclick="document.querySelectorAll('.b3-snackbar').forEach(el=>el.remove());(window._sy_plugin_sample||{}).openSetting?.()">去激活</button>
+        <button class="b3-button b3-button--text" onclick="document.querySelectorAll('.b3-snackbar').forEach(el=>el.remove());(window._sy_plugin_sample||{}).openSetting?.(true)">去激活</button>
       </div>`,
       0,
       'info'

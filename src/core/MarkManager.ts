@@ -11,7 +11,7 @@ type HighlightColor='yellow'|'red'|'green'|'blue'|'purple'|'orange'|'pink'
 type MarkStyle='highlight'|'underline'|'outline'|'dotted'|'dashed'|'double'|'squiggly'
 type MarkType='bookmark'|'highlight'|'note'|'vocab'
 
-interface Mark{id:string;type:MarkType;format:Format;cfi?:string;section?:number;page?:number;rects?:Array<{page?:number;x:number;y:number;w:number;h:number}>;text?:string;color?:HighlightColor;style?:MarkStyle;note?:string;tags?:string[];title?:string;timestamp:number;progress?:number;textOffset?:number;blockId?:string;chapter?:string;customOrder?:number}
+interface Mark{id:string;type:MarkType;format:Format;cfi?:string;section?:number;page?:number;rects?:Array<{page?:number;x:number;y:number;w:number;h:number}>;text?:string;color?:HighlightColor;style?:MarkStyle;note?:string;tags?:string[];title?:string;image?:string;timestamp:number;progress?:number;textOffset?:number;blockId?:string;chapter?:string;customOrder?:number}
 
 export const COLORS=[{name:'黄色',color:'yellow'as const,bg:'#ffeb3b'},{name:'红色',color:'red'as const,bg:'#ef5350'},{name:'绿色',color:'green'as const,bg:'#66bb6a'},{name:'蓝色',color:'blue'as const,bg:'#42a5f5'},{name:'紫色',color:'purple'as const,bg:'#ab47bc'},{name:'橙色',color:'orange'as const,bg:'#ff9800'},{name:'粉色',color:'pink'as const,bg:'#ec407a'}]
 export const STYLES=[{type:'highlight'as const,name:'高亮',text:'A'},{type:'underline'as const,name:'下划线',text:'A'},{type:'outline'as const,name:'边框',text:'A'},{type:'dotted'as const,name:'点线',text:'A',pdfOnly:true},{type:'dashed'as const,name:'虚线',text:'A',pdfOnly:true},{type:'double'as const,name:'双线',text:'A',pdfOnly:true},{type:'squiggly'as const,name:'波浪线',text:'A',epubOnly:true}]
@@ -128,6 +128,7 @@ export class MarkManager{
           blockId:a.block,
           chapter:a.chapter,
           title:data.title,
+          image:data.image,
           progress:data.progress,
           textOffset:data.textOffset,
           customOrder:data.customOrder
@@ -159,6 +160,7 @@ export class MarkManager{
           rects:compactMarkRects(m.rects),
           style:m.style,
           title:m.title,
+          image:m.image,
           progress:m.progress,
           textOffset:m.textOffset,
           customOrder:m.customOrder
@@ -549,6 +551,10 @@ export class MarkManager{
   getAnnotations=(color?:HighlightColor)=>{const m=this.marks.filter(m=>m.type==='highlight'||m.type==='note');return color?m.filter(m=>m.color===color):m}
   getNotes=()=>this.marks.filter(m=>m.type==='note')
   getAll=()=>[...this.marks]
+  async addImageMark(src:string,text:string,cfi?:string,note='',tags?:string[]):Promise<Mark>{
+    const loc=this.view?.lastLocation||this.reader?.getLocation?.(),m=this.add({type:'note',format:'epub',cfi:cfi||loc?.cfi||'',text:text||'图片标注',note,image:src,tags,progress:Math.round((loc?.fraction||0)*100)})
+    this.undoStack.push({...m});this.undoStack.length>10&&this.undoStack.shift();this.save();window.dispatchEvent(new Event('sireader:marks-updated'));this.tryAutoSync(m);return m
+  }
   undo=async()=>{
     const m=this.undoStack.pop()
     if(m){await this.deleteMark(m.id);return}

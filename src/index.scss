@@ -315,27 +315,6 @@
   }
 }
 
-// PDF.js 标准文本层
-.textLayer {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  line-height: 1;
-  user-select: text;
-  -webkit-user-select: text;
-  
-  > span, > br {
-    color: transparent;
-    position: absolute;
-    white-space: pre;
-    cursor: text;
-    transform-origin: 0 0;
-  }
-  
-  ::selection { background: rgba(0,150,255,0.6) !important; }
-  ::-moz-selection { background: rgba(0,150,255,0.6) !important; }
-}
-
 .annotationLayer {
   position: absolute;
   inset: 0;

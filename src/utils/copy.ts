@@ -29,6 +29,20 @@ const shouldSyncOnAdd = async () => !!(await getGlobalSettings())?.annotationSyn
 const shouldSyncOnDelete = async () => !!(await getGlobalSettings())?.annotationSyncOnDelete
 const getBoundDocId = async (bookUrl: string) => (await getShelfBook(bookUrl))?.bindDocId || ''
 const getInsertedBlockId = (result: any) => result?.[0]?.doOperations?.[0]?.id || result?.[0]?.id || result?.doOperations?.[0]?.id || ''
+const uploadCanvas = async (canvas: HTMLCanvasElement, name: string) => {
+  const blob = await fetch(canvas.toDataURL('image/png')).then(r => r.blob())
+  const file = new File([blob], name, { type: 'image/png' })
+  const res = await (await import('@/api')).upload('/assets/', [file])
+  return res.succMap?.[file.name] ? `![](${res.succMap[file.name]})` : ''
+}
+const imageSrcToMarkdown = async (src: string, name = 'epub_image') => {
+  if (!src) return ''
+  try {
+    const blob = await fetch(src).then(r => r.blob()), file = new File([blob], `${name}.${blob.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png'}`, { type: blob.type || 'image/png' })
+    const res = await (await import('@/api')).upload('/assets/', [file])
+    return res.succMap?.[file.name] ? `![](${res.succMap[file.name]})` : `![](${src})`
+  } catch { return `![](${src})` }
+}
 
 const getTextboxMetrics = (ctx: CanvasRenderingContext2D, shape: any) => {
   const size = getTextboxFontSize(shape)
@@ -77,6 +91,7 @@ const writeExport = async (text: string, ctx: ExportCtx, title: string, message 
 }
 
 export const exportBookLink = async (item: ExportItem, ctx: ExportCtx) => {
+  const chapter = item.chapter || item.text || '璇讳功'
   const fallback = item.text || item.chapter || ''
   if (!ctx.bookUrl) return writeExport(fallback, ctx, item.chapter || '读书', '仅复制文本')
   const { settings, title } = await getExportMeta(ctx)
@@ -84,7 +99,7 @@ export const exportBookLink = async (item: ExportItem, ctx: ExportCtx) => {
   const { formatAuthor } = await import('@/core/MarkManager')
   const author = formatAuthor(ctx.reader?.getBook?.()?.metadata?.author || ctx.bookInfo?.author || '')
   await writeExport(
-    formatBookLink(ctx.bookUrl, title, author, item.chapter || '', item.cfi, item.text || '', settings?.linkFormat || DEFAULT_LINK_FORMAT, item.note || '', item.image || '', item.id || ''),
+    formatBookLink(ctx.bookUrl, title, author, chapter, item.cfi, item.text || '', settings?.linkFormat || DEFAULT_LINK_FORMAT, item.note || '', item.image || '', item.id || ''),
     ctx,
     title
   )
@@ -103,7 +118,11 @@ export const copyMark = async (item: any, ctx: { bookUrl: string; bookInfo?: any
   const toc = isPdf ? pdfViewer?.getPDF?.()?.toc : book?.toc
   const chapter = item.chapter || getChapterName({ cfi, page, isPdf, toc, location: reader?.getLocation?.() }) || '📍'
   let img = ''
-  if (item.shapeType && isPdf) {
+  if (item.image || item.src) {
+    img = await imageSrcToMarkdown(item.image || item.src || '', `epub_image_${item.id || Date.now()}`)
+  } else if (isPdf && item.type === 'ink') {
+    img = await generateInkScreenshot(item)
+  } else if (item.shapeType && isPdf) {
     const hdKey = `${item.id}_${item.shapeType}_hd`
     if (shapeCache?.has(hdKey)) {
       const blob = await fetch(shapeCache.get(hdKey)!).then(r => r.blob())
@@ -206,7 +225,6 @@ export const syncMarkOnDelete = async (item: any) => {
 
 export const saveMarkEdit = async (mark: any, updates: any, ctx: any) => {
   if (!ctx.marks) throw new Error('标注系统未初始化')
-  if (mark.type === 'shape-group' || mark.type === 'ink-group') throw new Error('请编辑具体的标注项')
   await ctx.marks.updateMark(mark, updates)
   try {
     if (await getBoundDocId(ctx.bookUrl)) await updateMarkInDoc({ ...mark, ...updates }, ctx)
@@ -245,26 +263,18 @@ export const generateShapeScreenshot = async (shape: any, page: number, pdfViewe
   const ctx = canvas.getContext('2d')!
 
   if (shape.shapeType === 'textbox') {
-    const anchorX = Math.min(vx1, vx2)
-    const anchorY = Math.min(vy1, vy2)
     const metrics = getTextboxMetrics(ctx, shape)
     const pad = 8
-    const cropX = Math.max(0, anchorX - pad)
-    const cropY = Math.max(0, anchorY - pad)
-    const cropW = Math.max(24, metrics.width + pad * 2)
-    const cropH = Math.max(24, metrics.height + pad * 2)
-    canvas.width = 1200
-    canvas.height = Math.max(24, Math.round(cropH * 1200 / cropW))
-    ctx.drawImage(pdfCanvas, cropX * dpr, cropY * dpr, cropW * dpr, cropH * dpr, 0, 0, canvas.width, canvas.height)
+    canvas.width = Math.max(24, metrics.width + pad * 2)
+    canvas.height = Math.max(24, metrics.height + pad * 2)
     ctx.globalAlpha = shape.opacity || 0.8
-    const scale = canvas.width / cropW
-    drawTextboxLabel(ctx, shape, (anchorX - cropX) * scale, (anchorY - cropY) * scale)
+    drawTextboxLabel(ctx, shape, pad, pad)
   } else {
     const w = Math.abs(vx2 - vx1)
     const h = Math.abs(vy2 - vy1)
     if (w < 10 || h < 10) return ''
-    canvas.width = 1200
-    canvas.height = h * 1200 / w
+    canvas.width = Math.min(720, Math.max(24, Math.ceil(w)))
+    canvas.height = Math.max(24, Math.round(h * canvas.width / w))
     ctx.drawImage(pdfCanvas, Math.min(vx1, vx2) * dpr, Math.min(vy1, vy2) * dpr, w * dpr, h * dpr, 0, 0, canvas.width, canvas.height)
     ctx.globalAlpha = shape.opacity || 0.8
     if (shape.filled) {
@@ -293,8 +303,31 @@ export const generateShapeScreenshot = async (shape: any, page: number, pdfViewe
     }
   }
 
-  const blob = await fetch(canvas.toDataURL('image/png')).then(r => r.blob())
-  const file = new File([blob], `shape_${shape.id}.png`, { type: 'image/png' })
-  const res = await (await import('@/api')).upload('/assets/', [file])
-  return res.succMap?.[file.name] ? `![](${res.succMap[file.name]})` : ''
+  return uploadCanvas(canvas, `shape_${shape.id}.png`)
+}
+
+export const generateInkScreenshot = async (ink: any): Promise<string> => {
+  if (!ink?.paths?.length || !Array.isArray(ink.rect)) return ''
+  const [x1, y1, x2, y2] = ink.rect
+  const w = Math.max(1, x2 - x1)
+  const h = Math.max(1, y2 - y1)
+  const pad = 8
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')!
+  const scale = Math.min(3, 720 / Math.max(w, 1))
+  canvas.width = Math.ceil(w * scale + pad * 2)
+  canvas.height = Math.ceil(h * scale + pad * 2)
+  ctx.lineCap = ctx.lineJoin = 'round'
+  ink.paths.forEach((path: any) => {
+    const points = path.points || []
+    if (points.length < 2) return
+    ctx.strokeStyle = path.color || ink.color || '#000'
+    ctx.globalAlpha = path.opacity ?? 1
+    ctx.lineWidth = Math.max(1, (path.width || 2) * scale)
+    ctx.beginPath()
+    ctx.moveTo((points[0].x - x1) * scale + pad, (y2 - points[0].y) * scale + pad)
+    points.forEach((point: any) => ctx.lineTo((point.x - x1) * scale + pad, (y2 - point.y) * scale + pad))
+    ctx.stroke()
+  })
+  return uploadCanvas(canvas, `ink_${ink.id}.png`)
 }

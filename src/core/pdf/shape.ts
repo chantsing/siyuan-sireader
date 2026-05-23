@@ -84,7 +84,7 @@ export const drawShape = (
 ) => {
   if (!shape) return
   const ctx = canvas.getContext('2d')!
-  const key = `${shape.id}_${shape.shapeType}${highRes ? '_hd' : ''}`
+  const key = `${shape.id}_${shape.shapeType}_${shape.text || ''}_${shape.color || ''}_${shape.width || 2}${highRes ? '_hd' : ''}`
   if (shapeCache.has(key)) {
     const img = new Image()
     img.onload = () => ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
@@ -111,19 +111,11 @@ export const drawShape = (
 
   if (shape.shapeType === 'textbox') {
     const temp = document.createElement('canvas').getContext('2d')!
-    const anchorX = Math.min(vx1, vx2)
-    const anchorY = Math.min(vy1, vy2)
-    const bounds = getTextboxBounds(temp, shape, anchorX, anchorY)
-    const cropX = Math.max(0, bounds.x)
-    const cropY = Math.max(0, bounds.y)
-    const cropW = Math.max(24, bounds.w)
-    const cropH = Math.max(24, bounds.h)
-    canvas.width = maxWidth
-    canvas.height = Math.max(24, Math.round(cropH * maxWidth / cropW))
-    ctx.drawImage(pdfCanvas, cropX * dpr, cropY * dpr, cropW * dpr, cropH * dpr, 0, 0, canvas.width, canvas.height)
+    const bounds = getTextboxBounds(temp, shape, 0, 0)
+    canvas.width = Math.min(maxWidth, Math.max(24, Math.ceil(bounds.w)))
+    canvas.height = Math.max(24, Math.ceil(bounds.h))
     ctx.globalAlpha = shape.opacity || 0.8
-    const scale = canvas.width / cropW
-    drawTextbox(ctx, shape, (anchorX - cropX) * scale, (anchorY - cropY) * scale)
+    drawTextbox(ctx, shape, 6, 6)
     shapeCache.set(key, canvas.toDataURL('image/png'))
     return
   }
@@ -164,8 +156,7 @@ export const renderShapeCanvas = (
   document.querySelectorAll('[data-shape-id]').forEach(el => {
     const canvas = el as HTMLCanvasElement
     const id = canvas.dataset.shapeId
-    const group = list.find((item: any) => item.type === 'shape-group' && item.shapes?.some((shape: any) => shape.id === id))
-    const shape = group?.shapes?.find((item: any) => item.id === id)
+    const shape = list.find((item: any) => item.type === 'shape' && item.id === id)
     if (shape) drawShape(canvas, shape, activeView, shapeCache, preloadPage)
   })
 }
@@ -263,7 +254,7 @@ export class ShapeController {
   private listeners: Array<{ el: HTMLElement; type: string; handler: any }> = []
   private containerClickHandler: ((e: MouseEvent) => void) | null = null
 
-  constructor(private onSave: () => Promise<void>, private onShapeClick?: (shape: ShapeAnnotation) => void) {}
+  constructor(private onSave: (shape?: ShapeAnnotation) => Promise<void>, private onShapeClick?: (shape: ShapeAnnotation) => void) {}
 
   setPdfViewer(viewer: any) { this.pdfViewer = viewer }
   setConfig(config: Partial<ShapeConfig>) { this.config = { ...this.config, ...config }; this.drawers.forEach(drawer => drawer.setConfig(this.config)) }
@@ -379,7 +370,7 @@ export class ShapeController {
       text: this.config.shapeType === 'textbox' ? (previewShape.text || TEXTBOX_PLACEHOLDER) : previewShape.text,
     }
     this.getManager(page).add(shape)
-    await this.onSave()
+    await this.onSave(shape)
 
     const canvas = this.redrawPage(page, pdfViewer)
 
@@ -387,7 +378,7 @@ export class ShapeController {
       const rectBox = canvas.getBoundingClientRect()
       const popupX = this.config.shapeType === 'textbox' ? x1 : (x1 + x2) / 2
       const popupY = this.config.shapeType === 'textbox' ? y1 : Math.max(y1, y2) + 10
-      setTimeout(() => window.dispatchEvent(new CustomEvent('shape-created', { detail: { shape, x: rectBox.left + popupX, y: rectBox.top + popupY + 10, edit: true } })), 50)
+      setTimeout(() => window.dispatchEvent(new CustomEvent('shape-created', { detail: { shape, x: rectBox.left + popupX, y: rectBox.top + popupY + 10, edit: false } })), 50)
     }
 
     this.resetDrawing()
@@ -470,6 +461,7 @@ export class ShapeController {
   clear(page: number) { this.managers.get(page)?.clear(); this.drawers.get(page)?.clear() }
 
   async toggle(active: boolean, container: HTMLElement) {
+    active ? container.dataset.pdfShapeTool = 'true' : delete container.dataset.pdfShapeTool
     container.style.userSelect = active ? 'none' : 'text'
     container.style.cursor = active ? 'crosshair' : 'default'
     setPdfLayerInteractivity('pdf-shape-layer', active)
@@ -669,13 +661,14 @@ export class ShapeToolManager {
 
   async init() {
     if (this.controller) return this.controller
-    this.controller = new ShapeController(async () => {
+    this.controller = new ShapeController(async (created?: ShapeAnnotation) => {
       const shapes = this.controllerData
       await this.saveData(shapes)
-      if (shapes.length) {
+      window.dispatchEvent(new Event('sireader:marks-updated'))
+      if (created?.shapeType !== 'textbox' && shapes.length) {
         try {
           const { syncMarkOnCreate } = await import('@/utils/copy')
-          await syncMarkOnCreate(shapes[shapes.length - 1], { bookUrl: this.bookUrl, isPdf: true, pdfViewer: this.pdfViewer, shapeManager: this })
+          await syncMarkOnCreate(created || shapes[shapes.length - 1], { bookUrl: this.bookUrl, isPdf: true, pdfViewer: this.pdfViewer, shapeManager: this })
         } catch {}
       }
     }, this.onShapeClick)

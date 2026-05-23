@@ -67,7 +67,7 @@
               <div class="popover-row popover-row--stack">
                 <span class="popover-title">形状</span>
                 <div class="popover-content">
-                  <button v-for="s in shapes" :key="s.type" class="toolbar-btn b3-tooltips b3-tooltips__s" :class="{ active: shapeType === s.type }" :aria-label="s.label" @click.stop="shapeType = s.type"><svg><use :xlink:href="s.icon" /></svg></button>
+                  <button v-for="s in shapes" :key="s.type" class="toolbar-btn b3-tooltips b3-tooltips__s" :class="{ active: shapeType === s.type }" :aria-label="s.label" @click.stop="setShapeType(s.type)"><svg><use :xlink:href="s.icon" /></svg></button>
                   <button v-if="shapeType !== 'textbox'" class="toolbar-btn b3-tooltips b3-tooltips__s" :class="{ active: shapeFilled }" aria-label="填充" @click.stop="shapeFilled = !shapeFilled"><svg><use xlink:href="#lucide-paint-bucket" /></svg></button>
                 </div>
               </div>
@@ -294,6 +294,9 @@ const applyMode = (mode: ToolMode, syncPopup = true) => {
 
 const applyToolbarSettings = async (settings?: PdfToolbarSettings) => {
   if (!settings) return
+  const prevZoomMode = zoomMode.value
+  const prevScale = scale.value
+  const prevRotation = rotation.value
   const sameState =
     expanded.value === (!!props.fixed || settings.expanded) &&
     zoomMode.value === settings.zoomMode &&
@@ -323,10 +326,13 @@ const applyToolbarSettings = async (settings?: PdfToolbarSettings) => {
   pos.value = { ...settings.position }
   if (shapeType.value === 'textbox') shapeFilled.value = false
   applyMode(settings.toolMode)
-  if (zoomMode.value === 'fit-width') await props.viewer.fitWidth()
-  else if (zoomMode.value === 'fit-page') await props.viewer.fitPage()
-  else await props.viewer.setScale(scale.value)
-  await props.viewer.setRotation(rotation.value)
+  const zoomChanged = prevZoomMode !== settings.zoomMode || (settings.zoomMode === 'custom' && prevScale !== settings.scale)
+  if (zoomChanged) {
+    if (zoomMode.value === 'fit-width') await props.viewer.fitWidth()
+    else if (zoomMode.value === 'fit-page') await props.viewer.fitPage()
+    else await props.viewer.setScale(scale.value)
+  }
+  if (prevRotation !== settings.rotation) await props.viewer.setRotation(rotation.value)
   scale.value = props.viewer.getScale()
   rotation.value = props.viewer.getRotation()
   applyingSettings = false
@@ -370,6 +376,13 @@ const rotateRight = async () => {
 
 const setToolMode = (mode: 'text' | 'hand') => {
   applyMode(mode)
+  emitSettings()
+}
+
+const setShapeType = (type: typeof shapeType.value) => {
+  shapeType.value = type
+  if (type === 'textbox') shapeFilled.value = false
+  emit('shape-type', type)
   emitSettings()
 }
 

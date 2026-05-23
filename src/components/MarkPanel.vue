@@ -33,15 +33,17 @@
           :editing="state.isEditing"
           editable
           :text="state.text || '无内容'"
-          :chapter="state.isEditing ? '' : state.currentMark?.chapter"
+          :chapter="state.isEditing ? '' : (state.currentMark?.chapter || (state.currentMark?.page ? `第${state.currentMark.page}页` : ''))"
           :note="state.isEditing && isTextboxMark ? state.text : state.note"
           :mark-color="currentMarkColor"
           :color-value="state.color"
           :color-options="state.isEditing ? colorOptions : []"
+          :style-value="isShapeMark ? state.shapeType : state.style"
+          :style-options="state.isEditing ? markStyleOptions : []"
           @update:tag-input="state.tags = $event"
-          @update:text="state.text = $event"
           @update:note="isTextboxMark ? state.text = $event : state.note = $event"
           @update:color-value="state.color = $event"
+          @update:style-value="setMarkStyle"
           @toggle-tag="togglePanelTag"
           @go="goToMark"
           @edit="handleEdit"
@@ -66,12 +68,12 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { showMessage } from 'siyuan'
 import type { HighlightColor, Mark, MarkManager } from '@/core/MarkManager'
-import { COLORS } from '@/core/MarkManager'
-import { PDF_SHAPE_COLORS } from '@/core/pdf/shape'
+import { COLORS, STYLES } from '@/core/MarkManager'
+import { PDF_SHAPE_COLORS, PDF_SHAPE_OPTIONS } from '@/core/pdf/shape'
 import { hideFloat, openBlock, showFloat } from '@/utils/copy'
 import { jump } from '@/utils/jump'
 import { isMobile } from '@/utils/mobile'
-import MarkCard from './MarkCard.vue'
+import MarkCard, { collectMarkTags, formatMarkTags, getMarkTags, parseMarkTags } from './MarkCard.vue'
 import Translate from './Translate.vue'
 
 interface MarkSelection {
@@ -83,6 +85,7 @@ interface SelectionAnchor {
   y: number
   panelY?: number
 }
+type MarkStyle = 'highlight' | 'underline' | 'outline' | 'dotted' | 'dashed' | 'double' | 'squiggly'
 
 const props = defineProps<{
   manager: MarkManager | null
@@ -126,7 +129,7 @@ const state = reactive({
   note: '',
   tags: '',
   color: 'yellow' as HighlightColor,
-  style: 'highlight' as 'highlight' | 'underline' | 'outline' | 'dotted' | 'dashed' | 'double' | 'squiggly',
+  style: 'highlight' as MarkStyle,
   shapeType: 'rect' as 'rect' | 'circle' | 'triangle' | 'textbox',
   shapeFilled: false,
 })
@@ -138,16 +141,22 @@ const quickDocs = computed(() => (window as any).__sireader_settings?.quickSendD
 const colorOptions = computed(() => (state.currentMark?.type === 'shape' || state.currentMark?.type === 'ink')
   ? shapeColors.map(color => ({ key: color, value: color, bg: color }))
   : COLORS.map(color => ({ key: color.color, value: color.color, bg: color.bg })))
+const textStyleOptions = computed(() => STYLES
+  .filter(item => (!item.pdfOnly || isPdf.value) && (!item.epubOnly || !isPdf.value))
+  .map(item => ({ value: item.type, label: item.name })))
+const shapeTypeOptions = PDF_SHAPE_OPTIONS.map(item => ({ value: item.type, label: item.label, icon: item.icon }))
+const markStyleOptions = computed(() => isShapeMark.value ? shapeTypeOptions : state.currentMark?.type !== 'ink' ? textStyleOptions.value : [])
 const colorMap = Object.fromEntries(COLORS.map(color => [color.color, color.bg]))
 const currentMarkColor = computed(() => colorMap[state.color] || state.color || '#e0e0e0')
-const normalizeTags = (tags?: unknown[]) => Array.from(new Set((tags || []).map(tag => String(tag || '').trim()).filter(Boolean)))
-const parseTags = (value = '') => normalizeTags(value.split(/[#,，;；\n]/))
-const formatTags = (tags?: unknown[]) => normalizeTags(tags).join(', ')
-const displayTags = computed(() => state.isEditing ? parseTags(state.tags) : normalizeTags((state.currentMark as any)?.tags || []))
-const panelTagOptions = computed(() => Array.from(new Set([...normalizeTags((state.currentMark as any)?.tags || []), ...displayTags.value])).sort((a, b) => a.localeCompare(b)))
+const displayTags = computed(() => state.isEditing ? parseMarkTags(state.tags) : getMarkTags(state.currentMark))
+const panelTagOptions = computed(() => collectMarkTags(props.manager, displayTags.value))
 const togglePanelTag = (tag: string) => {
   const tags = displayTags.value
-  state.tags = formatTags(tags.includes(tag) ? tags.filter(item => item !== tag) : [...tags, tag])
+  state.tags = formatMarkTags(tags.includes(tag) ? tags.filter(item => item !== tag) : [...tags, tag])
+}
+const setMarkStyle = (style: string) => {
+  if (isShapeMark.value) state.shapeType = style as typeof state.shapeType
+  else state.style = style as MarkStyle
 }
 const formatDateTime = (ts?: number) => ts ? new Date(ts).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''
 
@@ -183,7 +192,7 @@ const popupStyle = ({ x, y, maxHeight }: { x: number; y: number; maxHeight?: num
   transform: 'translate(-50%,0)',
   maxHeight: maxHeight ? `${maxHeight}px` : undefined,
 })
-const cardPlacement = computed(() => placePopup(state.x, state.panelY || state.y + 24, 340, state.panel === 'translate' || state.isEditing ? 420 : 180, false, true))
+const cardPlacement = computed(() => placePopup(state.x, state.panelY || state.y + 24, 280, state.panel === 'translate' ? 420 : 180, false, true))
 const menuPosition = computed(() => popupStyle(placePopup(state.x, state.y, 240, 50, true)))
 const cardPosition = computed(() => popupStyle(cardPlacement.value))
 const sendMenuPosition = computed(() => {
@@ -196,7 +205,7 @@ const markData = (mark: any, extra: Record<string, any> = {}) => ({
   currentMark: mark,
   text: mark.text || (mark.type === 'shape' ? (mark.shapeType === 'textbox' ? '' : '形状标注') : mark.type === 'ink' ? '墨迹标注' : ''),
   note: mark.note || '',
-  tags: formatTags(mark.tags),
+  tags: formatMarkTags(mark.tags),
   color: mark.color || (mark.type === 'ink' ? '#ff0000' : 'yellow'),
   style: mark.style || 'highlight',
   shapeType: mark.shapeType || 'rect',
@@ -233,9 +242,14 @@ const setPanelState = (panel: '' | 'card' | 'translate', extra: Record<string, a
   closeMenus()
   Object.assign(state, { showPanel: !!panel, panel, ...extra })
 }
-const openSelectionEditor = () => {
+const openSelectionEditor = async () => {
   if (!state.selection) return
-  setPanelState('card', { currentMark: null, text: state.selection.text, note: '', tags: '', isEditing: true })
+  const mark = await addSelectionMark(state.selection.text, state.color, state.style)
+  if (!mark) return
+  selectionDoc?.defaultView?.getSelection()?.removeAllRanges()
+  window.getSelection()?.removeAllRanges()
+  selectionDoc = null
+  setPanelState('card', markData(mark, { x: state.x, y: state.y, panelY: state.panelY, selection: null, isEditing: true }))
 }
 const closeAll = () => {
   props.ttsController?.cancelLoop()
@@ -252,7 +266,7 @@ const openSelectionPanel = async (selection: MarkSelection, anchor: SelectionAnc
   Object.assign(state, { currentMark: null, isEditing: false, text: selection.text, note: '', tags: '', showMenu: true, showSendMenu: false })
 }
 const openMarkPanel = (mark: Mark, x: number, y: number, edit = false) => {
-  setPanelState('card', { ...markData(mark, { x, y, panelY: y, isEditing: edit }) })
+  setPanelState('card', markData(mark, { x, y, panelY: y, isEditing: edit }))
 }
 
 const showShapeCard = (shape: any, pdfViewer: any) => {
@@ -331,7 +345,7 @@ const setupAnnotationListeners = () => {
 }
 const handleGlobalEdit = (e: Event) => {
   const detail = (e as CustomEvent).detail
-  detail?.item && openMarkPanel(detail.item, detail.position?.x, detail.position?.y, true)
+  detail?.item && openMarkPanel(detail.item, detail.position?.x, detail.position?.y, detail.edit === true)
 }
 
 onMounted(() => {
@@ -408,7 +422,7 @@ const handleTranslate = () => {
   setPanelState('translate')
 }
 const handleEdit = () => {
-  state.tags = formatTags((state.currentMark as any)?.tags)
+  state.tags = formatMarkTags((state.currentMark as any)?.tags)
   state.isEditing = true
 }
 const handleCopyMark = () => state.currentMark ? emit('copyMarkOnly', state.currentMark) : emit('copy', state.text)
@@ -423,7 +437,7 @@ const handleSave = async () => {
   if (!props.manager) return
   try {
     if (state.currentMark) {
-      const updates: any = { note: state.note.trim() || undefined, color: state.color, tags: parseTags(state.tags) }
+      const updates: any = { note: state.note.trim() || undefined, color: state.color, tags: parseMarkTags(state.tags) }
       if (state.currentMark.type === 'shape') Object.assign(updates, { shapeType: state.shapeType, filled: isTextboxMark.value ? false : state.shapeFilled, text: isTextboxMark.value ? (state.text.trim() || '文本框') : undefined })
       else if (state.currentMark.type === 'ink') Object.assign(updates, { text: state.text.trim() || state.currentMark.text })
       else Object.assign(updates, { text: state.text.trim(), style: state.style })
@@ -437,7 +451,7 @@ const handleSave = async () => {
     const args = selectionArgs()
     const pos = args?.[0]
     if (!pos) return showMessage('无法获取位置信息', 2000, 'error')
-    const tags = parseTags(state.tags)
+    const tags = parseMarkTags(state.tags)
     await (state.note.trim() ? props.manager.addNote(pos, state.note.trim(), ...args.slice(1), tags) : props.manager.addHighlight(...args, tags))
     closeAll()
   } catch {
@@ -470,11 +484,11 @@ const handleImport = async () => {
 .send-input{margin:8px;width:calc(100% - 16px)}
 .send-empty{padding:16px 8px;text-align:center;color:var(--b3-theme-on-surface-variant);font-size:12px;opacity:.6}
 .send-item:hover{background:var(--b3-list-hover)}
-.sr-popup-panel{--sr-gap:4px;--sr-line:19px;position:fixed;z-index:10002!important;width:380px;max-width:min(380px,calc(100vw - 12px));pointer-events:auto;cursor:default;overflow:auto;box-sizing:border-box;padding:6px;border:1px solid #d8d8d8;border-radius:8px;background:#fff;box-shadow:none!important;transition:border-color .15s,background-color .15s}
-.sr-popup-panel:hover{border-color:#9fb0c1;background:#fbfdff;box-shadow:none!important}
-.sr-popup-panel>.sr-main{display:flex;flex-direction:column;gap:var(--sr-gap);box-sizing:border-box;min-height:100%}
+.sr-popup-panel{--sr-gap:4px;--sr-line:19px;position:fixed;z-index:10002!important;width:280px;max-width:min(280px,calc(100vw - 12px));pointer-events:auto;cursor:default;overflow:auto;box-sizing:border-box;padding:7px;border:1px solid color-mix(in srgb,var(--b3-border-color) 92%,transparent);border-radius:8px;background:linear-gradient(180deg,color-mix(in srgb,var(--b3-theme-background) 96%,white),var(--b3-theme-background));color:var(--b3-theme-on-surface);box-shadow:none!important;transition:border-color .15s}
+.sr-popup-panel:hover{border-color:var(--b3-theme-primary);box-shadow:none!important}
+.sr-popup-panel>.sr-main{display:flex;flex-direction:column;gap:var(--sr-gap);box-sizing:border-box;min-height:100%;padding-left:0;position:static;z-index:auto}
 .sr-icon-actions{display:flex;align-items:center;gap:4px}
-.sr-icon-actions button{display:flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;border:none;border-radius:4px;background:transparent;color:#8a8a8a;line-height:1;cursor:pointer}
-.sr-icon-actions button:hover{background:#f4f4f4;color:#555}
+.sr-icon-actions button{display:flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;border:none;border-radius:4px;background:transparent;color:var(--b3-theme-on-surface-variant);line-height:1;cursor:pointer}
+.sr-icon-actions button:hover{background:var(--b3-list-hover);color:var(--b3-theme-primary)}
 .sr-icon-actions svg{width:14px;height:14px}
 </style>

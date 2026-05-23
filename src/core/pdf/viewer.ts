@@ -91,7 +91,7 @@ export class PDFViewer {
   async open(src: string | ArrayBuffer) {
     const pdfjs = await loadPDFJS()
     this.pdf = markRaw(await pdfjs.getDocument({
-      data: src,
+      ...(typeof src === 'string' ? { url: src } : { data: src }),
       cMapUrl: '/stage/protyle/js/pdf/cmaps/',
       cMapPacked: true,
       standardFontDataUrl: '/stage/protyle/js/pdf/standard_fonts/',
@@ -114,7 +114,7 @@ export class PDFViewer {
     for (let i = 1; i <= n; i++) {
       const d = document.createElement('div')
       d.className = 'pdf-page', d.dataset.page = String(i)
-      d.style.cssText = `position:relative;margin:${isS ? '0 auto' : isD ? '0' : '20px auto'};width:${vp.width}px;height:${vp.height}px;box-shadow:0 2px 8px #0003${isD ? ';flex-shrink:0' : ''}`
+      d.style.cssText = `position:relative;margin:${isS ? '0 auto' : isD ? '0' : '20px auto'};width:${vp.width}px;height:${vp.height}px;--scale-factor:${vp.scale};box-shadow:0 2px 8px #0003${isD ? ';flex-shrink:0' : ''}`
       frag.appendChild(d)
       if (isS && i < n) { const s = document.createElement('div'); s.style.height = '100vh'; frag.appendChild(s) }
     }
@@ -217,43 +217,24 @@ export class PDFViewer {
     })
   }
 
-  // 渲染文本层（流式+智能合并）
-  private renderTextLayer(w: HTMLElement, p: any, vp: any, pdfjs: any, ver: number) {
+  // 渲染文本层
+  private async renderTextLayer(w: HTMLElement, p: any, vp: any, pdfjs: any, ver: number) {
     if (ver !== this.renderVersion || !w.isConnected) return
     const d = document.createElement('div')
     d.className = 'textLayer'
     d.style.cssText = 'position:absolute;inset:0;line-height:1'
     w.appendChild(d)
-    const items: any[] = []
-    const reader = p.streamTextContent({ includeMarkedContent: false, disableNormalization: false }).getReader()
-    const pump = (): any => reader.read().then(({ value, done }: any) => {
-      if (ver !== this.renderVersion || !w.isConnected || !d.isConnected) { reader.cancel(); return }
-      if (done) {
-        // 智能合并相邻文本项
-        for (let i = 0; i < items.length;) {
-          const it = items[i]
-          if (!it.str) { i++; continue }
-          const t = pdfjs.Util.transform(vp.transform, it.transform), h = Math.hypot(t[2], t[3]), a = Math.atan2(t[1], t[0])
-          let txt = it.str, x = t[4] + it.width * h, j = i + 1
-          // 合并同行相邻文本
-          for (; j < items.length; j++) {
-            const n = items[j]
-            if (!n.str) continue
-            const nt = pdfjs.Util.transform(vp.transform, n.transform), nh = Math.hypot(nt[2], nt[3])
-            if (Math.abs(nt[5] - t[5]) > h * .3 || Math.abs(Math.atan2(nt[1], nt[0]) - a) > .01 || Math.abs(nh - h) > h * .1 || nt[4] - x > h * 2) break
-            txt += n.str
-            x = nt[4] + n.width * nh
-          }
-          d.innerHTML += `<span role="presentation" style="position:absolute;left:${t[4]}px;top:${t[5]}px;font-size:${h}px;transform:rotate(${a}rad)translateY(-.8em);transform-origin:0 0;white-space:pre;color:transparent;cursor:text">${txt}</span>`
-          i = j
-        }
-        requestAnimationFrame(() => { if (ver === this.renderVersion && d.isConnected) import('./annotation').then(({ initTextLayerOptimization }) => initTextLayerOptimization(d)) })
-        return
-      }
-      if (value.items) items.push(...value.items)
-      return pump()
-    }).catch(() => {})
-    pump()
+    const finish = () => requestAnimationFrame(() => { if (ver === this.renderVersion && d.isConnected) import('./annotation').then(({ initTextLayerOptimization }) => initTextLayerOptimization(d)) })
+    try {
+      if (!pdfjs.TextLayer) return
+      const layer = new pdfjs.TextLayer({
+        textContentSource: p.streamTextContent({ includeMarkedContent: true, disableNormalization: true }),
+        container: d,
+        viewport: vp,
+      })
+      await layer.render()
+      if (d.querySelector('span')) finish()
+    } catch {}
   }
 
   // 创建墨迹层

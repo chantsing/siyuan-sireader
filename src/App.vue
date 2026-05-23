@@ -47,9 +47,9 @@ const SettingsDock = defineComponent({
   props: ['modelValue', 'i18n', 'onSave', 'onUpdate:modelValue'],
   setup(props: any) {
     const { canShowToc } = useReaderState()
-    const activeTab = ref('appearance')
+    const activeTab = ref('bookshelf')
     const model = ref(props.modelValue)
-    const navItems = computed(() => (model.value.navItems || SETTINGS_TABS).filter((item: any) => item.id !== 'dictionary').sort((a: any, b: any) => a.order - b.order))
+    const navItems = computed(() => (model.value.navItems?.length ? model.value.navItems : SETTINGS_TABS).filter((item: any) => item.id !== 'dictionary').sort((a: any, b: any) => a.order - b.order))
     const tabs = computed(() => navItems.value.filter((item: any) => item.enabled && (item.id === 'appearance' || item.id === 'bookshelf' || item.id === 'search' || item.id === 'deck' || canShowToc.value)).map((item: any) => ({ id: item.id, icon: item.icon, tip: props.i18n?.[item.tip] || item.tip })))
     const tooltipDir = computed(() => ({ left: 'e', right: 'w', top: 's', bottom: 'n' }[model.value.navPosition] || 'n'))
     const handleUpdate = (value: any) => {
@@ -62,6 +62,7 @@ const SettingsDock = defineComponent({
       setTimeout(() => (window as any)._openLicenseContent?.(), 50)
     }
     watch(canShowToc, show => !show && ['toc', 'mark'].includes(activeTab.value) && (activeTab.value = 'bookshelf'), { immediate: true })
+    watch(tabs, list => list.length && !list.some((t: any) => t.id === activeTab.value) && (activeTab.value = list[0].id), { immediate: true })
     onMounted(() => { ;(window as any)._openLicense = openLicense })
     onUnmounted(() => { if ((window as any)._openLicense === openLicense) delete (window as any)._openLicense })
     return () => h(
@@ -106,10 +107,10 @@ const SettingsDock = defineComponent({
 })
 
 // 打开设置并展开授权
-const openSetting = () => {
+const openSetting = (openLicense = false) => {
   const btn = document.querySelector<HTMLElement>(`.dock__item[data-title="${plugin.i18n?.name || '思阅'}"]`)
   if (!btn?.classList.contains('dock__item--active')) btn?.click()
-  setTimeout(() => (window as any)._openLicense?.(), 100)
+  if (openLicense) setTimeout(() => (window as any)._openLicense?.(), 100)
 }
 
 // ===== 阅读器核心 =====
@@ -145,9 +146,8 @@ plugin.addTab({
   type: 'epub_reader',
   async init() {
     const { url, blockId, file } = this.data
-    const f = file?.arrayBuffer ? file : url && await fetchFile(url)
-    if (!f) return this.element.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--b3-theme-error)">加载失败</div>'
-    ;(this as any)._app = await mountReader(this.element, { file: f, url, blockId })
+    if (!file && !url) return this.element.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--b3-theme-error)">加载失败</div>'
+    ;(this as any)._app = await mountReader(this.element, { file, url, blockId })
   },
   destroy() { ;(this as any)._app?.unmount() }
 })
@@ -200,10 +200,9 @@ const handleEbookLink = async (e: MouseEvent) => {
   
   // 普通文件链接
   e.preventDefault(), e.stopPropagation()
-  const file = await fetchFile(cleanUrl)
-  if (!file) return
   const { openReaderTab } = await import('@/utils/bookOpen')
-  openReaderTab(plugin, file.name.replace(/\.[^.]+$/, ''), { file, url: cleanUrl, blockId: link.closest('[data-node-id]')?.getAttribute('data-node-id') }, `${plugin.name}epub_reader`, settings.value)
+  const title = cleanUrl.split('/').pop()?.split('?')[0]?.replace(/\.[^.]+$/, '') || 'Reader'
+  openReaderTab(plugin, title, { url: cleanUrl, blockId: link.closest('[data-node-id]')?.getAttribute('data-node-id') }, `${plugin.name}epub_reader`, settings.value)
 }
 
 setOpenSettingHandler(openSetting)

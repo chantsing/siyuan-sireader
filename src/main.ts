@@ -12,7 +12,7 @@ let cleanupCallbacks: (() => void)[] = []
 
 export const usePlugin = (p?: Plugin) => p ? (plugin = p) : plugin!
 export const registerCleanup = (cb: () => void) => cleanupCallbacks.push(cb)
-export const setOpenSettingHandler = (handler: () => void) => {
+export const setOpenSettingHandler = (handler: (openLicense?: boolean) => void) => {
   (window as any)._sy_plugin_sample = (window as any)._sy_plugin_sample || {}
   ;(window as any)._sy_plugin_sample.openSetting = handler
 }

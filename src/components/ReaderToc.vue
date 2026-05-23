@@ -262,7 +262,7 @@ const sendTocItem = async (href: string, label: string, clipboard = false) => {
   try {
     const bookUrl = getUrl() || ''
     await exportBookLink(
-      { chapter: label, cfi: href },
+      { chapter: label, cfi: href, text: label },
       {
         bookUrl,
         bookInfo: bookUrl ? await bookshelfManager.getBook(bookUrl) : null,

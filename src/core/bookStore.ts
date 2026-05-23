@@ -248,16 +248,17 @@ export const loadBookFile = async (path: string): Promise<File> => {
       ? `/${path}`
       : ''
   if (publicPath) {
+    const name = path.split(/[/\\]/).pop() || 'book'
+    const res = await fetch(publicPath).catch(() => null)
+    if (res?.ok) return new File([await res.arrayBuffer()], name, {
+      type: res.headers.get('content-type') || 'application/octet-stream',
+    })
     if (publicPath.startsWith(PUBLIC_ROOT)) {
-      const file = await readManagedFile(publicPath, path.split(/[/\\]/).pop() || 'book')
+      const file = await readManagedFile(publicPath, name)
       if (!file) throw new Error('文件加载失败')
       return file
     }
-    const res = await fetch(publicPath)
-    if (!res.ok) throw new Error('文件加载失败')
-    return new File([await res.arrayBuffer()], path.split(/[/\\]/).pop() || 'book', {
-      type: res.headers.get('content-type') || 'application/octet-stream',
-    })
+    throw new Error('文件加载失败')
   }
   const blob = await readFileBlob(path)
   if (!blob) throw new Error('文件加载失败')
