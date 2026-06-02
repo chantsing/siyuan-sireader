@@ -31,20 +31,19 @@ const watchTheme = (cb: () => void) => {
 }
 const isDarkBg = (bg: string) => { const h = bg?.replace('#', '') || '0'; return parseInt(h.length === 3 ? h.split('').map(x => x + x).join('') : h, 16) < 0x808080 }
 const parseRgb = (c: string) => { const t = document.createElement('div'); t.style.color = c; document.body.appendChild(t); const rgb = getComputedStyle(t).color.match(/\d+/g)!.map(Number); document.body.removeChild(t); return rgb }
-const getThemeSignature = (settings: any, viewMode: string) => {
+const getThemeSignature = (settings: any) => {
   const th = resolveTheme(settings.theme === 'custom' ? settings.customTheme : PRESET_THEMES[settings.theme] || PRESET_THEMES.default)
   const { visualSettings: v = {} } = settings
   const filter = [v.brightness !== 1 && `brightness(${v.brightness})`, v.contrast !== 1 && `contrast(${v.contrast})`, v.sepia > 0 && `sepia(${v.sepia})`, v.saturate !== 1 && `saturate(${v.saturate})`, (v.invert || isDarkBg(th.bg)) && 'invert(1) hue-rotate(180deg)'].filter(Boolean).join(' ') || 'none'
-  return { th, filter, signature: `${th.bg}|${th.color}|${filter}|${settings.viewMode || viewMode}` }
+  return { th, filter, signature: `${th.bg}|${th.color}|${filter}` }
 }
 
 export class PDFViewer {
   private pdf: PDFDocumentProxy | null = null
   private container: HTMLElement
   private scale = 1.0
-  private autoScaleMode: 'custom' | 'fit-width' | 'fit-page' = 'custom'
+  private autoScaleMode: 'custom' | 'fit-width' = 'custom'
   private rotation = 0
-  private viewMode: 'single' | 'double' | 'scroll' = 'scroll'
   private pages = markRaw(new Map<number, any>())
   private rendered = new Set<number>()
   private current = 1
@@ -59,18 +58,20 @@ export class PDFViewer {
   private resizeTimer: any = null
   private renderVersion = 0
   private themeSignature = ''
+  private wheelZoomTimer: any = null
 
   constructor(opt: PDFViewerOptions) {
     this.container = opt.container
     this.scale = opt.scale || 1.0
     this.onChange = opt.onPageChange
     this.setupResizeObserver()
+    this.container.addEventListener('wheel', this.handleWheelZoom, { passive: false })
   }
 
   // 应用主题
   applyTheme(settings: any) {
     this.themeSettings = settings
-    const { th, filter, signature } = getThemeSignature(settings, this.viewMode)
+    const { th, filter, signature } = getThemeSignature(settings)
     if (!th) return
     const s = this.container.style, img = th.bgImg, fixUrl = (u: string) => u.startsWith('http') || u.startsWith('/') ? u : `/${u}`
     Object.assign(s, { color: th.color, backgroundColor: img ? 'transparent' : th.bg, backgroundImage: img ? `url("${fixUrl(img)}")` : '', backgroundSize: img ? 'cover' : '', backgroundPosition: img ? 'center' : '', backgroundRepeat: img ? 'no-repeat' : '' })
@@ -78,7 +79,6 @@ export class PDFViewer {
     s.setProperty('--pdf-canvas-filter', filter)
     this.themeSignature = signature
     this.container.querySelectorAll('.pdf-page canvas').forEach((c: any) => c.style.filter = filter)
-    if (settings.viewMode) this.viewMode = settings.viewMode
     if (settings.theme === 'auto') {
       this.themeObserver ||= watchTheme(() => this.updateTheme(this.themeSettings))
     } else if (this.themeObserver) {
@@ -108,15 +108,15 @@ export class PDFViewer {
   // 创建页面占位符
   private async createPlaceholders() {
     if (!this.pdf) return
-    const n = this.pdf.numPages, isD = this.viewMode === 'double', isS = this.viewMode === 'single'
-    this.container.innerHTML = '', Object.assign(this.container.style, isD ? { display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '20px' } : { display: 'block' })
+    const n = this.pdf.numPages
+    this.container.innerHTML = ''
+    Object.assign(this.container.style, { display: 'block' })
     const frag = document.createDocumentFragment(), firstPage = this.pages.get(1) || await this.pdf.getPage(1), vp = firstPage.getViewport({ scale: this.scale, rotation: this.rotation })
     for (let i = 1; i <= n; i++) {
       const d = document.createElement('div')
       d.className = 'pdf-page', d.dataset.page = String(i)
-      d.style.cssText = `position:relative;margin:${isS ? '0 auto' : isD ? '0' : '20px auto'};width:${vp.width}px;height:${vp.height}px;--scale-factor:${vp.scale};box-shadow:0 2px 8px #0003${isD ? ';flex-shrink:0' : ''}`
+      d.style.cssText = `position:relative;margin:20px auto;width:${vp.width}px;height:${vp.height}px;--scale-factor:${vp.scale};box-shadow:0 2px 8px #0003`
       frag.appendChild(d)
-      if (isS && i < n) { const s = document.createElement('div'); s.style.height = '100vh'; frag.appendChild(s) }
     }
     this.container.appendChild(frag)
   }
@@ -171,10 +171,6 @@ export class PDFViewer {
       await this.fitWidth()
       return
     }
-    if (this.autoScaleMode === 'fit-page') {
-      await this.fitPage()
-      return
-    }
     this.refreshRenderedPages()
   }
 
@@ -191,6 +187,9 @@ export class PDFViewer {
     const { visualSettings: v = {} } = this.themeSettings || {}, bg = this.container.style.getPropertyValue('--page-bg-color') || '#fff'
     const dark = v.invert || isDarkBg(bg)
     const filters = [v.brightness !== 1 && `brightness(${v.brightness})`, v.contrast !== 1 && `contrast(${v.contrast})`, v.sepia > 0 && `sepia(${v.sepia})`, v.saturate !== 1 && `saturate(${v.saturate})`, dark && 'invert(1) hue-rotate(180deg)'].filter(Boolean).join(' ')
+    w.style.width = `${vp.width}px`
+    w.style.height = `${vp.height}px`
+    w.style.setProperty('--scale-factor', String(vp.scale))
     
     try {
       const c = document.createElement('canvas'), ctx = c.getContext('2d', { alpha: false })!
@@ -317,32 +316,35 @@ export class PDFViewer {
   }
 
   // 缩放和视图
-  private async applyScale(scale: number, mode: 'custom' | 'fit-width' | 'fit-page') {
+  private async applyScale(scale: number, mode: 'custom' | 'fit-width') {
     this.autoScaleMode = mode
     this.scale = Math.max(.25, scale)
     await this.rerenderLayout()
+    this.container.dispatchEvent(new CustomEvent('pdf-scale-change', { detail: { scale: this.scale, mode } }))
   }
   async setScale(s: number) { await this.applyScale(s, 'custom') }
   async fitWidth() { const p = this.pages.get(1); if (p) await this.applyScale((this.container.clientWidth - 40) / p.getViewport({ scale: 1 }).width, 'fit-width') }
-  async fitPage() { const p = this.pages.get(1); if (!p) return; const vp = p.getViewport({ scale: 1 }), w = (this.container.clientWidth - 40) / vp.width, h = (this.container.clientHeight - 40) / vp.height; await this.applyScale(Math.min(w, h), 'fit-page') }
   async setRotation(d: 0 | 90 | 180 | 270) { this.rotation = d; await this.rerenderLayout() }
-  async setViewMode(m: 'single' | 'double' | 'scroll') { this.viewMode = m; await this.rerenderLayout(m === 'double' ? () => this.fitPage() : undefined) }
+  private handleWheelZoom = (e: WheelEvent) => {
+    if (!e.ctrlKey) return
+    e.preventDefault()
+    clearTimeout(this.wheelZoomTimer)
+    const next = this.scale * (e.deltaY < 0 ? 1.1 : 0.9)
+    this.wheelZoomTimer = setTimeout(() => { void this.setScale(next) }, 20)
+  }
 
   // Getters
   getScale = () => this.scale
   getRotation = () => this.rotation
-  getViewMode = () => this.viewMode
   getPDF = () => this.pdf
   getPages = () => this.pages
   getPageCount = () => this.pdf?.numPages || 0
 
   // 更新主题
   async updateTheme(settings: any) {
-    if (getThemeSignature(settings, this.viewMode).signature === this.themeSignature) return
+    if (getThemeSignature(settings).signature === this.themeSignature) return
     this.renderVersion++
-    const old = this.viewMode
     this.applyTheme(settings)
-    if (old !== this.viewMode) return await this.setViewMode(this.viewMode)
     const pages = Array.from(this.rendered)
     this.rendered.clear()
     for (const n of pages) { 
@@ -415,10 +417,12 @@ export class PDFViewer {
 
   // 销毁
   destroy() { 
+    this.container.removeEventListener('wheel', this.handleWheelZoom)
     this.observer?.disconnect()
     this.themeObserver?.disconnect()
     this.resizeObserver?.disconnect()
     clearTimeout(this.resizeTimer)
+    clearTimeout(this.wheelZoomTimer)
     this.pageReadyListeners.clear()
     this.pdf?.destroy()
     this.pages.clear()
@@ -430,9 +434,7 @@ export class PDFViewer {
   async createView() {
     const n = this.getPageCount()
     const behavior = this.themeSettings?.pageAnimation === 'none' ? 'auto' : 'smooth'
-    const nav = (d: number) => this.viewMode === 'scroll'
-      ? this.container.scrollBy({ top: d * this.container.clientHeight * 0.9, behavior })
-      : this.goToPage(this.getCurrentPage() + d)
+    const nav = (d: number) => this.container.scrollBy({ top: d * this.container.clientHeight * 0.9, behavior })
     const prev = () => nav(-1), next = () => nav(1)
     const thumbs: string[] = [], outline = await this.getOutline()
     

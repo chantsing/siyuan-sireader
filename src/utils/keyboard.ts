@@ -13,6 +13,10 @@ export interface KeyboardHandlers {
   handlePdfZoomReset?: () => void
   handlePdfSearch?: () => void
   handlePrint?: () => void
+  handlePdfTextTool?: () => void
+  handlePdfHandTool?: () => void
+  handlePdfInkTool?: () => void
+  handlePdfShapeTool?: () => void
 }
 
 export const createKeyboardHandler = (handlers: KeyboardHandlers, isPdfMode: () => boolean, isActive?: () => boolean) => {
@@ -46,6 +50,14 @@ export const createKeyboardHandler = (handlers: KeyboardHandlers, isPdfMode: () 
       PageDown: handlers.handlePdfPageDown,
       r: handlers.handlePdfRotate,
       R: handlers.handlePdfRotate,
+      t: handlers.handlePdfTextTool,
+      T: handlers.handlePdfTextTool,
+      h: handlers.handlePdfHandTool,
+      H: handlers.handlePdfHandTool,
+      i: handlers.handlePdfInkTool,
+      I: handlers.handlePdfInkTool,
+      s: handlers.handlePdfShapeTool,
+      S: handlers.handlePdfShapeTool,
     }
 
     if (pdfKeys[k]) return pdfKeys[k]?.(), consume()

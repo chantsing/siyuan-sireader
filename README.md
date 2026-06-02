@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI translation, Anki flashcards
 
-[![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-1.3.1-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,33 @@ Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI tr
 ---
 
 ## 📝 Latest Updates
+
+### v1.3.1 (2026.6.2)
+
+**Added**
+
+- Added SiPan file-link import, and SiPan folder links can be added directly as bookshelf groups.
+- Added reading and annotation support for cloud-drive files to reduce local storage usage.
+- **Added private book-source search, add, and download entry for Z-Library (Easter egg).**
+- Added batch organization after batch import.
+- Added shortcut commands for PDF text selection, hand, ink annotation, and shape annotation tools, with in-reader T/H/I/S quick switching.
+
+**Improved**
+
+- Improved batch operation flow to reduce repeated clicks and duplicate processing.
+- Improved the "Start Reading" animation trigger and wording, so it no longer repeats for books with progress or repeated opens in the same session.
+- Kept the page navigation toolbar visible while the "Start Reading" animation is shown.
+- PDF reading now always uses continuous scrolling and is no longer affected by single-page or double-page layout settings.
+- PDF supports Ctrl + mouse wheel zooming.
+- Removed the "fit page" zoom entry from the PDF toolbar; legacy settings fall back to fit width.
+- Improved PDF shape annotation screenshot clarity for clearer inserted images.
+
+**Fixed**
+
+- Fixed the missing logout button on the membership card.
+- Fixed PDFs with mixed portrait and landscape pages possibly freezing on landscape pages.
+- Fixed bookshelf search in grid view, list view, and groups.
+- Fixed bound-document search results showing but not being selectable.
 
 ### v1.3.0 (2026.5.23)
 
@@ -331,7 +358,7 @@ Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI tr
 | | Translation Panel | Independent translation panel to display results |
 | **⚙️ Others** | Authorization System | Trial/Monthly/Annual/Lifetime membership |
 | | Shortcuts | Custom shortcuts (Previous/Next/Bookmark/PDF operations, etc.) |
-| | Data Management | SQLite unified data management, Auto-migrate old version data |
+| | Data Management | Managed book files, records, and settings storage |
 | | Mobile Support | Support PDF reading (EPUB/TXT not supported yet) |
 
 ---
@@ -442,6 +469,7 @@ Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI tr
 - **Dictionary Sorting** - Adjust order in dictionary management, Prioritize frequently used dictionaries
 
 ### PDF Tips
+- **PDF Shortcuts** - T for text selection, H for hand tool, I for ink annotation, S for shape annotation, Ctrl+wheel to zoom
 - **Ink Annotation** - Suitable for handwritten notes and highlighting
 - **Shape Annotation** - Rectangle selection, Circle marking, Triangle indication
 - **Toolbar Drag** - Long press toolbar button to drag position

@@ -273,7 +273,8 @@ export const generateShapeScreenshot = async (shape: any, page: number, pdfViewe
     const w = Math.abs(vx2 - vx1)
     const h = Math.abs(vy2 - vy1)
     if (w < 10 || h < 10) return ''
-    canvas.width = Math.min(720, Math.max(24, Math.ceil(w)))
+    const scale = Math.min(3, Math.max(2, 1440 / Math.max(w, 1)))
+    canvas.width = Math.min(2160, Math.max(24, Math.ceil(w * scale)))
     canvas.height = Math.max(24, Math.round(h * canvas.width / w))
     ctx.drawImage(pdfCanvas, Math.min(vx1, vx2) * dpr, Math.min(vy1, vy2) * dpr, w * dpr, h * dpr, 0, 0, canvas.width, canvas.height)
     ctx.globalAlpha = shape.opacity || 0.8
@@ -290,7 +291,7 @@ export const generateShapeScreenshot = async (shape: any, page: number, pdfViewe
       ctx.fill()
     } else {
       ctx.strokeStyle = shape.color || '#ff0000'
-      ctx.lineWidth = 4
+      ctx.lineWidth = Math.max(4, (shape.width || 2) * scale)
       ctx.beginPath()
       if (shape.shapeType === 'circle') ctx.arc(canvas.width / 2, canvas.height / 2, Math.min(canvas.width, canvas.height) / 2, 0, Math.PI * 2)
       else if (shape.shapeType === 'triangle') {

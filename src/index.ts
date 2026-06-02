@@ -35,14 +35,7 @@ export default class PluginSample extends Plugin {
     init(this)
     this.addHotkeys()
 
-    let reading = false
-    window.addEventListener('reader:open', () => reading = true)
-    window.addEventListener('reader:close', () => reading = false)
     const idle = (fn: () => void) => (window as any).requestIdleCallback ? (window as any).requestIdleCallback(fn, { timeout: 10000 }) : setTimeout(fn, 10000)
-    const defer = (fn: () => void) => idle(() => reading ? defer(fn) : fn())
-    defer(() => import('@/utils/migration')
-      .then(({ ensureMigrationCompleted }) => ensureMigrationCompleted())
-      .catch(error => console.error('[SiReader] Migration init failed:', error)))
     idle(() => import('@/components/deck/siyuan-card')
       .then(({ enableAutoSync }) => enableAutoSync())
       .catch(error => console.error('[SiReader] Deck autosync init failed:', error)))
@@ -64,10 +57,14 @@ export default class PluginSample extends Plugin {
       pdfLastPage: { text: 'PDF末页', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfLastPage')) },
       pdfPageUp: { text: 'PDF上一页', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfPageUp')) },
       pdfPageDown: { text: 'PDF下一页', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfPageDown')) },
+      pdfTextTool: { text: 'PDF文本选择工具', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfTextTool')) },
+      pdfHandTool: { text: 'PDF手形工具', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfHandTool')) },
+      pdfInkTool: { text: 'PDF墨迹标注工具', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfInkTool')) },
+      pdfShapeTool: { text: 'PDF形状标注工具', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfShapeTool')) },
     }
 
     Object.entries(cmds).forEach(([k, { text, hotkey, callback }]) =>
-      this.addCommand({ langKey: k, langText: text, hotkey, callback }),
+      this.addCommand({ langKey: k, langText: (this.i18n as any)?.[k] || text, hotkey, callback }),
     )
   }
 

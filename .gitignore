@@ -9,9 +9,11 @@ dist
 build
 tmp
 .env
+private-sources
 docs/*
 !docs/离线词典使用说明.md
 src\components\backup
 .kiro
 server
 website
+siyuan-sireader.code-workspace

@@ -1,43 +1,58 @@
 ﻿<template>
-  <div v-if="mode === 'compact'" class="fn__flex-1 fn__flex-column sy__file bs-view bs-tree" @dragover="handleRootDragOver" @drop="handleRootDrop">
-    <div class="fn__flex-1 bs-tree__scroll" @mouseover="onCompactHover">
-      <ul class="b3-list b3-list--background bs-tree__home" :class="{ 'is-visible': showHomeDrop }">
-        <li
-          class="b3-list-item b3-list-item--hide-action"
-          :class="{ 'is-drop-target': dragHomeActive }"
-          @dragover="handleHomeDragOver"
-          @dragleave="handleHomeDragLeave"
-          @drop="handleHomeDrop"
-        >
-          <span class="b3-list-item__toggle b3-list-item__toggle--hl">
-            <span class="bs-tree__marker"></span>
-          </span>
-          <span class="b3-list-item__text ariaLabel">{{ HOME_DROP_LABEL }}</span>
-        </li>
-      </ul>
-      <ul v-for="row in compactRows" :key="row.key" class="b3-list b3-list--background">
+  <div v-if="mode === 'compact'" class="fn__flex-1 fn__flex-column file-tree sy__file bs-view bs-tree-view" @dragover="handleRootDragOver" @drop="handleRootDrop">
+    <div class="fn__flex-1 fn__hidescrollbar" @mouseover="onCompactHover">
+      <ul v-for="root in compactTree" :key="root.key" class="b3-list b3-list--background">
         <li
           class="b3-list-item b3-list-item--hide-action"
           data-type="navigation-root"
+          :data-path="compactPath(root)"
           data-playlist-item
-          :class="{ 'bs-tree__item--child': row.level > 0, 'bs-tree__item--group': row.kind === 'group', 'bs-tree__item--book': row.kind === 'book', 'is-drop-target': isGroupDropTarget(row) }"
-          :draggable="row.kind === 'book'"
-          @click="handleCompactClick(row, $event)"
-          @contextmenu.prevent.stop="handleCompactContextMenu(row, $event)"
-          @dragstart="row.kind === 'book' && isBook(row.item) ? handleBookDragStart(row.item.data, $event) : undefined"
+          :class="{ dragover: isGroupDropTarget(root), 'b3-list-item--focus': isSelectableBook(root.item) && isBookSelected(root.item.data) }"
+          :style="compactItemStyle(root)"
+          :draggable="root.kind === 'book'"
+          @click="handleCompactClick(root, $event)"
+          @contextmenu.prevent.stop="handleCompactContextMenu(root, $event)"
+          @dragstart="root.kind === 'book' && isBook(root.item) ? handleBookDragStart(root.item.data, $event) : undefined"
           @dragend="handleBookDragEnd"
-          @dragover="handleGroupDragOver(row, $event)"
-          @dragleave="handleGroupDragLeave(row)"
-          @drop="handleGroupDrop(row, $event)"
+          @dragover="handleGroupDragOver(root, $event)"
+          @dragleave="handleGroupDragLeave(root)"
+          @drop="handleGroupDrop(root, $event)"
         >
-          <span class="b3-list-item__toggle b3-list-item__toggle--hl" :style="{ paddingLeft: `${row.level * 18}px` }">
-            <svg v-if="row.kind === 'group'" class="b3-list-item__arrow" :class="{ 'b3-list-item__arrow--open': isCompactExpanded(row.item.data.id) }"><use xlink:href="#iconRight" /></svg>
-            <span v-else class="bs-tree__marker"></span>
+          <span v-if="isSelectableBook(root.item)" class="b3-list-item__toggle b3-list-item__toggle--hl" :style="compactToggleStyle(root)">
+            <svg class="b3-list-item__arrow"><use :xlink:href="isBookSelected(root.item.data) ? '#iconCheck' : '#iconUncheck'" /></svg>
           </span>
-          <span class="b3-list-item__text ariaLabel" data-playlist-item>{{ mainText(row.item) }}</span>
-          <span class="fn__space"></span>
-          <span class="b3-list-item__meta" data-playlist-item>{{ compactMeta(row.item) }}</span>
+          <span v-else class="b3-list-item__toggle b3-list-item__toggle--hl" :class="{ fn__hidden: root.kind !== 'group' }" :style="compactToggleStyle(root)">
+            <svg class="b3-list-item__arrow" :class="{ 'b3-list-item__arrow--open': root.kind === 'group' && isCompactExpanded(root.item.data.id) }"><use xlink:href="#iconRight" /></svg>
+          </span>
+          <span class="b3-list-item__text ariaLabel" data-position="parentE" :aria-label="mainText(root.item)" data-playlist-item>{{ mainText(root.item) }}</span>
+          <span class="b3-list-item__meta" data-playlist-item>{{ compactMeta(root.item) }}</span>
         </li>
+        <ul v-if="root.children.length" :style="compactChildListStyle(root)">
+          <li
+            v-for="child in root.children"
+            :key="child.key"
+            class="b3-list-item b3-list-item--hide-action"
+            data-type="navigation-file"
+            :data-path="compactPath(child)"
+            data-playlist-item
+            :class="{ 'b3-list-item--focus': isSelectableBook(child.item) && isBookSelected(child.item.data) }"
+            :style="compactItemStyle(child)"
+            :draggable="child.kind === 'book'"
+            @click="handleCompactClick(child, $event)"
+            @contextmenu.prevent.stop="handleCompactContextMenu(child, $event)"
+            @dragstart="child.kind === 'book' && isBook(child.item) ? handleBookDragStart(child.item.data, $event) : undefined"
+            @dragend="handleBookDragEnd"
+          >
+            <span v-if="isSelectableBook(child.item)" class="b3-list-item__toggle b3-list-item__toggle--hl" :style="compactToggleStyle(child)">
+              <svg class="b3-list-item__arrow"><use :xlink:href="isBookSelected(child.item.data) ? '#iconCheck' : '#iconUncheck'" /></svg>
+            </span>
+            <span v-else class="b3-list-item__toggle b3-list-item__toggle--hl fn__hidden" :style="compactToggleStyle(child)">
+              <svg class="b3-list-item__arrow"><use xlink:href="#iconRight" /></svg>
+            </span>
+            <span class="b3-list-item__text ariaLabel" data-position="parentE" :aria-label="mainText(child.item)" data-playlist-item>{{ mainText(child.item) }}</span>
+            <span class="b3-list-item__meta" data-playlist-item>{{ compactMeta(child.item) }}</span>
+          </li>
+        </ul>
       </ul>
     </div>
   </div>
@@ -50,6 +65,7 @@
         v-for="item in items"
         :key="itemKey(item)"
         class="bs-grid-item"
+        :class="{ 'is-selected': isSelectableBook(item) && isBookSelected(item.data) }"
         :draggable="isBook(item)"
         @click="handleClick(item, $event)"
         @contextmenu.prevent="handleContextMenu(item, $event)"
@@ -96,7 +112,7 @@
         v-for="item in items"
         :key="itemKey(item)"
         class="b3-list-item b3-list-item--hide-action bs-row"
-        :class="{ 'is-drop-target': isGroupDropTarget(item) }"
+        :class="{ 'is-drop-target': isGroupDropTarget(item), 'is-selected': isSelectableBook(item) && isBookSelected(item.data) }"
         :draggable="isBook(item)"
         @click="handleClick(item, $event)"
         @contextmenu.prevent="handleContextMenu(item, $event)"
@@ -173,6 +189,7 @@ type BookItem = { type: 'book'; data: Book }
 type ImportItem = { type: 'import'; data: BookImportItem }
 type Item = GroupItem | BookItem | ImportItem
 type CompactRow = { key: string; item: Item; level: number; kind: 'group' | 'book' | 'import' }
+type CompactNode = CompactRow & { children: CompactRow[] }
 const HOME_DROP_LABEL = '移出分组'
 
 const props = withDefaults(defineProps<{
@@ -186,6 +203,8 @@ const props = withDefaults(defineProps<{
   getGroupCoverUrls: (group: GroupConfig) => string[]
   getProgress: (book: Book) => string
   currentGroup?: string | null
+  selecting?: boolean
+  selectedUrls?: string[]
 }>(), { gridStyle: () => ({}), confirmDeleteId: null, groupCounts: () => ({}), currentGroup: null })
 
 const emit = defineEmits<{
@@ -198,11 +217,14 @@ const emit = defineEmits<{
   'remove-book': [book: Book]
   'move-book-group': [url: string, groupId: string]
   'move-book-home': [url: string]
+  'toggle-select-book': [book: Book]
 }>()
 
 const isBook = (item: Item): item is BookItem => item.type === 'book'
 const isGroup = (item: Item): item is GroupItem => item.type === 'group'
 const isImport = (item: Item): item is ImportItem => item.type === 'import'
+const isSelectableBook = (item: Item): item is BookItem => !!props.selecting && isBook(item)
+const isBookSelected = (book: Book) => props.selectedUrls?.includes(book.url)
 const groupCount = (group: GroupConfig) => props.groupCounts[group.id] || 0
 const itemKey = (item: Item) => isGroup(item) ? `group-${item.data.id}` : isBook(item) ? `book-${item.data.url}` : `import-${item.data.id}`
 const compactExpanded = ref<Record<string, boolean>>({})
@@ -214,21 +236,47 @@ const dragHomeActive = ref(false)
 const booksForGroup = (group: GroupConfig, books: Book[]) => books.filter(book => bookInGroup(book, group))
 const groupedBook = (book: Book, groups: GroupItem[]) => groups.some(g => bookInGroup(book, g.data))
 
-const compactRows = computed<CompactRow[]>(() => {
-  const rows: CompactRow[] = []
+const compactTree = computed<CompactNode[]>(() => {
+  const roots: CompactNode[] = []
   const groups = props.items.filter(isGroup)
   const books = props.items.filter(isBook).map(item => item.data)
   for (const group of groups) {
-    rows.push({ key: itemKey(group), item: group, level: 0, kind: 'group' })
-    if (compactExpanded.value[group.data.id]) {
-      for (const book of booksForGroup(group.data, books)) rows.push({ key: `child-${group.data.id}-${book.url}`, item: { type: 'book', data: book }, level: 1, kind: 'book' })
-    }
+    roots.push({
+      key: itemKey(group),
+      item: group,
+      level: 0,
+      kind: 'group',
+      children: compactExpanded.value[group.data.id]
+        ? booksForGroup(group.data, books).map(book => ({
+            key: `child-${group.data.id}-${book.url}`,
+            item: { type: 'book', data: book },
+            level: 1,
+            kind: 'book',
+          }))
+        : [],
+    })
   }
   for (const book of books) {
-    if (!groupedBook(book, groups)) rows.push({ key: `root-${book.url}`, item: { type: 'book', data: book }, level: 0, kind: 'book' })
+    if (!groupedBook(book, groups)) {
+      roots.push({
+        key: `root-${book.url}`,
+        item: { type: 'book', data: book },
+        level: 0,
+        kind: 'book',
+        children: [],
+      })
+    }
   }
-  for (const item of props.items.filter(isImport)) rows.push({ key: itemKey(item), item, level: 0, kind: 'import' })
-  return rows
+  for (const item of props.items.filter(isImport)) {
+    roots.push({
+      key: itemKey(item),
+      item,
+      level: 0,
+      kind: 'import',
+      children: [],
+    })
+  }
+  return roots
 })
 
 const isCompactExpanded = (id: string) => !!compactExpanded.value[id]
@@ -316,7 +364,7 @@ const handleHomeDrop = (event: DragEvent) => {
 
 const handleClick = (item: Item, event: MouseEvent) => {
   if (isGroup(item)) emit('select-group', item.data.id)
-  else if (isBook(item)) emit('book-click', item.data, event)
+  else if (isBook(item)) props.selecting ? emit('toggle-select-book', item.data) : emit('book-click', item.data, event)
 }
 
 const handleCompactClick = (row: CompactRow, event: MouseEvent) => {
@@ -332,6 +380,11 @@ const handleContextMenu = (item: Item, event: MouseEvent) => {
 const handleCompactContextMenu = (row: CompactRow, event: MouseEvent) => handleContextMenu(row.item, event)
 
 const countText = (count: number) => `${count} 本`
+const compactIndent = (row: CompactRow) => row.level * 18
+const compactItemStyle = (row: CompactRow) => ({ '--file-toggle-width': `${compactIndent(row) + 18}px` })
+const compactToggleStyle = (row: CompactRow) => ({ paddingLeft: `${compactIndent(row)}px` })
+const compactChildListStyle = (row: CompactRow) => ({ '--QYL-indent-1': `${compactIndent(row) + 12}px` })
+const compactPath = (row: CompactRow) => isGroup(row.item) ? row.item.data.id : isBook(row.item) ? row.item.data.url : row.item.data.id
 const starText = (rating: number) => '★'.repeat(Math.max(0, Math.min(5, rating)))
 const watermarkClass = (status: BookStatus) => `bs-watermark--${status}`
 const mainText = (item: Item) => isGroup(item) ? item.data.name : isBook(item) ? item.data.title : item.data.preview?.title || item.data.label
@@ -387,28 +440,18 @@ const tagStyle = (tag: string) => {
 
 <style scoped lang="scss">
 .bs-view{min-height:0;height:100%;padding:0;box-sizing:border-box}
-.bs-tree{overflow:hidden;--bs-tree-border:color-mix(in srgb,var(--b3-theme-on-surface-light) 30%,transparent);--b3-list-hover:color-mix(in srgb,var(--b3-theme-primary) 12%,transparent)}
-.bs-tree__scroll{display:flex;flex-direction:column;gap:6px;min-height:0;overflow:auto;scrollbar-gutter:stable;padding:0 0 8px 8px;box-sizing:border-box}
-.bs-tree :deep(.b3-list),.bs-list{margin:0;background:transparent}
-.bs-tree__home{display:block;max-height:0;overflow:hidden;opacity:0;transition:max-height .18s ease,opacity .18s ease;margin:0}
-.bs-tree__home.is-visible{max-height:52px;opacity:.9}
+.bs-tree-view{padding-top:8px}
 .bs-home-drop{display:none}
-.bs-tree :deep(ul.b3-list.b3-list--background){border:1px solid var(--bs-tree-border);border-radius:var(--b3-border-radius)}
-.bs-tree :deep(.b3-list-item[data-type="navigation-root"]){margin:0;border-radius:var(--b3-border-radius)}
-.bs-tree :deep(.b3-list-item__toggle){display:flex;align-items:center;justify-content:center;flex:0 0 auto;width:18px;min-width:18px}
-.bs-tree :deep(.b3-list-item__arrow){transition:transform .18s ease}
-.bs-tree__item--child{background:color-mix(in srgb,var(--b3-theme-primary) 4%,transparent)}
-.bs-tree__item--group{font-weight:500}
-.bs-tree__item--book{cursor:grab}
-.bs-tree__marker{display:block;width:6px;height:6px;border-radius:999px;background:color-mix(in srgb,var(--b3-theme-on-surface) 58%,transparent)}
-.bs-tree :deep(.b3-list-item__text),.bs-tree :deep(.b3-list-item__meta){color:var(--b3-theme-on-background)}
 .bs-list :deep(.b3-list-item){margin:0}
 .bs-grid{display:grid;gap:6px;overflow:auto;scrollbar-gutter:stable;align-content:start;padding:8px 0 8px 8px;box-sizing:border-box}
 .bs-home-drop{grid-column:1/-1;align-items:center;justify-content:center;min-height:38px;padding:0 12px;border-radius:10px;background:color-mix(in srgb,var(--b3-theme-primary) 8%,transparent);color:var(--b3-theme-on-surface-variant);font-size:12px}
 .bs-home-drop.is-visible{display:flex}
 .bs-home-drop.is-drop-target{background:color-mix(in srgb,var(--b3-theme-primary) 18%,transparent);color:var(--b3-theme-primary)}
 .bs-grid-item{position:relative;min-width:0;cursor:pointer}
-.bs-row.is-drop-target,.bs-tree :deep(.b3-list-item.is-drop-target){background:color-mix(in srgb,var(--b3-theme-primary) 16%,transparent)}
+.bs-grid-item.is-selected .bs-cover,.bs-grid-item.is-selected:hover .bs-cover{box-shadow:inset 0 0 0 2px var(--b3-theme-primary)}
+.bs-grid-item.is-selected .bs-cover::before,.bs-grid-item.is-selected:hover .bs-cover::before{content:'';position:absolute;inset:0;z-index:1;background:color-mix(in srgb,var(--b3-theme-primary) 38%,transparent);pointer-events:none}
+.bs-row.is-selected,.bs-row.is-selected:hover{background:color-mix(in srgb,var(--b3-theme-primary) 20%,var(--b3-theme-background))!important;border-color:color-mix(in srgb,var(--b3-theme-primary) 55%,var(--b3-border-color))}
+.bs-row.is-drop-target{background:color-mix(in srgb,var(--b3-theme-primary) 16%,transparent)}
 .bs-cover.is-drop-target::after{content:'';position:absolute;inset:0;background:color-mix(in srgb,var(--b3-theme-primary) 18%,transparent);pointer-events:none}
 .bs-cover,.bs-row__cover{position:relative;overflow:hidden;background:var(--b3-theme-surface-lighter);box-shadow:inset 0 0 0 1px var(--b3-border-color)}
 .bs-cover{aspect-ratio:2/3;border-radius:6px}

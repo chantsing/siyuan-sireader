@@ -2,14 +2,11 @@ import { putFile, readDir, removeFile } from '@/api'
 import { usePlugin } from '@/main'
 
 export const PUBLIC_ROOT = '/public/siyuan-sireader'
-export const PUBLIC_DATA_ROOT = '/data/public/siyuan-sireader'
-export const DB_KEYS = ['reader.db', 'reader.last-good.db'] as const
 
 const BOOKS_DIR = 'books'
 const COVERS_DIR = 'covers'
 const RECORDS_DIR = 'records'
 const SUPPORTED_BOOK_EXTS = ['epub', 'pdf', 'mobi', 'azw3', 'azw', 'fb2', 'cbz', 'txt'] as const
-const decoder = new TextDecoder()
 const getPlugin = () => usePlugin()
 
 export interface BookRecord {
@@ -39,7 +36,7 @@ const req = (id: string) => { try { return (window as any).require?.(id) } catch
 
 const isApiErrorPayload = (bytes?: Uint8Array | null) => {
   if (!bytes?.byteLength || bytes.byteLength > 512) return false
-  const text = decoder.decode(bytes).trim()
+  const text = new TextDecoder().decode(bytes).trim()
   if (!text.startsWith('{') || !text.includes('"code"')) return false
   try {
     const payload = JSON.parse(text)
@@ -77,15 +74,9 @@ const putPublicFile = async (blob: Blob, publicPath: string, name?: string) => {
   return publicPath
 }
 
-export const readDirEntries = async (path: string) => (await readDir(path).catch(() => ({ data: [] as any[] })))?.data || []
 export const isSupportedBookFile = (name = '') => new RegExp(`\\.(${SUPPORTED_BOOK_EXTS.join('|')})$`, 'i').test(name)
 export const filterSupportedBookFiles = (files: File[]) => files.filter(file => isSupportedBookFile(file.name))
-
-export const readFileText = async (path: string) => {
-  const res = await readFileResponse(path)
-  const text = res?.ok ? await res.text().catch(() => '') : ''
-  return text && !isApiErrorPayload(new TextEncoder().encode(text)) ? text : ''
-}
+export const readDirEntries = async (path: string) => (await readDir(path).catch(() => ({ data: [] as any[] })))?.data || []
 
 export const readFileBlob = async (path: string) => {
   const res = await readFileResponse(path)
@@ -97,19 +88,6 @@ export const readFileBlob = async (path: string) => {
     if (text && isApiErrorPayload(new TextEncoder().encode(text))) return null
   }
   return blob
-}
-
-export const readFileBytes = async (path: string) => {
-  if (!path) return null
-  if (/^https?:\/\//i.test(path)) {
-    const res = await fetch(path)
-    return res.ok ? new Uint8Array(await res.arrayBuffer()) : null
-  }
-  if (path.startsWith('file://')) return null
-  const res = await readFileResponse(path)
-  if (!res?.ok) return null
-  const bytes = new Uint8Array(await res.arrayBuffer())
-  return isApiErrorPayload(bytes) ? null : bytes
 }
 
 export const readManagedFile = async (path: string, fallbackName?: string) => {
@@ -200,21 +178,6 @@ export const removeManagedFile = async (path = '') => {
   try { await removeFile(isPublicPath(path) ? publicToDataPath(path) : path) } catch {}
 }
 
-export const cleanupManagedStorage = async (books: StoredBookRef[]) => {
-  const keep = new Set(
-    books
-      .flatMap(book => [book.path || '', book.cover || ''])
-      .filter(path => path.startsWith(PUBLIC_ROOT))
-      .map(publicToDataPath),
-  )
-  for (const dir of [`${PUBLIC_DATA_ROOT}/${BOOKS_DIR}`, `${PUBLIC_DATA_ROOT}/${COVERS_DIR}`]) {
-    for (const file of await readDirEntries(dir)) {
-      const path = `${dir}/${file.name || ''}`
-      if (!file.isDir && !keep.has(path)) try { await removeFile(path) } catch {}
-    }
-  }
-}
-
 export const saveBookFile = async (file: File, url: string) => {
   const ext = file.name.split('.').pop() || 'bin'
   return saveManagedFile(file, getBookFileDataPath(url, ext))
@@ -269,6 +232,5 @@ export const clearStoredPluginData = async (books: StoredBookRef[] = []) => {
   for (const book of books) {
     await Promise.all([removeManagedFile(book.path), removeManagedFile(book.cover), removeBookRecord(book.url)])
   }
-  for (const key of ['bookshelf.json', 'settings.json', 'daily.json', 'migrated.json']) await removeData(key)
-  for (const key of DB_KEYS) await removeData(key)
+  for (const key of ['bookshelf.json', 'settings.json', 'daily.json']) await removeData(key)
 }

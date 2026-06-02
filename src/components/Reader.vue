@@ -86,7 +86,9 @@ const { can, showUpgrade } = useLicense(i18n.value)
 const currentSettings = ref(props.settings)
 const getSettings = () => currentSettings.value || props.settings
 const pdfToolbarFixed = computed(() => currentSettings.value?.pdfToolbarStyle === 'fixed')
-const showOpeningSplash = computed(() => !!props.file || !(props.bookInfo?.progress > 0 || props.bookInfo?.pos?.cfi || props.bookInfo?.pos?.page || props.bookInfo?.pos?.chapter))
+const openingSplashKey = props.bookInfo?.url || props.url || props.file?.name || ''
+const seenOpeningSplash = openingSplashKey ? sessionStorage.getItem(`sireader-opening:${openingSplashKey}`) === '1' : false
+const showOpeningSplash = computed(() => !seenOpeningSplash && (!!props.file || !(props.bookInfo?.progress > 0 || props.bookInfo?.pos?.cfi || props.bookInfo?.pos?.page || props.bookInfo?.pos?.chapter)))
 const tocTabs = computed(() => [
   { id: 'toc', icon: 'lucide-scroll-text', tip: i18n.value.toc || 'TOC' },
   { id: 'mark', icon: 'lucide-square-pen', tip: i18n.value.annotation || i18n.value.mark || 'Marks' },
@@ -123,7 +125,7 @@ const handleSettingsUpdate=async(e:Event)=>{
   const prev=currentSettings.value
   updateSettingsState(s)
   hasSettingChanged(prev,s,['theme','customTheme','textSettings','paragraphSettings','layoutSettings','visualSettings','viewMode','pageAnimation'])&&reader?.updateSettings?.(s)
-  hasSettingChanged(prev,s,['theme','customTheme','textSettings','paragraphSettings','layoutSettings','visualSettings','viewMode','pdfToolbarStyle'])&&pdfViewer.value&&await pdfViewer.value.updateTheme(s)
+  hasSettingChanged(prev,s,['theme','customTheme','visualSettings','pdfToolbarStyle'])&&pdfViewer.value&&await pdfViewer.value.updateTheme(s)
   JSON.stringify(prev?.tts)!==JSON.stringify(s?.tts)&&await syncTTS()
 }
 const containerRef = ref<HTMLElement>()
@@ -312,11 +314,13 @@ const init=async()=>{
     }
     await syncTTS()
     markPanelRef.value?.setupAnnotationListeners()
+    if (openingSplashKey) sessionStorage.setItem(`sireader-opening:${openingSplashKey}`, '1')
   }catch(e){
     error.value=e instanceof Error?e.message:'加载失败'
     markPanelRef.value?.closeAll()
   }finally{
     loading.value=false
+    setTimeout(()=>readerSplashRef.value?.dismiss(),300)
     await restorePos(getBookUrl(),reader,pdfViewer.value,getMobilePosition)
     props.bookInfo?.pos?.cfi&&initJump(props.bookInfo.pos.cfi,currentBookUrl.value)
   }
@@ -405,6 +409,12 @@ const handlePdfFirstPage=()=>pdfViewer.value?.goToPage(1)
 const handlePdfLastPage=()=>pdfViewer.value?.goToPage(pdfViewer.value.getPageCount())
 const handlePdfPageUp=handlePrev
 const handlePdfPageDown=handleNext
+const handlePdfToolMode=async(toolMode:'text'|'hand'|'ink'|'shape')=>{
+  if(!isPdfMode.value)return
+  const next=currentSettings.value?.pdfToolbar?.toolMode===toolMode&&['ink','shape'].includes(toolMode)?'hand':toolMode
+  await togglePdfToolManagers(next==='ink',next==='shape')
+  updatePdfToolbarToolMode(next as 'text'|'hand'|'ink'|'shape')
+}
 const handleGoto=(e:CustomEvent)=>{
   const{cfi,id,bookUrl}=e.detail
   if(bookUrl&&bookUrl!==currentBookUrl.value)return
@@ -416,8 +426,8 @@ const handleGoto=(e:CustomEvent)=>{
   }else gotoEPUB(cfi,id,reader,markManager.value)
 }
 const handleUndo=()=>markManager.value?.undo()
-const handleKeydown=createKeyboardHandler({handlePrev,handleNext,handleUndo,handlePdfFirstPage,handlePdfLastPage,handlePdfPageUp,handlePdfPageDown,handlePdfRotate,handlePdfZoomIn,handlePdfZoomOut,handlePdfZoomReset,handlePdfSearch,handlePrint},()=>isPdfMode.value,()=>readerFocused)
-const events=[['sireaderSettingsUpdated',handleSettingsUpdate],['sireader:goto',handleGoto],['sireader:toggleBookmark',toggleBookmark],['sireader:quickNote',async()=>{try{if(!currentView.value||!containerRef.value?.isConnected)return;if((window as any).__sireader_active_view&&(window as any).__sireader_active_view!==currentView.value)return;const { openNoteTargetFloat } = await import('@/utils/copy');await openNoteTargetFloat(getBookUrl(),getSettings(),containerRef.value!)}catch(e:any){showMessage(e?.message||'打开目标文档失败',2000,'error')}}],['sireader:prevPage',handlePrev],['sireader:nextPage',handleNext],['sireader:pdfZoomIn',handlePdfZoomIn],['sireader:pdfZoomOut',handlePdfZoomOut],['sireader:pdfZoomReset',handlePdfZoomReset],['sireader:pdfRotate',handlePdfRotate],['sireader:pdfSearch',handlePdfSearch],['sireader:pdfPrint',handlePrint],['sireader:pdfFirstPage',handlePdfFirstPage],['sireader:pdfLastPage',handlePdfLastPage],['sireader:pdfPageUp',handlePdfPageUp],['sireader:pdfPageDown',handlePdfPageDown]]as const
+const handleKeydown=createKeyboardHandler({handlePrev,handleNext,handleUndo,handlePdfFirstPage,handlePdfLastPage,handlePdfPageUp,handlePdfPageDown,handlePdfRotate,handlePdfZoomIn,handlePdfZoomOut,handlePdfZoomReset,handlePdfSearch,handlePrint,handlePdfTextTool:()=>handlePdfToolMode('text'),handlePdfHandTool:()=>handlePdfToolMode('hand'),handlePdfInkTool:()=>handlePdfToolMode('ink'),handlePdfShapeTool:()=>handlePdfToolMode('shape')},()=>isPdfMode.value,()=>readerFocused)
+const events=[['sireaderSettingsUpdated',handleSettingsUpdate],['sireader:goto',handleGoto],['sireader:toggleBookmark',toggleBookmark],['sireader:quickNote',async()=>{try{if(!currentView.value||!containerRef.value?.isConnected)return;if((window as any).__sireader_active_view&&(window as any).__sireader_active_view!==currentView.value)return;const { openNoteTargetFloat } = await import('@/utils/copy');await openNoteTargetFloat(getBookUrl(),getSettings(),containerRef.value!)}catch(e:any){showMessage(e?.message||'打开目标文档失败',2000,'error')}}],['sireader:prevPage',handlePrev],['sireader:nextPage',handleNext],['sireader:pdfZoomIn',handlePdfZoomIn],['sireader:pdfZoomOut',handlePdfZoomOut],['sireader:pdfZoomReset',handlePdfZoomReset],['sireader:pdfRotate',handlePdfRotate],['sireader:pdfSearch',handlePdfSearch],['sireader:pdfPrint',handlePrint],['sireader:pdfFirstPage',handlePdfFirstPage],['sireader:pdfLastPage',handlePdfLastPage],['sireader:pdfPageUp',handlePdfPageUp],['sireader:pdfPageDown',handlePdfPageDown],['sireader:pdfTextTool',()=>handlePdfToolMode('text')],['sireader:pdfHandTool',()=>handlePdfToolMode('hand')],['sireader:pdfInkTool',()=>handlePdfToolMode('ink')],['sireader:pdfShapeTool',()=>handlePdfToolMode('shape')]]as const
 const suppressError=(e:PromiseRejectionEvent)=>/createTreeWalker|destroy/.test(e.reason?.message||'')&&e.preventDefault()
 const setupTabObserver=()=>{if(isMobile())return;let el=containerRef.value?.parentElement;while(el){if(el.hasAttribute('data-id')){const h=document.querySelector(`li[data-type="tab-header"][data-id="${el.getAttribute('data-id')}"]`);if(h){const obs=new MutationObserver(ms=>ms.forEach(m=>{if(m.type!=='attributes'||m.attributeName!=='class')return;const focused=(m.target as HTMLElement).classList.contains('item--focus');focused&&setActiveReader(currentView.value,reader,getSettings());focused&&window.dispatchEvent(new CustomEvent('sireader:tab-switched'));syncReaderFocus(focused&&hasReaderFocus())}));obs.observe(h,{attributes:true,attributeFilter:['class']});(containerRef.value as any).__observer=obs;break}}el=el.parentElement}}
 const handleShapeCreated=async(e:CustomEvent)=>{const{shape,x,y,edit}=e.detail;await finishPdfAnnotation(shape,x,y,edit)}

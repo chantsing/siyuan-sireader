@@ -20,11 +20,6 @@ export const findOpenedTab = (bookName: string, pluginName: string) => {
   return null
 }
 
-// 获取书籍
-export const getBookWithFallback = async (manager: typeof bookshelfManager, bookUrl: string) => {
-  return await manager.getBook(bookUrl)
-}
-
 export const getOpenTabPosition = (settings: Pick<ReaderSettings, 'openMode'>): TabPosition | undefined =>
   ({ rightTab: 'right', bottomTab: 'bottom' }[settings.openMode])
 
@@ -37,6 +32,9 @@ export const openReaderTab = (plugin: Plugin, title: string, data: ReaderTabData
     afterOpen: onReady
   })
 }
+
+export const openOnlineReaderTab = (plugin: Plugin, title: string, url: string, settings?: Pick<ReaderSettings, 'openMode'>, onReady?: () => void) =>
+  openReaderTab(plugin, title, { url }, `${plugin.name}online_reader`, settings, onReady)
 
 const normalizeNativePdfPath = (path: string) => {
   if (!path || /^https?:\/\//i.test(path) || /^file:\/\//i.test(path)) return null
@@ -79,14 +77,16 @@ export const getOrAddAssetBook = async (manager: typeof bookshelfManager, assetP
     await manager.addAssetBook(assetPath, file)
     window.dispatchEvent(new CustomEvent('sireader:bookshelf-updated'))
     return await manager.getBook(bookUrl)
-  } catch (e) {
-    console.error('[添加书籍]', e)
+  } catch {
     return null
   }
 }
 
 // 打开或激活书籍
 export const openOrActivateBook = (plugin: Plugin, book: Book, settings: ReaderSettings, onReady?: () => void) => {
+  const readUrl = book?.path?.match(/^https?:\/\//i) && book.path
+  if (readUrl) return openOnlineReaderTab(plugin, book.title, readUrl, settings, onReady)
+
   if (isMobile()) {
     window.dispatchEvent(new CustomEvent('reader:mobile-open', { detail: { book } }))
     onReady?.()

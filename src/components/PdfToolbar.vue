@@ -14,7 +14,6 @@
         <select v-model="zoomMode" class="toolbar-select b3-tooltips b3-tooltips__s" aria-label="缩放模式" @change="handleZoomMode" @mousedown.stop>
           <option value="custom">{{ zoomPercent }}%</option>
           <option value="fit-width">适应宽度</option>
-          <option value="fit-page">适应页面</option>
         </select>
         <button class="toolbar-btn b3-tooltips b3-tooltips__s" aria-label="放大" @click.stop="zoomIn"><svg><use xlink:href="#lucide-zoom-in" /></svg></button>
       </div>
@@ -152,6 +151,8 @@ import { PDF_SHAPE_COLORS, PDF_SHAPE_OPTIONS } from '@/core/pdf/shape'
 
 type ToolMode = 'text' | 'hand' | 'ink' | 'shape'
 type PopupMode = 'ink' | 'shape' | 'more' | null
+type ZoomMode = PdfToolbarSettings['zoomMode']
+type LegacyZoomMode = ZoomMode | 'fit-page'
 
 const props = defineProps<{ viewer: PDFViewer; searcher: PDFSearch; fileSize?: number; fixed?: boolean; settings?: PdfToolbarSettings }>()
 const emit = defineEmits([
@@ -168,7 +169,7 @@ const shapeColors = PDF_SHAPE_COLORS
 const expanded = ref(false)
 const scale = ref(props.viewer.getScale())
 const rotation = ref(0 as 0 | 90 | 180 | 270)
-const zoomMode = ref<'custom' | 'fit-width' | 'fit-page'>('fit-width')
+const zoomMode = ref<ZoomMode>('fit-width')
 const toolMode = ref<ToolMode>('text')
 const activePopup = ref<PopupMode>(null)
 const inkEraser = ref(false)
@@ -188,6 +189,7 @@ let applyingSettings = false
 
 const zoomPercent = computed(() => Math.round(scale.value * 100))
 const formatSize = (b: number) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(2)} KB` : `${(b / 1048576).toFixed(2)} MB`
+const normalizeZoomMode = (mode?: LegacyZoomMode): ZoomMode => mode === 'custom' ? 'custom' : 'fit-width'
 
 const metaItems = computed(() => {
   if (!metadata.value) return []
@@ -294,12 +296,13 @@ const applyMode = (mode: ToolMode, syncPopup = true) => {
 
 const applyToolbarSettings = async (settings?: PdfToolbarSettings) => {
   if (!settings) return
+  const nextZoomMode = normalizeZoomMode(settings.zoomMode as LegacyZoomMode)
   const prevZoomMode = zoomMode.value
   const prevScale = scale.value
   const prevRotation = rotation.value
   const sameState =
     expanded.value === (!!props.fixed || settings.expanded) &&
-    zoomMode.value === settings.zoomMode &&
+    zoomMode.value === nextZoomMode &&
     scale.value === settings.scale &&
     rotation.value === settings.rotation &&
     toolMode.value === settings.toolMode &&
@@ -314,7 +317,7 @@ const applyToolbarSettings = async (settings?: PdfToolbarSettings) => {
   if (sameState) return
   applyingSettings = true
   expanded.value = !!props.fixed || settings.expanded
-  zoomMode.value = settings.zoomMode
+  zoomMode.value = nextZoomMode
   scale.value = settings.scale
   rotation.value = settings.rotation
   inkColor.value = settings.inkColor
@@ -326,10 +329,9 @@ const applyToolbarSettings = async (settings?: PdfToolbarSettings) => {
   pos.value = { ...settings.position }
   if (shapeType.value === 'textbox') shapeFilled.value = false
   applyMode(settings.toolMode)
-  const zoomChanged = prevZoomMode !== settings.zoomMode || (settings.zoomMode === 'custom' && prevScale !== settings.scale)
+  const zoomChanged = prevZoomMode !== zoomMode.value || (zoomMode.value === 'custom' && prevScale !== settings.scale)
   if (zoomChanged) {
     if (zoomMode.value === 'fit-width') await props.viewer.fitWidth()
-    else if (zoomMode.value === 'fit-page') await props.viewer.fitPage()
     else await props.viewer.setScale(scale.value)
   }
   if (prevRotation !== settings.rotation) await props.viewer.setRotation(rotation.value)
@@ -338,28 +340,26 @@ const applyToolbarSettings = async (settings?: PdfToolbarSettings) => {
   applyingSettings = false
 }
 
-const syncScale = () => {
+const handleViewerScaleChange = (e: Event) => {
+  if (applyingSettings) return
   scale.value = props.viewer.getScale()
+  zoomMode.value = normalizeZoomMode((e as CustomEvent).detail?.mode)
   emitSettings()
 }
 
 const zoomIn = async () => {
   zoomMode.value = 'custom'
   await props.viewer.setScale(scale.value + 0.25)
-  syncScale()
 }
 
 const zoomOut = async () => {
   zoomMode.value = 'custom'
   await props.viewer.setScale(Math.max(0.25, scale.value - 0.25))
-  syncScale()
 }
 
 const handleZoomMode = async () => {
   if (zoomMode.value === 'fit-width') await props.viewer.fitWidth()
-  else if (zoomMode.value === 'fit-page') await props.viewer.fitPage()
   else await props.viewer.setScale(scale.value)
-  syncScale()
 }
 
 const rotateLeft = async () => {
@@ -464,8 +464,14 @@ watch(showMetadata, async v => {
   }
 })
 
-onMounted(() => document.addEventListener('pointerdown', handleOutsidePointer, true))
-onBeforeUnmount(() => document.removeEventListener('pointerdown', handleOutsidePointer, true))
+onMounted(() => {
+  document.addEventListener('pointerdown', handleOutsidePointer, true)
+  props.viewer['container']?.addEventListener('pdf-scale-change', handleViewerScaleChange)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', handleOutsidePointer, true)
+  props.viewer['container']?.removeEventListener('pdf-scale-change', handleViewerScaleChange)
+})
 </script>
 
 <style scoped lang="scss">

@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
-import { bookshelfManager } from '@/core/bookshelf'
-import { createLocalFileRef, filterSupportedBookFiles, materializeNativeFile, toFileUrl } from '@/core/bookStore'
+import { buildBookMetadata, bookshelfManager, hasBookBulkPatch, type BookBulkPatch, type BookFormat } from '@/core/bookshelf'
+import { createLocalFileRef, filterSupportedBookFiles, materializeNativeFile, normalizeBookTitle, saveBookFile, saveCoverFile, toFileUrl } from '@/core/bookStore'
 
 export interface BookImportItem {
   id: string
@@ -15,6 +15,38 @@ export interface BookImportItem {
 }
 
 type ImportMode = 'file' | 'link'
+type DownloadProgress = (message: string) => void
+
+export interface RemoteBookInfo {
+  title?: string
+  author?: string
+  format?: BookFormat
+  intro?: string
+  language?: string
+  publisher?: string
+  published?: string
+  identifier?: string
+  series?: string
+  sourceName?: string
+  fileSize?: string
+  tags?: string[]
+}
+
+export interface RemoteDownloadRequest {
+  url: string
+  fileName: string
+  headers?: Array<{ name: string; value: string }>
+  coverUrl?: string
+  bookInfo?: RemoteBookInfo
+  onProgress?: DownloadProgress
+}
+
+export interface OnlineBookImportInfo extends RemoteBookInfo {
+  url: string
+  readUrl: string
+  coverUrl?: string
+  downloadUrl?: string
+}
 
 const nextId = () => `import-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 const asLines = (input: string) => input.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
@@ -35,6 +67,49 @@ const chunked = async <T>(items: T[], limit: number, task: (item: T, index: numb
 }
 const revokeCover = (item: BookImportItem) => item.preview?.cover?.startsWith?.('blob:') && URL.revokeObjectURL(item.preview.cover)
 const getImportFile = (item: BookImportItem) => materializeNativeFile(item.source as File)
+const formatBytes = (value: number) => {
+  const units = ['B', 'KB', 'MB', 'GB']
+  let size = value, index = 0
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024
+    index += 1
+  }
+  return `${size.toFixed(index ? 1 : 0)} ${units[index]}`
+}
+const parseSizeText = (value = '') => {
+  const match = value.match(/(\d+(?:\.\d+)?)\s*(KB|MB|GB|B)/i)
+  if (!match) return 0
+  return Number(match[1]) * ({ B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3 }[match[2].toUpperCase()] || 1)
+}
+const assertBookFile = async (file: File, format: BookFormat, expectedSizeText = '') => {
+  const expected = parseSizeText(expectedSizeText)
+  const head = new Uint8Array(await file.slice(0, 512).arrayBuffer())
+  const textHead = new TextDecoder().decode(head).trim().toLowerCase()
+  const brief = textHead.replace(/\s+/g, ' ').slice(0, 120)
+  if (expected && file.size < Math.max(8192, expected * 0.2)) throw new Error(`下载内容不完整：${formatBytes(file.size)} / ${expectedSizeText}，文件头=${brief || '-'}`)
+  if (textHead.startsWith('<!doctype') || textHead.startsWith('<html') || textHead.includes('<html')) throw new Error(`下载内容不是书籍文件，文件头=${brief || '-'}`)
+  if (format === 'epub' && !(head[0] === 0x50 && head[1] === 0x4b)) throw new Error(`下载内容不是有效 EPUB，文件头=${brief || '-'}`)
+  if (format === 'pdf' && !textHead.startsWith('%pdf')) throw new Error(`下载内容不是有效 PDF，文件头=${brief || '-'}`)
+}
+const importTags = (info?: RemoteBookInfo) => info?.tags || [info?.sourceName, info?.language, info?.published].filter(Boolean)
+const remoteMetadata = (info?: RemoteBookInfo) => buildBookMetadata({ publisher: info?.publisher, published: info?.published, language: info?.language, identifier: info?.identifier, intro: info?.intro, series: info?.series, sourceName: info?.sourceName, fileSize: info?.fileSize })
+const downloadCover = async (url = '', bookUrl: string) => {
+  if (!url) return ''
+  const { httpSourceManager } = await import('@/utils/HttpSources')
+  const blob = await httpSourceManager.downloadCover(url)
+  return blob ? saveCoverFile(blob, bookUrl) : ''
+}
+const toAbsoluteUrl = (url: string, base = '') => {
+  if (!url) return ''
+  if (/^https?:\/\//i.test(url)) return url
+  if (url.startsWith('//')) return `https:${url}`
+  try { return new URL(url, base).toString() } catch { return url }
+}
+const normalizeDraftUrl = (value: string) => {
+  const raw = value.includes('](') ? value.slice(value.indexOf('](') + 2).replace(/(^|[^\\])\).*$/, '$1').replace(/\\([()\\])/g, '$1') : value
+  const url = raw.trim().replace(/^<|>$/g, '')
+  return url.startsWith('/plugin/private/siyuan-cloud/') ? `${location.origin}${url}` : url
+}
 const createItem = (mode: BookImportItem['mode'], source: string | File, label: string, linkSource: string): BookImportItem => ({
   id: nextId(),
   mode,
@@ -47,16 +122,74 @@ const createItem = (mode: BookImportItem['mode'], source: string | File, label: 
   preview: null,
 })
 const toDraftItem = (value: string) => {
+  const url = normalizeDraftUrl(value)
   const fs = getFs()
-  if (!fs) return createItem('url', value, value, value)
+  if (!fs) return createItem('url', url, value, url)
   try {
-    const file = createLocalFileRef(value, 0, 0)
+    const file = createLocalFileRef(url, 0, 0)
     const stats = fs.statSync((file as any).path)
     Object.assign(file, { size: stats.size, lastModified: stats.mtimeMs })
     return createItem('file', file, value, toFileUrl(file))
   } catch {
-    return createItem('url', value, value, value)
+    return createItem('url', url, value, url)
   }
+}
+
+const nodeDownloadFile = ({ url, fileName, headers = [], onProgress }: RemoteDownloadRequest, redirects = 0): Promise<File> => {
+  const req = (window as any).require
+  if (!req || redirects > 5) return Promise.reject(new Error('Node download unavailable'))
+  const client = req(new URL(url).protocol === 'http:' ? 'http' : 'https')
+  const requestHeaders = Object.fromEntries(headers.map(header => [header.name, header.value]))
+  return new Promise((resolve, reject) => {
+    const request = client.get(url, { headers: requestHeaders }, (response: any) => {
+      const status = Number(response.statusCode || 0)
+      const location = response.headers?.location
+      if ([301, 302, 303, 307, 308].includes(status) && location) {
+        response.resume()
+        nodeDownloadFile({ url: toAbsoluteUrl(location, url), fileName, headers, onProgress }, redirects + 1).then(resolve, reject)
+        return
+      }
+      if (status < 200 || status >= 300) {
+        response.resume()
+        reject(new Error(`HTTP ${status}: ${response.statusMessage || '下载失败'}`))
+        return
+      }
+      const total = Number(response.headers?.['content-length'] || 0)
+      const chunks: Uint8Array[] = []
+      let loaded = 0
+      response.on('data', (chunk: Uint8Array) => {
+        chunks.push(chunk)
+        loaded += chunk.byteLength
+        onProgress?.(total ? `下载中 ${Math.floor((loaded / total) * 100)}%` : `下载中 ${formatBytes(loaded)}`)
+      })
+      response.on('end', () => resolve(new File(chunks, fileName, { type: String(response.headers?.['content-type'] || 'application/octet-stream') })))
+    })
+    request.on('error', reject)
+    request.setTimeout(30000, () => request.destroy(new Error('下载超时')))
+  })
+}
+
+export const importRemoteBook = async (request: RemoteDownloadRequest) => {
+  if (!request.url) throw new Error('无效的下载链接')
+  request.onProgress?.('连接下载...')
+  const file = await nodeDownloadFile(request)
+  const format = (request.bookInfo?.format || file.name.split('.').pop()?.toLowerCase() || 'epub') as BookFormat
+  await assertBookFile(file, format, request.bookInfo?.fileSize)
+  const info = request.bookInfo
+  const source = info?.title && !file.name.toLowerCase().split('?')[0].endsWith(`.${format}`)
+    ? new File([file], `${normalizeBookTitle(info.title) || 'book'}.${format}`, { type: file.type || 'application/octet-stream' })
+    : file
+  const [path, cover] = await Promise.all([saveBookFile(source, request.url), downloadCover(request.coverUrl, request.url)])
+  await bookshelfManager.addBook({ url: request.url, title: normalizeBookTitle(info?.title || source.name.replace(/\.[^.]+$/, '')) || info?.title || source.name, author: info?.author || '未知作者', cover, format, path, size: source.size, tags: importTags(info), metadata: remoteMetadata(info) })
+}
+
+export const addOnlineBookToShelf = async (info: OnlineBookImportInfo) => {
+  const cover = await downloadCover(info.coverUrl, info.url)
+  const meta = { ...remoteMetadata(info), downloadUrl: info.downloadUrl }
+  const payload = { title: normalizeBookTitle(info.title) || info.title, author: info.author || '未知作者', cover, format: info.format || 'epub', path: info.readUrl, size: 0, tags: importTags(info) }
+  const existing = await bookshelfManager.getBook(info.url)
+  if (existing) return bookshelfManager.updateBook(info.url, { ...payload, cover: cover || existing.cover, meta: { ...(existing.meta || {}), ...meta } })
+  return bookshelfManager.addBook({ url: info.url, ...payload, metadata: meta })
 }
 
 export const useBookImport = () => {
@@ -148,22 +281,24 @@ export const useBookImport = () => {
 
   const parseDraftUrls = () => parseUrls()
 
-  const importSelected = async (mode: ImportMode = 'file') => {
+  const importSelected = async (mode: ImportMode = 'file', patch?: BookBulkPatch) => {
     const selected = items.value.filter(item => item.selected && !item.loading && !item.error)
-    if (!selected.length) return { success: 0, failed: 0 }
+    if (!selected.length) return { success: 0, failed: 0, urls: [] as string[] }
     importing.value = true
     let success = 0
     let failed = 0
+    const urls: string[] = []
     const concurrency = mode === 'file' ? (selected.length > 8 ? 3 : 2) : 4
     const importFile = {
       file: (item: BookImportItem) => bookshelfManager.addLocalBook(getImportFile(item), item.preview),
       link: (item: BookImportItem) => bookshelfManager.addLocalLinkBook(getImportFile(item), item.preview),
-    } satisfies Record<ImportMode, (item: BookImportItem) => Promise<void>>
+    } satisfies Record<ImportMode, (item: BookImportItem) => Promise<string>>
 
     await chunked(selected, concurrency, async item => {
       try {
-        if (item.mode === 'url') await bookshelfManager.addUrlBook(item.linkSource, undefined, undefined, item.preview)
-        else if (mode === 'file' || item.linkSource) await importFile[mode](item)
+        let url = ''
+        if (item.mode === 'url') url = await bookshelfManager.addUrlBook(item.linkSource, undefined, undefined, item.preview)
+        else if (mode === 'file' || item.linkSource) url = await importFile[mode](item)
         else throw new Error('当前环境不支持以链接方式导入本地文件')
         item.error = ''
         success++
@@ -173,8 +308,10 @@ export const useBookImport = () => {
       }
     })
 
+    if (urls.length && hasBookBulkPatch(patch)) await bookshelfManager.batchUpdateBooks(urls, patch!)
+
     importing.value = false
-    return { success, failed }
+    return { success, failed, urls }
   }
 
   // 拖拽导入直接入库，不经过预览列表。

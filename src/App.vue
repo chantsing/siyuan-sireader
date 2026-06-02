@@ -106,9 +106,12 @@ const SettingsDock = defineComponent({
   },
 })
 
+const DOCK_TYPE = 'reader'
+const DOCK_ID = `${plugin.name}${DOCK_TYPE}`
+
 // 打开设置并展开授权
 const openSetting = (openLicense = false) => {
-  const btn = document.querySelector<HTMLElement>(`.dock__item[data-title="${plugin.i18n?.name || '思阅'}"]`)
+  const btn = document.querySelector<HTMLElement>(`.dock__item[data-type="${DOCK_ID}"]`)
   if (!btn?.classList.contains('dock__item--active')) btn?.click()
   if (openLicense) setTimeout(() => (window as any)._openLicense?.(), 100)
 }
@@ -162,6 +165,20 @@ plugin.addTab({
   destroy() { ;(this as any)._app?.unmount() }
 })
 
+plugin.addTab({
+  type: 'online_reader',
+  init() {
+    const { url } = this.data
+    if (!url) return this.element.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--b3-theme-error)">加载失败</div>'
+    const iframe = document.createElement('iframe')
+    iframe.src = url
+    iframe.style.cssText = 'width:100%;height:100%;border:0;background:var(--b3-theme-background)'
+    iframe.setAttribute('allowfullscreen', 'true')
+    this.element.innerHTML = ''
+    this.element.appendChild(iframe)
+  }
+})
+
 // 链接打开书籍
 const handleEbookLink = async (e: MouseEvent) => {
   const link = (e.target as HTMLElement).closest('a[href], [data-href], [data-url], span[data-type="a"]') as HTMLElement
@@ -174,8 +191,8 @@ const handleEbookLink = async (e: MouseEvent) => {
     e.preventDefault(), e.stopPropagation()
     if (!parsed.bookUrl) return showMessage('无效的书籍链接', 3000, 'error')
     const { bookshelfManager } = await import('@/core/bookshelf')
-    const { getBookWithFallback, openOrActivateBook } = await import('@/utils/bookOpen')
-    const book = await getBookWithFallback(bookshelfManager, parsed.bookUrl)
+    const { openOrActivateBook } = await import('@/utils/bookOpen')
+    const book = await bookshelfManager.getBook(parsed.bookUrl)
     if (!book) return showMessage('书籍不存在', 3000, 'error')
     return openOrActivateBook(plugin, book, settings.value, () => 
       window.dispatchEvent(new CustomEvent('sireader:goto', { detail: { cfi: parsed.cfi, id: parsed.id } }))
@@ -209,7 +226,7 @@ setOpenSettingHandler(openSetting)
 
 const iconId = READER_ICON_ID
 plugin.addDock({
-  type: 'SiyuanReaderDock',
+  type: DOCK_TYPE,
   config: { position: 'RightTop', size: { width: 680, height: 580 }, icon: iconId, title: plugin.i18n?.name || '思阅' },
   data: { plugin },
   async init() {
@@ -244,11 +261,17 @@ provide('plugin', plugin)
 
 // 处理统计面板切换
 const handleStatsToggle = () => showStats.value = !showStats.value
+const handleOpenOnlineReader = async (e: CustomEvent) => {
+  const { title, url } = e.detail || {}
+  if (!url) return showMessage('在线阅读地址为空', 2000, 'error')
+  const { openOnlineReaderTab } = await import('@/utils/bookOpen')
+  openOnlineReaderTab(plugin, title || '在线阅读', url, settings.value)
+}
 const handleOpenBook = async (book: any) => {
   showStats.value = false
-  const { getBookWithFallback, openOrActivateBook } = await import('@/utils/bookOpen')
+  const { openOrActivateBook } = await import('@/utils/bookOpen')
   const { bookshelfManager } = await import('@/core/bookshelf')
-  const full = await getBookWithFallback(bookshelfManager, book.url)
+  const full = await bookshelfManager.getBook(book.url)
   if (!full) return showMessage('加载失败', 3000, 'error')
   openOrActivateBook(plugin, full, settings.value)
 }
@@ -279,9 +302,11 @@ const handleMobileReaderClose = () => {
 onMounted(async () => {
   window.addEventListener('click', handleEbookLink, true)
   window.addEventListener('stats:toggle', handleStatsToggle as any)
+  window.addEventListener('sireader:open-online-reader', handleOpenOnlineReader as any)
   registerCleanup(() => {
     window.removeEventListener('click', handleEbookLink, true)
     window.removeEventListener('stats:toggle', handleStatsToggle as any)
+    window.removeEventListener('sireader:open-online-reader', handleOpenOnlineReader as any)
   })
   
   if (isMobile()) {

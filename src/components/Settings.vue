@@ -295,7 +295,7 @@ onMounted(() => {
           </SectionTitle>
           <template v-if="isOpen('license')">
             <SettingRows v-if="loadingLicense" :rows="[]" :loading="true" :i18n="i18n" />
-            <li v-else class="b3-list-item b3-list-item--hide-action">
+            <li v-else class="b3-list-item">
               <span class="b3-list-item__toggle fn__hidden"></span>
               <div class="fn__flex-1 fn__flex" style="gap:12px;align-items:flex-start">
                 <div class="fn__flex-center">
@@ -321,18 +321,19 @@ onMounted(() => {
                       @touchend.stop="focusMobileEditable($event.target)"
                     >
                   </div>
-                  <div class="fn__flex fn__flex-end">
-                    <template v-if="license">
-                      <span class="b3-list-item__action b3-tooltips b3-tooltips__nw" :aria-label="i18n.logout || '退出'" @click.stop="clearLicense"><svg><use xlink:href="#lucide-x"></use></svg></span>
-                      <span class="b3-list-item__action b3-tooltips b3-tooltips__nw" :aria-label="i18n.purchase || '购买'" @click.stop="openPurchasePage"><svg><use xlink:href="#lucide-shopping-bag"></use></svg></span>
-                    </template>
-                    <template v-else>
-                      <button class="b3-button b3-button--outline" :disabled="processing || !activationCode.trim()" @click.stop="activateLicense">{{ processing ? (i18n.processing || '处理中') : (i18n.activate || '激活') }}</button>
-                      <button class="b3-button b3-button--text" :disabled="processing" @click.stop="recoverLicense">{{ i18n.recover || '恢复' }}</button>
-                      <span class="b3-list-item__action b3-tooltips b3-tooltips__nw" :aria-label="i18n.purchase || '购买'" @click.stop="openPurchasePage"><svg><use xlink:href="#lucide-shopping-bag"></use></svg></span>
-                    </template>
-                  </div>
                 </div>
+              </div>
+              <span class="fn__space"></span>
+              <div class="fn__flex" style="align-self:flex-end">
+                <template v-if="license">
+                  <span class="b3-list-item__action b3-tooltips b3-tooltips__nw" :aria-label="i18n.logout || '退出'" @click.stop="clearLicense"><svg><use xlink:href="#lucide-x"></use></svg></span>
+                  <span class="b3-list-item__action b3-tooltips b3-tooltips__nw" :aria-label="i18n.purchase || '购买'" @click.stop="openPurchasePage"><svg><use xlink:href="#lucide-shopping-bag"></use></svg></span>
+                </template>
+                <template v-else>
+                  <button class="b3-button b3-button--outline" :disabled="processing || !activationCode.trim()" @click.stop="activateLicense">{{ processing ? (i18n.processing || '处理中') : (i18n.activate || '激活') }}</button>
+                  <button class="b3-button b3-button--text" :disabled="processing" @click.stop="recoverLicense">{{ i18n.recover || '恢复' }}</button>
+                  <span class="b3-list-item__action b3-tooltips b3-tooltips__nw" :aria-label="i18n.purchase || '购买'" @click.stop="openPurchasePage"><svg><use xlink:href="#lucide-shopping-bag"></use></svg></span>
+                </template>
               </div>
             </li>
           </template>

@@ -113,7 +113,7 @@ const author = computed(() => props.bookInfo?.author || '')
 const format = computed(() => props.bookInfo?.format?.toUpperCase() || props.fileName?.split('.').pop()?.toUpperCase() || 'EPUB')
 const hasCover = computed(() => !!props.bookInfo?.cover)
 const phaseLabel = computed(() => props.phaseText || (props.status === 'finished' ? '读毕有得' : '開卷有益'))
-const phaseCaption = computed(() => props.status === 'finished' ? '已完成阅读' : '正在打开')
+const phaseCaption = computed(() => props.status === 'finished' ? '已完成阅读' : '准备阅读')
 const monogram = computed(() => {
   const clean = title.value.replace(/[《》<>[\]().,，。:：'"“”‘’]/g, '').trim()
   return clean.slice(0, 2) || format.value.slice(0, 2) || '书'
