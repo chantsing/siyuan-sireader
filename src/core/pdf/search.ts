@@ -7,6 +7,7 @@ interface Match{page:number;index:number}
 
 export class PDFSearch{
   private pdf:PDFDocumentProxy|null=null
+  private root:ParentNode
   private matches:Match[]=[]
   private current=-1
   private query=''
@@ -14,6 +15,10 @@ export class PDFSearch{
   private pageContents:Map<number,string>=new Map() // 缓存页面文本
   private extractPromises:Map<number,Promise<string>>=new Map() // 提取Promise
   
+  constructor(root:ParentNode=document){
+    this.root=root
+  }
+
   setPDF(pdf:PDFDocumentProxy){
     this.pdf=pdf
     this.pageMatches.clear()
@@ -43,7 +48,7 @@ export class PDFSearch{
     const promise=(async()=>{
       try{
         // 优先从已渲染的文本层获取
-        const layer=document.querySelector(`[data-page="${pageNum}"] .textLayer`)
+        const layer=this.root.querySelector(`[data-page="${pageNum}"] .textLayer`)
         if(layer){
           const spans=layer.querySelectorAll('span')
           if(spans.length>0){
@@ -126,11 +131,11 @@ export class PDFSearch{
 
   private async highlightPage(pageNum:number){
     // 清除所有高亮
-    document.querySelectorAll('.textLayer mark').forEach(el=>el.replaceWith(...el.childNodes))
+    this.root.querySelectorAll('.textLayer mark').forEach(el=>el.replaceWith(...el.childNodes))
     
     if(!this.query)return
     
-    const layer=document.querySelector(`[data-page="${pageNum}"] .textLayer`)
+    const layer=this.root.querySelector(`[data-page="${pageNum}"] .textLayer`)
     if(!layer)return
     
     // 获取整个文本层的文本
@@ -188,12 +193,12 @@ export class PDFSearch{
   }
 
   private highlightCurrent(){
-    document.querySelectorAll('.pdf-search-hl').forEach(el=>el.classList.remove('pdf-search-current'))
+    this.root.querySelectorAll('.pdf-search-hl').forEach(el=>el.classList.remove('pdf-search-current'))
     
     if(this.current<0||this.current>=this.matches.length)return
     
     const match=this.matches[this.current]
-    const layer=document.querySelector(`[data-page="${match.page}"] .textLayer`)
+    const layer=this.root.querySelector(`[data-page="${match.page}"] .textLayer`)
     if(!layer)return
     
     const marks=layer.querySelectorAll('mark.pdf-search-hl')
@@ -206,7 +211,7 @@ export class PDFSearch{
   }
 
   private scrollToMatch(match:Match){
-    const pageEl=document.querySelector(`[data-page="${match.page}"]`)as HTMLElement
+    const pageEl=this.root.querySelector(`[data-page="${match.page}"]`)as HTMLElement
     if(!pageEl)return
     pageEl.scrollIntoView({behavior:'smooth',block:'center'})
   }
@@ -244,7 +249,7 @@ export class PDFSearch{
   getResults=()=>this.matches
   
   clear(){
-    document.querySelectorAll('.textLayer mark').forEach(el=>el.replaceWith(...el.childNodes))
+    this.root.querySelectorAll('.textLayer mark').forEach(el=>el.replaceWith(...el.childNodes))
     this.matches=[]
     this.current=-1
     this.query=''

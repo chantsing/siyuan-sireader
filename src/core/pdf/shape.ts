@@ -378,7 +378,7 @@ export class ShapeController {
       const rectBox = canvas.getBoundingClientRect()
       const popupX = this.config.shapeType === 'textbox' ? x1 : (x1 + x2) / 2
       const popupY = this.config.shapeType === 'textbox' ? y1 : Math.max(y1, y2) + 10
-      setTimeout(() => window.dispatchEvent(new CustomEvent('shape-created', { detail: { shape, x: rectBox.left + popupX, y: rectBox.top + popupY + 10, edit: false } })), 50)
+      setTimeout(() => window.dispatchEvent(new CustomEvent('shape-created', { detail: { shape, source: this, x: rectBox.left + popupX, y: rectBox.top + popupY + 10, edit: false } })), 50)
     }
 
     this.resetDrawing()
@@ -727,6 +727,7 @@ export class ShapeToolManager {
   }
 
   async toggle(active: boolean) { await (await this.getController()).toggle(active, this.container) }
+  ownsController(source: any) { return source === this.controller }
   async setConfig(config: any) { (await this.getController()).setConfig(config) }
   async save() { await this.persistController() }
   toJSON() { return this.controllerData }

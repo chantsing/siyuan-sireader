@@ -8,6 +8,7 @@ type TabPosition = 'right' | 'bottom'
 type NativePdfTarget = { kind: 'asset' | 'pdf'; path: string }
 type OpenModeSettings = Pick<ReaderSettings, 'openMode' | 'openDocAssets'>
 type ReaderTabData = { file?: File; url?: string; blockId?: string | null; bookInfo?: any }
+const BOOK_RE = /\.(epub|pdf|mobi|azw3|azw|fb2|cbz|txt)(?:[?#].*)?$/i
 
 // 查找已打开的阅读器标签页
 export const findOpenedTab = (bookName: string, pluginName: string) => {
@@ -84,7 +85,7 @@ export const getOrAddAssetBook = async (manager: typeof bookshelfManager, assetP
 
 // 打开或激活书籍
 export const openOrActivateBook = (plugin: Plugin, book: Book, settings: ReaderSettings, onReady?: () => void) => {
-  const readUrl = book?.path?.match(/^https?:\/\//i) && book.path
+  const readUrl = /^https?:\/\//i.test(book?.path || '') && !BOOK_RE.test(book.path) && book.path
   if (readUrl) return openOnlineReaderTab(plugin, book.title, readUrl, settings, onReady)
 
   if (isMobile()) {

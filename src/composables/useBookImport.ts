@@ -51,6 +51,12 @@ export interface OnlineBookImportInfo extends RemoteBookInfo {
 const nextId = () => `import-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 const asLines = (input: string) => input.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
 const req = (id: string) => { try { return (window as any).require?.(id) } catch { return null } }
+const cleanLink = (value: string) => (value.includes('](') ? value.slice(value.indexOf('](') + 2).replace(/(^|[^\\])\).*$/, '$1').replace(/\\([()\\])/g, '$1') : value).trim().replace(/^<|>$/g, '')
+const resolveItemUrl = async (item: BookImportItem) => {
+  const url = cleanLink(item.linkSource)
+  item.source = item.linkSource = url
+  return url
+}
 const getElectron = () => req('electron')?.remote || req('@electron/remote')
 const getFs = () => req('fs')
 const pickByInput = () => new Promise<File[]>((resolve) => {
@@ -105,11 +111,6 @@ const toAbsoluteUrl = (url: string, base = '') => {
   if (url.startsWith('//')) return `https:${url}`
   try { return new URL(url, base).toString() } catch { return url }
 }
-const normalizeDraftUrl = (value: string) => {
-  const raw = value.includes('](') ? value.slice(value.indexOf('](') + 2).replace(/(^|[^\\])\).*$/, '$1').replace(/\\([()\\])/g, '$1') : value
-  const url = raw.trim().replace(/^<|>$/g, '')
-  return url.startsWith('/plugin/private/siyuan-cloud/') ? `${location.origin}${url}` : url
-}
 const createItem = (mode: BookImportItem['mode'], source: string | File, label: string, linkSource: string): BookImportItem => ({
   id: nextId(),
   mode,
@@ -122,7 +123,7 @@ const createItem = (mode: BookImportItem['mode'], source: string | File, label: 
   preview: null,
 })
 const toDraftItem = (value: string) => {
-  const url = normalizeDraftUrl(value)
+  const url = cleanLink(value)
   const fs = getFs()
   if (!fs) return createItem('url', url, value, url)
   try {
@@ -240,9 +241,9 @@ export const useBookImport = () => {
     const next = urls.map(toDraftItem)
     await parseItems(
       next,
-      item => item.mode === 'file'
+      async item => item.mode === 'file'
         ? bookshelfManager.previewLocalBook(getImportFile(item))
-        : bookshelfManager.previewUrlBook(item.source as string),
+        : bookshelfManager.previewUrlBook(await resolveItemUrl(item)),
       3,
     )
   }
@@ -301,6 +302,7 @@ export const useBookImport = () => {
         else if (mode === 'file' || item.linkSource) url = await importFile[mode](item)
         else throw new Error('当前环境不支持以链接方式导入本地文件')
         item.error = ''
+        if (url) urls.push(url)
         success++
       } catch (error) {
         item.error = error instanceof Error ? error.message : '导入失败'

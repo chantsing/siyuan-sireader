@@ -69,6 +69,31 @@ const fmt = {
   time: (s: number) => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h}小时${m}分钟` : `${m}分钟`; },
 };
 export const buildBookMetadata = (meta: any = {}) => ({ publisher: meta.publisher, publishDate: meta.published || meta.publishDate, language: meta.language, isbn: meta.identifier || meta.isbn, description: meta.intro || meta.description, series: meta.series, sourceName: meta.sourceName, fileSize: meta.fileSize })
+export interface SiyuanCloudNode { name: string; path: string; parent: string; is_dir: boolean; size?: number }
+const CLOUD = '/plugin/private/siyuan-cloud'
+const BOOK_RE = /\.(epub|pdf|mobi|azw3|azw|fb2|cbz|txt)$/i
+export const normalizeCloudPath = (path = '/') => `/${path}`.replace(/\/+/g, '/').replace(/\/$/, '') || '/'
+export const siyuanCloudUrl = (path: string) => `${location.origin}${CLOUD}/p${decodeURI(encodeURI(path)).replace(/#/g, '%23').replace(/\?/g, '%3F')}`
+export const isCloudBookPath = (path: string) => BOOK_RE.test(path)
+const cloudApi = async (api: string, body: any) => {
+  const r = await fetch(`${CLOUD}/api/fs/${api}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json())
+  return r?.code === 0 || r?.code === 200 ? r.data || {} : {}
+}
+const mapCloudNodes = (items: any[], parent = '/') => items.map(x => {
+  const p = normalizeCloudPath(x.parent || parent), path = normalizeCloudPath(x.path || `${p}/${x.name}`)
+  return { name: x.name, path, parent: p, size: x.size || 0, is_dir: !!(x.is_dir ?? x.isDir) }
+}).filter(x => x.is_dir || isCloudBookPath(x.name))
+const cloudParents = (path: string) => normalizeCloudPath(path).split('/').filter(Boolean).map((_, i, a) => ({ name: a[i], path: `/${a.slice(0, i + 1).join('/')}`, parent: i ? `/${a.slice(0, i).join('/')}` : '/', is_dir: true }))
+export const mergeCloudNodes = (current: SiyuanCloudNode[], items: any[], parent?: string) => {
+  const p = parent && normalizeCloudPath(parent), next = mapCloudNodes(items, p || '/')
+  return Array.from(new Map([...(p ? current.filter(x => x.parent !== p) : []), ...(p ? cloudParents(p) : []), ...next.flatMap(x => [...cloudParents(x.parent), x])].map(x => [x.path, x])).values())
+}
+export const listCloudNodes = async (path = '/') => (await cloudApi('list', { path: normalizeCloudPath(path), per_page: 0 })).content || []
+export const searchCloudNodes = async (keywords: string) => (await cloudApi('search', { parent: '/', keywords, per_page: 50 })).content || []
+export const cloudNodesToItems = (nodes: SiyuanCloudNode[]) => nodes.map((r, i) => r.is_dir
+  ? { type: 'group' as const, data: { id: r.path, name: r.name, parentId: r.parent === '/' ? '' : r.parent, order: i, type: 'folder' as const } }
+  : { type: 'book' as const, data: { url: r.path, title: r.name.replace(/\.[^.]+$/, ''), author: r.size ? `${(r.size / 1024 / 1024).toFixed(1)} MB` : '-', cover: '', format: (r.name.split('.').pop()?.toLowerCase() === 'azw' ? 'azw3' : r.name.split('.').pop()?.toLowerCase()) as BookFormat, path: r.path, size: r.size || 0, status: 'unread' as BookStatus, progress: 0, time: 0, chapter: 0, total: 0, pos: {}, rating: 0, meta: {}, tags: [], groups: r.parent === '/' ? [] : [r.parent], read: 0, added: 0, finished: 0 } }
+)
 export const normalizeBookList = (items: any[] = []) => Array.from(new Set(items.map(item => String(item || '').trim()).filter(Boolean)))
 export const applyBookArrayPatch = (current: string[] = [], patch?: BookArrayPatch) => {
   if (!patch) return current
@@ -102,7 +127,7 @@ class BookshelfManager {
       return true;
     }, fallback);
   
-  private prepareLocalBook = async (file: File, parsedMeta?: any) => { const format = this.getFormat(file.name), name = file.name.replace(/\.[^.]+$/, ''); if (file.name.toLowerCase().endsWith('.txt')) file = await (await import('@/core/txt')).convertTxtFile(file); const meta = parsedMeta || await this.extractMeta(file, format, name), title = normalizeBookTitle(meta.title || name) || name; return { file, format, name, meta, title } }
+  private prepareLocalBook = async (file: File, parsedMeta?: any) => { const format = this.getFormat(file.name), name = file.name.replace(/\.[^.]+$/, ''); const meta = parsedMeta || await this.extractMeta(file, format, name), title = normalizeBookTitle(meta.title || name) || name; return { file, format, name, meta, title } }
   private downloadCover = async (coverUrl: string | undefined, url: string) => {
     if (!coverUrl) return '';
     try {
@@ -391,21 +416,17 @@ class BookshelfManager {
     if (bookInfo?.title) {
       const format = this.getFormat(url)
       const cover = await this.downloadCover(coverUrl, url)
-      const file = await loadBookFile(url)
-      const path = await saveBookFile(file, url)
-      await this.addBook({ url, title: normalizeBookTitle(bookInfo.title) || bookInfo.title, author: bookInfo.author || '未知作者', cover, format, path, size: file.size, metadata: {} })
+      await this.addBook({ url, title: normalizeBookTitle(bookInfo.title) || bookInfo.title, author: bookInfo.author || '未知作者', cover, format, path: url, size: 0, metadata: {} })
       return url
     }
     
-    // 常规路径：需要下载文件提取元数据
+    // 常规路径：预览阶段可能已临时读取文件，但入库时保留链接本身，不托管远端正文。
     const { filePath, name, format, meta } = parsedMeta
       ? { filePath: url, name: parsedMeta.title || this.fileBaseName(url), format: this.getFormat(url), meta: parsedMeta }
       : await this.parseUrlBook(url)
-    const file = await loadBookFile(filePath)
-    const path = await saveBookFile(file, filePath)
     let cover = await this.downloadCover(coverUrl, filePath)
     if (!cover) cover = await saveOptionalCover(meta.coverBlob, filePath)
-    return this.savePreparedBook({ url: filePath, path, format, size: file.size, meta, name, cover })
+    return this.savePreparedBook({ url: filePath, path: filePath, format, size: parsedMeta?.fileSize || 0, meta, name, cover })
   }
 
   async previewUrlBook(url: string) {
@@ -425,7 +446,9 @@ class BookshelfManager {
     
     const filePath = isAbsolute && !url.startsWith('file://') ? toFileUrl(url) : url
     const name = this.fileBaseName(url), format = this.getFormat(url)
-    const meta = await this.extractMeta(await loadBookFile(filePath), format, name)
+    const meta = format === 'txt'
+      ? await this.extractMeta(new File([], `${name}.txt`, { type: 'text/plain' }), format, name)
+      : await this.extractMeta(await loadBookFile(filePath), format, name)
     
     return { filePath, name, format, meta }
   }
@@ -444,9 +467,10 @@ class BookshelfManager {
   private async extractMeta(file: File, format: BookFormat, defaultName: string) {
     const def = { title: defaultName, author: '未知作者', publisher: undefined, published: undefined, language: undefined, identifier: undefined, intro: undefined, subjects: [], series: undefined, coverBlob: undefined, subtitle: undefined }
     if (!['epub', 'mobi', 'azw3', 'txt'].includes(format)) return def
+    if (format === 'txt') return def
     try {
       const view = document.createElement('foliate-view') as any
-      const coverTask = (format === 'epub' || format === 'txt') ? this.extractCover(file).catch(() => undefined) : Promise.resolve(undefined)
+      const coverTask = format === 'epub' ? this.extractCover(file).catch(() => undefined) : Promise.resolve(undefined)
       await Promise.race([view.open(file), new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 10000))])
       const { metadata = {} } = view.book || {}
       const norm = (v: any) => typeof v === 'string' ? v : (v?.['zh-CN'] || v?.['zh'] || v?.['en'] || Object.values(v || {})[0] || '')

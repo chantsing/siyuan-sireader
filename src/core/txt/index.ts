@@ -4,10 +4,10 @@
 
 import JSZip from 'jszip'
 
-interface Chapter { index: number; title: string; content: string }
+export interface Chapter { index: number; title: string; content: string }
 
 // 编码检测 - 增强准确性
-const detectEncoding = (buffer: ArrayBuffer): string => {
+export const decodeTxtBuffer = (buffer: ArrayBuffer): string => {
   const bytes = new Uint8Array(buffer)
   
   // BOM检测
@@ -48,7 +48,7 @@ const detectEncoding = (buffer: ArrayBuffer): string => {
 }
 
 // 章节分割 - 优化大文件处理
-const splitChapters = (text: string): Chapter[] => {
+export const splitTxtChapters = (text: string): Chapter[] => {
   const regex = /^(第[零一二三四五六七八九十百千万\d]+[章节回集部]|Chapter\s+\d+|\d+\.|【[^】]+】)/m
   const lines = text.split('\n')
   const chapters: Chapter[] = []
@@ -126,11 +126,11 @@ export const generateEpubFile = async (
   author = '未知作者'
 ): Promise<File> => {
   // 解码
-  const text = content instanceof ArrayBuffer ? detectEncoding(content) : content
+  const text = content instanceof ArrayBuffer ? decodeTxtBuffer(content) : content
   if (!text.trim()) throw new Error('文件内容为空')
   
   // 分割章节
-  const chapters = splitChapters(text)
+  const chapters = splitTxtChapters(text)
   if (!chapters.length) throw new Error('无法识别章节')
   
   // 创建ZIP

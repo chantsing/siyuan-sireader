@@ -85,16 +85,17 @@ export class TextIterator {
 
   constructor(iter: Iterator<Range>) { this.iter = iter }
 
-  private getNext(targetIdx: number) {
+  get(targetIdx: number) {
+    if (targetIdx < 0) return null
     if (this.arr[targetIdx]) return (this.idx = targetIdx, this.arr[targetIdx])
-    const { done, value } = this.iter.next()
-    if (!done) {
-      this.arr.push({ text: value.toString().trim(), range: value })
-      return (this.idx = targetIdx, this.arr[targetIdx])
+    while (this.arr.length <= targetIdx) {
+      const { done, value } = this.iter.next()
+      if (done) return null
+      this.arr.push({ index: this.arr.length, text: value.toString().trim(), range: value })
     }
-    return null
+    return (this.idx = targetIdx, this.arr[targetIdx])
   }
 
-  first() { return this.getNext(0) }
-  next() { return this.getNext(this.idx + 1) }
+  first() { return this.get(0) }
+  next() { return this.get(this.idx + 1) }
 }

@@ -30,6 +30,8 @@
             @dragover.prevent
             @drop.prevent="dropMark(mark)"
             @dragend="endMarkDrag()"
+            @mouseenter="onMarkEnter($event, mark)"
+            @mouseleave="onMarkLeave"
           >
             <MarkCard
               :time="formatDateTime(mark.timestamp || Date.now())"
@@ -129,7 +131,7 @@ import MarkCard from './MarkCard.vue'
 import DockShell from './ui/DockShell.vue'
 import { useReaderMarks } from '@/composables/useReaderMarks'
 
-const props = withDefaults(defineProps<{ i18n?: any }>(), { i18n: () => ({}) })
+const props = withDefaults(defineProps<{ i18n?: any; context?: any }>(), { i18n: () => ({}) })
 
 const {
   MARK_SORT_OPTIONS,
@@ -174,6 +176,8 @@ const {
   openBlock,
   onBlockEnter,
   hideFloat,
+  onMarkEnter,
+  onMarkLeave,
   canImport,
   importMark,
   deleteMark,
@@ -185,7 +189,7 @@ const {
   resetMarkOrganize,
   getMarkTags,
   goTo,
-} = useReaderMarks(props.i18n)
+} = useReaderMarks(props.i18n, () => props.context)
 const formatDateTime = (ts: number) => new Date(ts).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 const getMarkChapter = (mark: any) => isEditing(mark) ? '' : [mark?.chapter || (mark?.page ? `第${mark.page}页` : ''), mark?.type === 'ink' ? '墨迹标注' : mark?.type === 'shape' ? (mark.shapeType === 'textbox' ? '文本标注' : '形状标注') : ''].filter(Boolean).join(' ')
 const getMarkStyleOptions = (mark: any) => mark?.type === 'shape' ? getEditShapeOptions() : (mark?.type === 'highlight' || mark?.type === 'note' || !mark?.type) ? getEditStyleOptions() : []

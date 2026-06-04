@@ -19,6 +19,8 @@ export class EdgeTTSPlayer {
   private loadQueue = Promise.resolve()
   private isLocal: boolean
   private currentSource: any = null
+  private currentIndex = 0
+  private jumped = false
   private isPdf: boolean
   private pdfViewer: any = null
 
@@ -43,27 +45,64 @@ export class EdgeTTSPlayer {
     this.isLocal = locals.some(v => v.name === voiceName)
   }
 
-  private fillCache() {
-    while (this.blocks.length < 3 && !this.stopped) {
-      const item = this.blocks.length ? this.textIter.next() : this.textIter.first()
-      if (!item) break
-      const block: any = { text: item.text, range: item.range, buffer: null, source: null, loading: !this.isLocal, loaded: this.isLocal, aborted: false }
-      this.blocks.push(block)
-      !this.isLocal && (this.loadQueue = this.loadQueue.then(async () => {
+  async updateConfig(config: any) {
+    const voiceChanged = config.voice && config.voice !== this.config.voice
+    const rateChanged = config.rate !== undefined && config.rate !== this.config.rate
+    this.config = { ...this.config, ...config }
+    if (voiceChanged) {
+      this.tts.setVoice(config.voice)
+      await this.checkLocalVoice(config.voice)
+    }
+    if (!this.isLocal && (voiceChanged || rateChanged)) this.blocks.forEach(block => {
+      block.source = null
+      block.buffer = null; block.loaded = false; block.loading = true
+      this.loadQueue = this.loadQueue.then(async () => {
         if (this.stopped || block.aborted) return void (block.loading = false)
         try {
-          const buf = await this.tts.toStream(item.text, this.config.rate || 1)
-          if (this.stopped || block.aborted) return void (block.loading = false)
-          block.buffer = await this.audioCtx.decodeAudioData(toArrayBuffer(buf))
-          block.loaded = true
+          const buf = await this.tts.toStream(block.text, this.config.rate || 1)
+          if (!this.stopped && !block.aborted) block.buffer = await this.audioCtx.decodeAudioData(toArrayBuffer(buf)), block.loaded = true
         } catch { block.loaded = false } finally { block.loading = false }
-      }).catch(() => (block.loading = false, block.loaded = false)))
+      }).catch(() => (block.loading = false, block.loaded = false))
+    })
+  }
+
+  private stopCurrent() {
+    try { this.isLocal ? window.speechSynthesis.cancel() : this.currentSource?.stop?.() } catch {}
+    this.currentSource = null
+  }
+
+  private resetBlocks() {
+    this.blocks.forEach(b => (b.aborted = true, b.source = null))
+    this.blocks = []
+  }
+
+  private pushBlock(item: any) {
+    const block: any = { ...item, buffer: null, source: null, loading: !this.isLocal, loaded: this.isLocal, aborted: false }
+    this.blocks.push(block)
+    !this.isLocal && (this.loadQueue = this.loadQueue.then(async () => {
+      if (this.stopped || block.aborted) return void (block.loading = false)
+      try {
+        const buf = await this.tts.toStream(block.text, this.config.rate || 1)
+        if (this.stopped || block.aborted) return void (block.loading = false)
+        block.buffer = await this.audioCtx.decodeAudioData(toArrayBuffer(buf))
+        block.loaded = true
+      } catch { block.loaded = false } finally { block.loading = false }
+    }).catch(() => (block.loading = false, block.loaded = false)))
+  }
+
+  private fillCache() {
+    while (this.blocks.length < 3 && !this.stopped) {
+      const item = this.textIter.next()
+      if (!item) break
+      this.pushBlock(item)
     }
   }
 
   private async playBlock(block: any) {
     while (block.loading && !this.stopped && !this.paused) await new Promise(r => setTimeout(r, 50))
     if (this.stopped || this.paused || !block.loaded) return
+    this.currentIndex = block.index || 0
+    this.config.onBlock?.(block.text)
     this.config.highlightText && block.range && (this.isPdf ? this.highlightPdf(block) : this.renderer?.scrollToAnchor?.(block.range, true))
     return this.isLocal ? this.playLocal(block) : this.playOnline(block)
   }
@@ -145,9 +184,25 @@ export class EdgeTTSPlayer {
     while (!this.stopped && !this.paused) {
       const block = this.blocks.shift()
       if (!block) break
-      try { await this.playBlock(block); if (this.stopped || this.paused || !this.config.autoTurnPage) break; this.fillCache() } 
+      try {
+        await this.playBlock(block)
+        const jumped = this.jumped
+        this.jumped = false
+        if (this.stopped || this.paused || (!jumped && !this.config.autoTurnPage)) break
+        this.fillCache()
+      }
       catch (e) { if (!this.config.autoTurnPage) throw e }
     }
+  }
+
+  jump(delta: number) {
+    const item = this.textIter.get(Math.max(0, this.currentIndex + delta))
+    if (!item) return
+    this.paused = false
+    this.jumped = true
+    this.resetBlocks()
+    this.pushBlock(item)
+    this.stopCurrent()
   }
 
   pause() { this.paused = true; this.isLocal ? window.speechSynthesis.pause() : this.currentSource?.context?.suspend() }
@@ -156,9 +211,8 @@ export class EdgeTTSPlayer {
   stop() {
     this.stopped = true
     this.paused = false
-    this.blocks.forEach(b => (b.aborted = true, b.source?.stop()))
-    this.blocks = []
-    this.currentSource && (this.isLocal ? window.speechSynthesis.cancel() : this.currentSource.stop(), this.currentSource = null)
+    this.resetBlocks()
+    this.stopCurrent()
     this.isPdf && this.clearPdfHighlight()
     this.tts.close()
   }
@@ -170,11 +224,14 @@ export class TTSController {
   private loopText: string | null = null
   public isActive = ref(false)
   public paused = ref(false)
+  public title = ref('')
+  public currentText = ref('')
 
-  async speak(text: string, config: any) {
+  async speak(text: string, config: any, title = '选中文本') {
     if (!config?.enabled || !text?.trim()) return
     this.stop()
     this.loopText = text.trim()
+    this.title.value = title
     this.isActive.value = true
     try { await this.playLoop(config) } 
     catch (error) { showMessage((error instanceof Error ? error.message : String(error)) || 'TTS 播放失败', 3000, 'error') } 
@@ -186,21 +243,22 @@ export class TTSController {
       const doc = document.implementation.createHTMLDocument(), p = doc.createElement('p')
       p.textContent = this.loopText
       doc.body.appendChild(p)
-      this.player = new EdgeTTSPlayer(doc, null, { ...config, autoTurnPage: true })
+      this.player = new EdgeTTSPlayer(doc, null, { ...config, autoTurnPage: true, onBlock: (text: string) => this.currentText.value = text })
       await this.player.play()
       if (!this.loopText) break
     }
   }
 
-  async toggle(getReader: () => any, config: any, selection?: { text: string; range?: Range }) {
+  async toggle(getReader: () => any, config: any, selection?: { text: string; range?: Range }, title = '朗读中') {
     if (!config?.enabled) return
-    if (this.isActive.value) return (this.paused.value = !this.paused.value, this.paused.value ? this.player?.pause() : this.player?.resume())
+    if (this.isActive.value) return this.togglePause()
     this.stop()
     try {
       const { doc, renderer, location } = this.getDocument(getReader)
       if (!doc?.body) throw new Error('无法获取文档内容')
-      const startRange = selection?.range || this.getSelection(getReader) || (renderer && this.getVisibleRange(renderer, doc, location))
-      this.player = new EdgeTTSPlayer(doc, renderer, config, startRange)
+      const startRange = selection?.range || (renderer && this.getVisibleRange(renderer, doc, location))
+      this.title.value = title
+      this.player = new EdgeTTSPlayer(doc, renderer, { ...config, onBlock: (text: string) => this.currentText.value = text }, startRange)
       this.isActive.value = true
       await this.player.play()
       this.reset()
@@ -208,9 +266,12 @@ export class TTSController {
   }
 
   cancelLoop() { this.loopText && this.destroy() }
-  stop() { this.loopText = null; this.player?.stop(); this.player = null }
+  updateConfig(config: any) { this.player?.updateConfig(config) }
+  jump(delta: number) { if (this.isActive.value) this.paused.value = false, this.player?.jump(delta) }
+  togglePause() { if (this.isActive.value) this.paused.value = !this.paused.value, this.paused.value ? this.player?.pause() : this.player?.resume() }
+  stop() { this.loopText = null; this.player?.stop(); this.player = null; this.currentText.value = '' }
   destroy() { this.stop(); this.reset() }
-  sync(enabled: boolean) { (!enabled || this.isActive.value) && this.destroy() }
+  sync(enabled: boolean) { !enabled && this.destroy() }
 
   private getDocument(getReader: () => any) {
     const view = getReader()?.getView?.()
@@ -230,8 +291,6 @@ export class TTSController {
 
   private getVisibleRange(renderer: any, doc: Document, location?: any) {
     try {
-      const sel = doc.defaultView?.getSelection()
-      if (sel && !sel.isCollapsed && sel.toString().trim()) return sel.getRangeAt(0)
       if (renderer?.lastVisibleRange) return renderer.lastVisibleRange
       if (location?.range) return location.range
       for (const tag of ['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'blockquote']) {
@@ -243,21 +302,9 @@ export class TTSController {
     } catch {}
   }
 
-  private getSelection(getReader: () => any) {
-    try {
-      const reader = getReader()
-      if (reader) {
-        const contents = reader.getView()?.renderer?.getContents?.()
-        if (contents) for (const { doc } of contents) {
-          const sel = doc.defaultView?.getSelection()
-          if (sel && !sel.isCollapsed && sel.toString().trim()) return sel.getRangeAt(0)
-        }
-      }
-      const sel = document.getSelection()
-      if (sel && !sel.isCollapsed && sel.toString().trim()) return sel.getRangeAt(0)
-    } catch {}
-  }
-
-  private reset() { this.isActive.value = this.paused.value = false; this.player = null }
+  private reset() { this.isActive.value = this.paused.value = false; this.player = null; this.title.value = ''; this.currentText.value = '' }
 }
+
+let globalTTSController: TTSController | null = null
+export const getTTSController = () => globalTTSController || (globalTTSController = new TTSController())
 

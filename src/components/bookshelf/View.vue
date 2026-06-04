@@ -1,5 +1,5 @@
 ﻿<template>
-  <div v-if="mode === 'compact'" class="fn__flex-1 fn__flex-column file-tree sy__file bs-view bs-tree-view" @dragover="handleRootDragOver" @drop="handleRootDrop">
+  <div v-if="mode === 'compact'" class="fn__flex-1 fn__flex-column file-tree sy__file bs-view bs-tree-view" :class="{ 'bs-tree-view--dense': dense }" @dragover="handleRootDragOver" @drop="handleRootDrop">
     <div class="fn__flex-1 fn__hidescrollbar" @mouseover="onCompactHover">
       <ul v-for="root in compactTree" :key="root.key" class="b3-list b3-list--background">
         <li
@@ -25,9 +25,9 @@
             <svg class="b3-list-item__arrow" :class="{ 'b3-list-item__arrow--open': root.kind === 'group' && isCompactExpanded(root.item.data.id) }"><use xlink:href="#iconRight" /></svg>
           </span>
           <span class="b3-list-item__text ariaLabel" data-position="parentE" :aria-label="mainText(root.item)" data-playlist-item>{{ mainText(root.item) }}</span>
-          <span class="b3-list-item__meta" data-playlist-item>{{ compactMeta(root.item) }}</span>
+          <span v-if="compactMeta(root.item)" class="b3-list-item__meta" data-playlist-item>{{ compactMeta(root.item) }}</span>
         </li>
-        <ul v-if="root.children.length" :style="compactChildListStyle(root)">
+        <ul v-if="root.children.length" class="b3-list b3-list--background bs-tree-children">
           <li
             v-for="child in root.children"
             :key="child.key"
@@ -35,22 +35,25 @@
             data-type="navigation-file"
             :data-path="compactPath(child)"
             data-playlist-item
-            :class="{ 'b3-list-item--focus': isSelectableBook(child.item) && isBookSelected(child.item.data) }"
+            :class="{ dragover: isGroupDropTarget(child), 'b3-list-item--focus': isSelectableBook(child.item) && isBookSelected(child.item.data) }"
             :style="compactItemStyle(child)"
             :draggable="child.kind === 'book'"
             @click="handleCompactClick(child, $event)"
             @contextmenu.prevent.stop="handleCompactContextMenu(child, $event)"
             @dragstart="child.kind === 'book' && isBook(child.item) ? handleBookDragStart(child.item.data, $event) : undefined"
             @dragend="handleBookDragEnd"
+            @dragover="handleGroupDragOver(child, $event)"
+            @dragleave="handleGroupDragLeave(child)"
+            @drop="handleGroupDrop(child, $event)"
           >
             <span v-if="isSelectableBook(child.item)" class="b3-list-item__toggle b3-list-item__toggle--hl" :style="compactToggleStyle(child)">
               <svg class="b3-list-item__arrow"><use :xlink:href="isBookSelected(child.item.data) ? '#iconCheck' : '#iconUncheck'" /></svg>
             </span>
-            <span v-else class="b3-list-item__toggle b3-list-item__toggle--hl fn__hidden" :style="compactToggleStyle(child)">
-              <svg class="b3-list-item__arrow"><use xlink:href="#iconRight" /></svg>
+            <span v-else class="b3-list-item__toggle b3-list-item__toggle--hl" :class="{ fn__hidden: child.kind !== 'group' }" :style="compactToggleStyle(child)">
+              <svg class="b3-list-item__arrow" :class="{ 'b3-list-item__arrow--open': child.kind === 'group' && isCompactExpanded(child.item.data.id) }"><use xlink:href="#iconRight" /></svg>
             </span>
             <span class="b3-list-item__text ariaLabel" data-position="parentE" :aria-label="mainText(child.item)" data-playlist-item>{{ mainText(child.item) }}</span>
-            <span class="b3-list-item__meta" data-playlist-item>{{ compactMeta(child.item) }}</span>
+            <span v-if="compactMeta(child.item)" class="b3-list-item__meta" data-playlist-item>{{ compactMeta(child.item) }}</span>
           </li>
         </ul>
       </ul>
@@ -205,7 +208,9 @@ const props = withDefaults(defineProps<{
   currentGroup?: string | null
   selecting?: boolean
   selectedUrls?: string[]
-}>(), { gridStyle: () => ({}), confirmDeleteId: null, groupCounts: () => ({}), currentGroup: null })
+  dense?: boolean
+  showGroupMeta?: boolean
+}>(), { gridStyle: () => ({}), confirmDeleteId: null, groupCounts: () => ({}), currentGroup: null, dense: false, showGroupMeta: true })
 
 const emit = defineEmits<{
   'select-group': [id: string]
@@ -237,25 +242,27 @@ const booksForGroup = (group: GroupConfig, books: Book[]) => books.filter(book =
 const groupedBook = (book: Book, groups: GroupItem[]) => groups.some(g => bookInGroup(book, g.data))
 
 const compactTree = computed<CompactNode[]>(() => {
-  const roots: CompactNode[] = []
   const groups = props.items.filter(isGroup)
   const books = props.items.filter(isBook).map(item => item.data)
-  for (const group of groups) {
-    roots.push({
-      key: itemKey(group),
-      item: group,
-      level: 0,
-      kind: 'group',
-      children: compactExpanded.value[group.data.id]
-        ? booksForGroup(group.data, books).map(book => ({
-            key: `child-${group.data.id}-${book.url}`,
-            item: { type: 'book', data: book },
-            level: 1,
-            kind: 'book',
-          }))
-        : [],
-    })
+  const childGroups = (parentId = '') => groups.filter(g => (g.data.parentId || '') === parentId)
+  const rows = (group: GroupItem, level: number): CompactRow[] => {
+    const self = { key: itemKey(group), item: group, level, kind: 'group' as const }
+    return compactExpanded.value[group.data.id]
+      ? [
+          self,
+          ...childGroups(group.data.id).flatMap(g => rows(g, level + 1)),
+          ...booksForGroup(group.data, books).map(book => ({ key: `child-${group.data.id}-${book.url}`, item: { type: 'book' as const, data: book }, level: level + 1, kind: 'book' as const })),
+        ]
+      : [self]
   }
+  const node = (group: GroupItem): CompactNode => ({
+    key: itemKey(group),
+    item: group,
+    level: 0,
+    kind: 'group',
+    children: compactExpanded.value[group.data.id] ? rows(group, 0).slice(1) : [],
+  })
+  const roots: CompactNode[] = childGroups().map(node)
   for (const book of books) {
     if (!groupedBook(book, groups)) {
       roots.push({
@@ -368,7 +375,11 @@ const handleClick = (item: Item, event: MouseEvent) => {
 }
 
 const handleCompactClick = (row: CompactRow, event: MouseEvent) => {
-  if (row.kind === 'group' && isGroup(row.item)) return toggleCompactGroup(row.item.data.id)
+  if (row.kind === 'group' && isGroup(row.item)) {
+    const opening = !isCompactExpanded(row.item.data.id)
+    if (opening && row.item.data.id.startsWith('/')) emit('select-group', row.item.data.id)
+    return toggleCompactGroup(row.item.data.id)
+  }
   handleClick(row.item, event)
 }
 
@@ -380,10 +391,9 @@ const handleContextMenu = (item: Item, event: MouseEvent) => {
 const handleCompactContextMenu = (row: CompactRow, event: MouseEvent) => handleContextMenu(row.item, event)
 
 const countText = (count: number) => `${count} 本`
-const compactIndent = (row: CompactRow) => row.level * 18
-const compactItemStyle = (row: CompactRow) => ({ '--file-toggle-width': `${compactIndent(row) + 18}px` })
+const compactIndent = (row: CompactRow) => row.level * (props.dense ? 12 : 18)
+const compactItemStyle = (row: CompactRow) => ({ '--file-toggle-width': `${compactIndent(row) + (props.dense ? 14 : 18)}px` })
 const compactToggleStyle = (row: CompactRow) => ({ paddingLeft: `${compactIndent(row)}px` })
-const compactChildListStyle = (row: CompactRow) => ({ '--QYL-indent-1': `${compactIndent(row) + 12}px` })
 const compactPath = (row: CompactRow) => isGroup(row.item) ? row.item.data.id : isBook(row.item) ? row.item.data.url : row.item.data.id
 const starText = (rating: number) => '★'.repeat(Math.max(0, Math.min(5, rating)))
 const watermarkClass = (status: BookStatus) => `bs-watermark--${status}`
@@ -396,7 +406,7 @@ const groupChips = (group: GroupConfig) => [
 ].slice(0, 3)
 const authorText = (item: Item) => isGroup(item) ? (item.data.type === 'smart' ? '智能分组' : '分组') : isBook(item) ? item.data.author || '未知作者' : item.data.preview?.author || '未知作者'
 const onCompactHover = (event: MouseEvent) => (event.target as HTMLElement).hasAttribute('data-playlist-item') && event.stopPropagation()
-const compactMeta = (item: Item) => isGroup(item) ? countText(groupCount(item.data)) : isBook(item) ? props.getProgress(item.data) : importStateText(item.data)
+const compactMeta = (item: Item) => isGroup(item) ? (props.showGroupMeta ? countText(groupCount(item.data)) : '') : isBook(item) ? props.getProgress(item.data) : importStateText(item.data)
 const sideTexts = (item: Item) => isGroup(item) ? [countText(groupCount(item.data))] : isBook(item) ? [] : [importStateText(item.data)]
 const groupCoverUrls = (item: Item) => isGroup(item) ? props.getGroupCoverUrls(item.data) : []
 const bookTags = (book: Book) => book.tags.slice(0, 4)
@@ -441,6 +451,10 @@ const tagStyle = (tag: string) => {
 <style scoped lang="scss">
 .bs-view{min-height:0;height:100%;padding:0;box-sizing:border-box}
 .bs-tree-view{padding-top:8px}
+.bs-tree-view--dense{padding-top:2px}
+.bs-tree-view--dense .b3-list{padding:0;margin:0}
+.bs-tree-view--dense .b3-list-item{padding-right:4px}
+.bs-tree-children{padding:0;margin:0}
 .bs-home-drop{display:none}
 .bs-list :deep(.b3-list-item){margin:0}
 .bs-grid{display:grid;gap:6px;overflow:auto;scrollbar-gutter:stable;align-content:start;padding:8px 0 8px 8px;box-sizing:border-box}

@@ -184,6 +184,7 @@ index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..71b510cf30145e3bce83ab736062c244
 -        }
 -        this.#view = new View({
 +    #prewarm(index = this.#index) {
++        return
 +        const targets = [-1, 1].map(dir => this.#adjacentIndex(dir, index)).filter(i => i != null)
 +        const keep = new Set([index, ...targets])
 +        for (const i of [...this.#prewarmed])
@@ -204,10 +205,10 @@ index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..71b510cf30145e3bce83ab736062c244
 +            }
 +    }
 +    #loadSection(index) {
-+        return this.#prewarmTasks.get(index) ?? Promise.resolve(this.sections[index].load())
++        return Promise.resolve(this.sections[index].load())
 +    }
 +    #unloadLater(index) {
-+        setTimeout(() => this.sections[index]?.unload?.(), 1500)
++        this.sections[index]?.unload?.()
 +    }
 +    #removeView(view, unload = false) {
 +        if (!view) return
@@ -273,6 +274,7 @@ index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..71b510cf30145e3bce83ab736062c244
 +        return rect ? rect[this.#vertical ? 'left' : 'top'] : 0
 +    }
 +    #ensurePrevView() {
++        return
 +        if (!this.scrolled || this.#prevView || this.#prevViewTask) return
 +        const index = this.#adjacentIndex(-1, this.#index)
 +        if (index == null) return
@@ -300,6 +302,7 @@ index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..71b510cf30145e3bce83ab736062c244
 +            .finally(() => this.#prevViewTask = null)
 +    }
 +    #ensureNextView() {
++        return
 +        if (!this.scrolled || this.#nextView || this.#nextViewTask) return
 +        const index = this.#adjacentIndex(1, this.#index)
 +        if (index == null) return
@@ -333,6 +336,7 @@ index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..71b510cf30145e3bce83ab736062c244
 +        return { start, end: start + this.#getViewSize(view) }
 +    }
 +    #syncScrolledWindow() {
++        return
 +        if (!this.scrolled) return
 +        const midpoint = this.start + this.size / 2
 +        const current = this.#getViewRange(this.#view)
@@ -376,6 +380,15 @@ index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..71b510cf30145e3bce83ab736062c244
          return this.#view.element.getBoundingClientRect()[this.sideProp]
      }
      get start() {
+@@ -817,7 +1026,7 @@ export class Paginator extends HTMLElement {
+             const dir = page <= 0 ? -1 : page >= pages - 1 ? 1 : null
+             if (dir) return this.#goTo({
+                 index: this.#adjacentIndex(dir),
+-                anchor: dir < 0 ? () => 1 : () => 0,
++                anchor: dir < 0 ? 1 : 0,
+             })
+         })
+     }
 @@ -851,8 +1053,11 @@ export class Paginator extends HTMLElement {
          const touch = e.changedTouches[0]
          this.#touchState = {
@@ -453,7 +466,7 @@ index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..71b510cf30145e3bce83ab736062c244
              return this.#scrollTo(offset, reason)
          }
          const offset = this.#getRectMapper()(rect).left
-@@ -968,7 +1196,7 @@ export class Paginator extends HTMLElement {
+@@ -968,14 +1196,14 @@ export class Paginator extends HTMLElement {
          }
          // if anchor is a fraction
          if (this.scrolled) {
@@ -462,9 +475,14 @@ index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..71b510cf30145e3bce83ab736062c244
              return
          }
          const { pages } = this
-@@ -978,13 +1206,19 @@ export class Paginator extends HTMLElement {
+         if (!pages) return
+-        const textPages = pages - 2
+-        const newPage = Math.round(anchor * (textPages - 1))
++        const textPages = Math.max(1, pages - 2)
++        const newPage = Math.max(0, Math.min(textPages - 1, Math.round(anchor * (textPages - 1))))
          await this.#scrollToPage(newPage + 1, reason)
      }
+@@ -982,9 +1210,15 @@ export class Paginator extends HTMLElement {
      #getVisibleRange() {
 -        if (this.scrolled) return getVisibleRange(this.#view.document,
 -            this.start + this.#margin, this.end - this.#margin, this.#getRectMapper())
@@ -529,20 +547,33 @@ index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..71b510cf30145e3bce83ab736062c244
          if (hasFocus) this.focusView()
      }
      #canGoToIndex(index) {
-@@ -1041,11 +1287,11 @@ export class Paginator extends HTMLElement {
+@@ -1041,17 +1287,21 @@ export class Paginator extends HTMLElement {
          else {
              const oldIndex = this.#index
              const onLoad = detail => {
 -                this.sections[oldIndex]?.unload?.()
-+                this.#unloadLater(oldIndex)
++                this.sections[oldIndex]?.unload?.()
                  this.setStyles(this.#styles)
                  this.dispatchEvent(new CustomEvent('load', { detail }))
              }
 -            await this.#display(Promise.resolve(this.sections[index].load())
-+            await this.#display(this.#loadSection(index)
-                 .then(src => ({ index, src, anchor, onLoad, select }))
-                 .catch(e => {
-                     console.warn(e)
+-                .then(src => ({ index, src, anchor, onLoad, select }))
+-                .catch(e => {
+-                    console.warn(e)
+-                    console.warn(new Error(`Failed to load section ${index}`))
+-                    return {}
+-                }))
++            let src
++            try {
++                src = await this.sections[index].load()
++            } catch (e) {
++                console.warn(e)
++                console.warn(new Error(`Failed to load section ${index}`))
++                return
++            }
++            await this.#display({ index, src, anchor, onLoad, select })
+         }
+     }
 @@ -1088,8 +1334,8 @@ export class Paginator extends HTMLElement {
      get atEnd() {
          return this.#adjacentIndex(1) == null && this.page >= this.pages - 2
@@ -554,6 +585,15 @@ index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..71b510cf30145e3bce83ab736062c244
              if (this.sections[index]?.linear !== 'no') return index
      }
      async #turnPage(dir, distance) {
+@@ -1100,7 +1346,7 @@ export class Paginator extends HTMLElement {
+         const shouldGo = await (prev ? this.#scrollPrev(distance) : this.#scrollNext(distance))
+         if (shouldGo) await this.#goTo({
+             index: this.#adjacentIndex(dir),
+-            anchor: prev ? () => 1 : () => 0,
++            anchor: prev ? 1 : 0,
+         })
+         if (shouldGo || !this.hasAttribute('animated')) await wait(100)
+         this.#locked = false
 @@ -1125,39 +1371,36 @@ export class Paginator extends HTMLElement {
          return this.goTo({ index })
      }

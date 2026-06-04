@@ -7,6 +7,7 @@ import { drawInk, renderInkCanvas as renderInk } from '@/core/pdf/ink'
 import { PDF_SHAPE_COLORS, PDF_SHAPE_OPTIONS, renderShapeCanvas as renderShape } from '@/core/pdf/shape'
 import { copyMark as copyMarkUtil, hideFloat, openBlock, showFloat } from '@/utils/copy'
 import { jump } from '@/utils/jump'
+import { hideMarkPreview, showMarkPreview } from '@/utils/markPreview'
 import { collectMarkTags, formatMarkTags, getMarkTags, parseMarkTags } from '@/components/MarkCard.vue'
 
 type MarkSort = 'time' | 'date' | 'chapter' | 'page' | 'custom'
@@ -64,8 +65,11 @@ const getType = (item: any): MarkType => item?.type === 'note' ? 'note' : item?.
 const rawColor = (item: any) => item?.color || item?.paths?.find((path: any) => path?.color)?.color || ''
 const colorBucket = (item: any) => COLOR_BUCKETS.find(bucket => bucket.aliases.includes(rawColor(item)))?.value || ''
 const toggleArray = (list: string[], value: string) => list.includes(value) ? list.splice(list.indexOf(value), 1) : list.push(value)
-export const useReaderMarks = (i18n?: any) => {
-  const { activeReader, activeView } = useReaderState()
+export const useReaderMarks = (i18n?: any, context?: any) => {
+  const globalReaderState = useReaderState()
+  const getContext = () => typeof context === 'function' ? context() : context
+  const activeReader = computed(() => getContext()?.activeReader || globalReaderState.activeReader.value)
+  const activeView = computed(() => getContext()?.activeView || globalReaderState.activeView.value)
   const keyword = ref('')
   const showOrganize = ref(false)
   const markReverse = ref(false)
@@ -237,7 +241,7 @@ export const useReaderMarks = (i18n?: any) => {
     const tags = editTagList.value
     setEditTags(tags.includes(tag) ? tags.filter(item => item !== tag) : [...tags, tag])
   }
-  const getUrl = () => (window as any).__currentBookUrl || ''
+  const getUrl = () => getContext()?.bookUrl || (window as any).__currentBookUrl || ''
 
   const saveEdit = async (item: any) => {
     try {
@@ -304,6 +308,16 @@ export const useReaderMarks = (i18n?: any) => {
 
   const goTo = (item: any) => jump(item, activeView.value, activeReader.value, marks.value)
   const onBlockEnter = (event: MouseEvent, id: string) => showFloat(id, event.target as HTMLElement)
+  const onMarkEnter = (event: MouseEvent, item: any) => {
+    if (editingId.value || dragState.value.from) return
+    showMarkPreview(item, event.currentTarget as HTMLElement, {
+      isPdf: isPdfMode.value,
+      reader: activeReader.value,
+      view: activeView.value,
+      pdfViewer: (activeView.value as any)?.viewer,
+    })
+  }
+  const onMarkLeave = () => hideMarkPreview()
 
   const renderInkCanvas = () => nextTick(() => renderInk(list.value, inkCache, drawInk))
   const renderShapeCanvas = () => nextTick(() => renderShape(list.value, activeView.value, shapeCache, preloadPage))
@@ -391,6 +405,8 @@ export const useReaderMarks = (i18n?: any) => {
     openBlock,
     onBlockEnter,
     hideFloat,
+    onMarkEnter,
+    onMarkLeave,
     canImport,
     importMark,
     deleteMark,

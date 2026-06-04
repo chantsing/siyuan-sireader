@@ -9,6 +9,7 @@ import type { ReaderSettings } from '@/composables/useSetting'
 import { PRESET_THEMES } from '@/composables/useSetting'
 import { createTooltip, hideTooltip, showTooltip } from '@/core/MarkManager'
 import { EPUBSearch } from './search'
+import { createTxtBook, isTxtSource } from '@/core/txt/book'
 import { isMobile } from '@/utils/mobile'
 import 'foliate-js/view.js'
 
@@ -66,6 +67,12 @@ const readText = (value: any): string => {
   if (value && typeof value === 'object') return readText(value.label ?? value.name ?? value.value ?? value.text ?? '')
   return ''
 }
+const sourceNameOf = (source: File | string | any) => source instanceof File
+  ? source.name
+  : typeof source === 'string'
+    ? source.split(/[?#]/)[0]
+    : ''
+const isKnownEbookSource = (source: File | string | any) => /\.(epub|mobi|azw3|azw|fb2|cbz)$/i.test(sourceNameOf(source))
 
 function createFoliateView(container: HTMLElement): FoliateView {
   const view = document.createElement('foliate-view') as FoliateView
@@ -114,7 +121,7 @@ function applyVisualFilter(visual: any = {}) {
     visual.invert && 'invert(1) hue-rotate(180deg)'
   ].filter(Boolean)
   getStyleTag('sireader-visual-filter').textContent = `
-    foliate-view::part(container),foliate-view::part(filter){background:var(--sr-epub-page-bg)!important}
+    foliate-view::part(container){background:transparent!important}
     foliate-view::part(filter){${filters.length ? `filter:${filters.join(' ')}` : ''}}
   `
 }
@@ -149,7 +156,7 @@ function applyCustomCSS(view: FoliateView, settings: ReaderSettings) {
     fontFace,
     `
     html{
-      background:${theme.bgImg ? 'transparent' : getViewBackground(theme)}!important;
+      background:transparent!important;
       color:${theme.color}!important;
       ${mobile ? '' : 'color-scheme:light dark'}
       width:100%!important;
@@ -284,8 +291,9 @@ export class FoliateReader {
     this.listenToSettingsChanges()
   }
 
-  async open(file: File | string | any) {
-    await this.view.open(file)
+  async open(file: File | string | any, format?: string) {
+    const source = (isTxtSource(file) || (format === 'txt' && !isKnownEbookSource(file))) ? await createTxtBook(file) : file
+    await this.view.open(source)
     const renderer = this.view.renderer as any
     if (renderer && !renderer.__sireaderMarginalsBound) {
       renderer.__sireaderMarginalsBound = true
@@ -502,6 +510,7 @@ export class FoliateReader {
     this.themeObserver?.disconnect()
     this.resizeObserver?.disconnect()
     this.eventListeners.clear()
+    this.view.book?.destroy?.()
     try { this.view.remove() } catch {}
   }
 }

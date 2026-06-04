@@ -1,6 +1,7 @@
 ﻿<template>
   <div class="plugin-app-main">
     <Stats :visible="showStats" @close="showStats=false" @open="handleOpenBook" />
+    <TTSMini />
   </div>
 </template>
 
@@ -9,7 +10,7 @@ import { computed, createApp, defineComponent, h, onMounted, onUnmounted, provid
 import { MotionPlugin } from '@vueuse/motion'
 import { showMessage } from 'siyuan'
 import { usePlugin, setOpenSettingHandler, registerCleanup } from '@/main'
-import { useSetting, settingsManager } from '@/composables/useSetting'
+import { useSetting, settingsManager, parseBookLink } from '@/composables/useSetting'
 import { useStats } from '@/composables/useStats'
 import { READER_ICON_ID } from '@/utils/icon'
 import { isMobile } from '@/utils/mobile'
@@ -21,6 +22,8 @@ import ReaderToc from '@/components/ReaderToc.vue'
 import ReaderMarks from '@/components/ReaderMarks.vue'
 import Settings from '@/components/Settings.vue'
 import Stats from '@/components/Stats.vue'
+import TTSMini from '@/components/TTSMini.vue'
+import { getTTSController } from '@/services/TTSPlayer'
 
 const plugin = usePlugin()
 const { settings, isLoaded } = useSetting(plugin)
@@ -117,8 +120,7 @@ const openSetting = (openLicense = false) => {
 }
 
 // ===== 阅读器核心 =====
-const FORMATS = ['.epub', '.pdf', '.mobi', '.azw3', '.azw', '.fb2', '.cbz', '.txt']
-
+const BOOK_RE = /\.(epub|pdf|mobi|azw3|azw|fb2|cbz|txt)(?:[?#].*)?$/i
 const fetchFile = async (url: string) => {
   try {
     const res = await fetch(url[0] === '/' || url.startsWith('http') ? url : `/${url}`)
@@ -180,13 +182,18 @@ plugin.addTab({
 })
 
 // 链接打开书籍
+const getLinkTarget = (target: EventTarget | null) => {
+  const link = (target as HTMLElement | null)?.closest?.('a[href], [data-href], [data-url], span[data-type="a"]') as HTMLElement | null
+  const url = link?.getAttribute('data-href') || link?.getAttribute('href') || link?.getAttribute('data-url') || ''
+  return { link, url }
+}
+
 const handleEbookLink = async (e: MouseEvent) => {
-  const link = (e.target as HTMLElement).closest('a[href], [data-href], [data-url], span[data-type="a"]') as HTMLElement
-  const url = link?.getAttribute('data-href') || link?.getAttribute('href') || link?.getAttribute('data-url')
+  const { link, url } = getLinkTarget(e.target)
   if (!url) return
   
   // 处理自定义协议 sireader://
-  const parsed = (await import('@/composables/useSetting')).parseBookLink(url)
+  const parsed = parseBookLink(url)
   if (parsed) {
     e.preventDefault(), e.stopPropagation()
     if (!parsed.bookUrl) return showMessage('无效的书籍链接', 3000, 'error')
@@ -200,7 +207,7 @@ const handleEbookLink = async (e: MouseEvent) => {
   }
   
   const cleanUrl = url.split('#')[0]
-  if (!FORMATS.some(ext => cleanUrl.toLowerCase().endsWith(ext) || cleanUrl.toLowerCase().split('?')[0].endsWith(ext))) return
+  if (!BOOK_RE.test(cleanUrl)) return
   
   // 处理文档内 assets 链接
   if (url.startsWith('assets/') || url.includes('/assets/')) {
@@ -220,6 +227,26 @@ const handleEbookLink = async (e: MouseEvent) => {
   const { openReaderTab } = await import('@/utils/bookOpen')
   const title = cleanUrl.split('/').pop()?.split('?')[0]?.replace(/\.[^.]+$/, '') || 'Reader'
   openReaderTab(plugin, title, { url: cleanUrl, blockId: link.closest('[data-node-id]')?.getAttribute('data-node-id') }, `${plugin.name}epub_reader`, settings.value)
+}
+
+const handleEbookLinkEnter = async (e: MouseEvent) => {
+  const { link, url } = getLinkTarget(e.target)
+  if (!link || !url) return
+  const parsed = parseBookLink(url)
+  if (!parsed?.bookUrl) return
+  e.stopPropagation()
+  const { showLinkedMarkPreview } = await import('@/utils/markPreview')
+  showLinkedMarkPreview(parsed, link)
+}
+
+const handleEbookLinkLeave = async (e: MouseEvent) => {
+  const { link, url } = getLinkTarget(e.target)
+  if (!link || !url || (e.relatedTarget instanceof Node && link.contains(e.relatedTarget))) return
+  const parsed = parseBookLink(url)
+  if (!parsed) return
+  e.stopPropagation()
+  const { hideMarkPreview } = await import('@/utils/markPreview')
+  hideMarkPreview()
 }
 
 setOpenSettingHandler(openSetting)
@@ -258,6 +285,21 @@ const statsInstance = useStats(plugin)
 statsInstance.init()
 provide('stats', statsInstance)
 provide('plugin', plugin)
+
+const ttsController = getTTSController()
+const ttsBar = document.createElement('div')
+ttsBar.className = 'toolbar__item b3-tooltips b3-tooltips__n'
+ttsBar.id = 'tts-btn'
+ttsBar.innerHTML = '<svg class="toolbar__icon"><use xlink:href="#lucide-volume-2"></use></svg>'
+ttsBar.setAttribute('aria-label', '朗读播放')
+ttsBar.style.cssText = 'cursor:pointer;display:none'
+ttsBar.addEventListener('click', () => window.dispatchEvent(new CustomEvent('tts:toggle-mini')))
+plugin.addStatusBar({ element: ttsBar, position: 'right' })
+watch([ttsController.isActive, ttsController.paused], ([active, paused]) => {
+  ttsBar.style.display = active ? '' : 'none'
+  ttsBar.classList.toggle('toolbar__item--active', !!active && !paused)
+  ttsBar.setAttribute('aria-label', active ? (paused ? '继续朗读' : '朗读中') : '朗读播放')
+}, { immediate: true })
 
 // 处理统计面板切换
 const handleStatsToggle = () => showStats.value = !showStats.value
@@ -301,10 +343,14 @@ const handleMobileReaderClose = () => {
 
 onMounted(async () => {
   window.addEventListener('click', handleEbookLink, true)
+  window.addEventListener('mouseover', handleEbookLinkEnter, true)
+  window.addEventListener('mouseout', handleEbookLinkLeave, true)
   window.addEventListener('stats:toggle', handleStatsToggle as any)
   window.addEventListener('sireader:open-online-reader', handleOpenOnlineReader as any)
   registerCleanup(() => {
     window.removeEventListener('click', handleEbookLink, true)
+    window.removeEventListener('mouseover', handleEbookLinkEnter, true)
+    window.removeEventListener('mouseout', handleEbookLinkLeave, true)
     window.removeEventListener('stats:toggle', handleStatsToggle as any)
     window.removeEventListener('sireader:open-online-reader', handleOpenOnlineReader as any)
   })

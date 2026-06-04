@@ -7,7 +7,7 @@
 让思源笔记变身专业阅读器，支持 EPUB/PDF/TXT/在线小说  
 提供智能标注、TTS 朗读、词典查询、AI 翻译、Anki 闪卡等功能
 
-[![Version](https://img.shields.io/badge/version-1.3.1-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-1.3.5-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,31 @@
 ---
 
 ## 📝 最新更新
+
+### v1.3.5 (2026.6.4)
+
+### 新增
+
+- 新增 TTS 后台播放小窗，支持播放时调整语音、语速、自动翻页与朗读高亮，并提供暂停、停止、上一段、下一段控制。
+- 新增 EPUB“开卷有益”开关，默认关闭，避免打开书籍时额外播放动画影响加载速度。
+- 新增章节一键复制功能，可在目录中快速复制单章内容，便于摘录与整理。
+- 新增书籍标注链接悬浮预览，可在文档中鼠标悬浮标注链接时查看原文上下文，范围包含标注所在句及相邻上文、下文句子，未打开书籍时也会按需加载预览内容。
+
+### 优化
+
+- PDF 阅读器不再显示“开卷有益”动画，打开 PDF 时直接进入阅读内容。
+- 优化 TXT 阅读链路，新增轻量 TXT 解析器，直接进入阅读器，不再导入时转换为 EPUB，提升打开速度并减少格式转换带来的兼容问题。
+- 优化标注弹窗操作按钮提示位置，改为向左展开，避免在弹窗顶部被裁切。
+
+### 修复
+
+- 修复切换标签、清除搜索或刷新界面后 EPUB 键盘左右键可能无法翻页的问题，统一键盘、鼠标滚轮与鼠标侧键的翻页入口 [#33](https://github.com/mm-o/siyuan-sireader/issues/33)。
+- 修复阅读底部搜索工具栏点击正文会自动消失、弹出搜索栏仍受工具栏透明度影响的问题 [#32](https://github.com/mm-o/siyuan-sireader/issues/32)。
+- 修复部分 EPUB 内置图片或背景图被阅读容器与页面背景遮挡、显示不完整的问题 [#28](https://github.com/mm-o/siyuan-sireader/issues/28)。
+- 修复部分大体积扫描版 PDF 打开后页面空白的问题，提升国标、规范类 PDF 的渲染兼容性。
+- 修复添加网盘书籍时会被意外下载的问题，保持网盘书籍按预期在线添加与阅读。
+- 修复书源管理弹窗中“添加自定义书源”按钮错位的问题。
+- 修复绑定文档后自动同步批注时书名会回退为“读书”的问题，改为优先使用书架中最新修改后的书名。
 
 ### v1.3.1 (2026.6.2)
 

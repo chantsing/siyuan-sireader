@@ -11,7 +11,8 @@ export const setActiveReader = (view: any, reader?: any, settings?: any) => {
   ;(window as any).__sireader_settings = settings || null
 }
 
-export const clearActiveReader = () => {
+export const clearActiveReader = (view?: any) => {
+  if (view && activeView.value !== view) return
   activeView.value = null
   activeReader.value = null
   ;(window as any).__sireader_active_view = null

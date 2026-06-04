@@ -93,6 +93,13 @@ export const setupEpubKeyboard = (
     const isInteractive = (target: EventTarget | null) =>
       target instanceof HTMLElement &&
       !!target.closest('input,textarea,button,select,a,[contenteditable="true"],.mark-menu,.sr-popup-panel,.reader-toolbar-group,.reader-toc-popup,[data-footnote-tooltip]')
+    const turn = (dir: 'prev' | 'next', e: Event) => {
+      if (isInteractive(e.target) || !prev || !next || reader?.getView?.()?.renderer?.getAttribute?.('flow') === 'scrolled') return false
+      e.preventDefault()
+      e.stopPropagation()
+      dir === 'prev' ? prev() : next()
+      return true
+    }
     onSelectionChange && doc.addEventListener('selectionchange', triggerSelection)
     onSelectionChange && doc.addEventListener('mouseup', triggerSelection)
     onSelectionChange && doc.addEventListener('touchend', triggerSelection)
@@ -105,19 +112,20 @@ export const setupEpubKeyboard = (
     })
     doc.addEventListener('wheel', e => {
       if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return
-      if (isInteractive(e.target) || !prev || !next || reader?.getView?.()?.renderer?.getAttribute?.('flow') === 'scrolled') return
       const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
       if (Math.abs(delta) < 12) return
-      e.preventDefault()
-      e.stopPropagation()
-      delta > 0 ? next() : prev()
+      turn(delta > 0 ? 'next' : 'prev', e)
     }, { passive: false })
     doc.addEventListener('mouseup', e => {
-      if (isInteractive(e.target) || !prev || !next || reader?.getView?.()?.renderer?.getAttribute?.('flow') === 'scrolled') return
-      if (e.button === 3) next()
-      else if (e.button === 4) prev()
+      if (e.button === 3) turn('next', e)
+      else if (e.button === 4) turn('prev', e)
     })
-    doc.addEventListener('keydown', handler)
+    doc.addEventListener('keydown', e => {
+      if (e.ctrlKey || e.altKey || e.metaKey) return handler(e)
+      if (['ArrowLeft', 'ArrowUp'].includes(e.key) || (e.key === ' ' && e.shiftKey)) return turn('prev', e) || handler(e)
+      if (['ArrowRight', 'ArrowDown', ' '].includes(e.key)) return turn('next', e) || handler(e)
+      return handler(e)
+    })
   }
 
   reader.on('load', ({ doc }: any) => setup(doc))

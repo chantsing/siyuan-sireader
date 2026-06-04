@@ -52,10 +52,10 @@
         >
           <template v-if="!state.isEditing" #actions>
             <div class="sr-icon-actions">
-              <button @click.stop="handleCopyMark" class="b3-tooltips b3-tooltips__nw" :aria-label="i18n?.copy || '复制'"><svg><use xlink:href="#iconCopy" /></svg></button>
-              <button v-if="state.currentMark?.blockId" @click.stop="handleOpenBlock" @mouseenter="handleShowFloat" @mouseleave="hideFloat" class="b3-tooltips b3-tooltips__nw" aria-label="打开块"><svg><use xlink:href="#iconRef" /></svg></button>
-              <button v-else @click.stop="handleImport" class="b3-tooltips b3-tooltips__nw" :aria-label="i18n?.import || '导入'"><svg><use xlink:href="#iconDownload" /></svg></button>
-              <button @click.stop="handleDelete" class="b3-tooltips b3-tooltips__nw" :aria-label="i18n?.delete || '删除'"><svg><use xlink:href="#iconTrashcan" /></svg></button>
+              <button @click.stop="handleCopyMark" class="b3-tooltips b3-tooltips__w" :aria-label="i18n?.copy || '复制'"><svg><use xlink:href="#iconCopy" /></svg></button>
+              <button v-if="state.currentMark?.blockId" @click.stop="handleOpenBlock" @mouseenter="handleShowFloat" @mouseleave="hideFloat" class="b3-tooltips b3-tooltips__w" aria-label="打开块"><svg><use xlink:href="#iconRef" /></svg></button>
+              <button v-else @click.stop="handleImport" class="b3-tooltips b3-tooltips__w" :aria-label="i18n?.import || '导入'"><svg><use xlink:href="#iconDownload" /></svg></button>
+              <button @click.stop="handleDelete" class="b3-tooltips b3-tooltips__w" :aria-label="i18n?.delete || '删除'"><svg><use xlink:href="#iconTrashcan" /></svg></button>
             </div>
           </template>
         </MarkCard>
@@ -88,6 +88,8 @@ interface SelectionAnchor {
 type MarkStyle = 'highlight' | 'underline' | 'outline' | 'dotted' | 'dashed' | 'double' | 'squiggly'
 
 const props = defineProps<{
+  root?: HTMLElement | null
+  bookUrl?: string
   manager: MarkManager | null
   i18n?: Record<string, string>
   pdfViewer?: any
@@ -133,6 +135,8 @@ const state = reactive({
   shapeType: 'rect' as 'rect' | 'circle' | 'triangle' | 'textbox',
   shapeFilled: false,
 })
+const queryRoot = () => props.root || document
+const getBookUrl = () => props.bookUrl || (window as any).__currentBookUrl || ''
 
 const isPdf = computed(() => (state.selection?.location.format || state.currentMark?.format) === 'pdf')
 const isShapeMark = computed(() => state.currentMark?.type === 'shape')
@@ -161,7 +165,7 @@ const setMarkStyle = (style: string) => {
 const formatDateTime = (ts?: number) => ts ? new Date(ts).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''
 
 const placePopup = (x: number, y: number, w: number, h: number, preferAbove = false, clampBelow = false) => {
-  const rect = document.querySelector('.reader-container')?.getBoundingClientRect()
+  const rect = props.root?.getBoundingClientRect() || document.querySelector('.reader-container')?.getBoundingClientRect()
   const box = rect
     ? { left: rect.left + 16, right: rect.right - 16, top: rect.top + 16, bottom: rect.bottom - 16 }
     : { left: 16, right: innerWidth - 16, top: 16, bottom: innerHeight - 16 }
@@ -252,7 +256,6 @@ const openSelectionEditor = async () => {
   setPanelState('card', markData(mark, { x: state.x, y: state.y, panelY: state.panelY, selection: null, isEditing: true }))
 }
 const closeAll = () => {
-  props.ttsController?.cancelLoop()
   resetSendState()
   closeMenus()
   closePanel(true)
@@ -271,7 +274,7 @@ const openMarkPanel = (mark: Mark, x: number, y: number, edit = false) => {
 
 const showShapeCard = (shape: any, pdfViewer: any) => {
   if (quickMarkCooldown) return
-  const layer = document.querySelector(`.pdf-shape-layer[data-page="${shape.page}"]`) as HTMLElement | null
+  const layer = queryRoot().querySelector(`.pdf-shape-layer[data-page="${shape.page}"]`) as HTMLElement | null
   const page = pdfViewer?.getPages?.().get(shape.page)
   if (!layer || !page) return
   const viewport = page.getViewport({ scale: pdfViewer.getScale(), rotation: pdfViewer.getRotation() })
@@ -283,7 +286,7 @@ const showShapeCard = (shape: any, pdfViewer: any) => {
 }
 const showAnnotationCard = (mark: any) => {
   if (quickMarkCooldown) return
-  const el = document.querySelector(`[data-id="${mark.id}"]`) as HTMLElement | null
+  const el = queryRoot().querySelector(`[data-id="${mark.id}"]`) as HTMLElement | null
   if (!el) return
   openMarkAtRect(mark, el.getBoundingClientRect(), document)
 }
@@ -306,7 +309,6 @@ const checkSelection = (doc?: Document, e?: Event) => {
     const selection = targetDoc.defaultView?.getSelection()
     if (!selection || selection.isCollapsed || !selection.toString().trim()) {
       if (state.selection) {
-        props.ttsController?.cancelLoop()
         state.selection = null
         selectionDoc = null
       }
@@ -345,6 +347,7 @@ const setupAnnotationListeners = () => {
 }
 const handleGlobalEdit = (e: Event) => {
   const detail = (e as CustomEvent).detail
+  if (detail?.manager && detail.manager !== props.manager) return
   detail?.item && openMarkPanel(detail.item, detail.position?.x, detail.position?.y, detail.edit === true)
 }
 
@@ -397,7 +400,7 @@ const handleSendToDoc = async (docId: string) => {
   if (props.can && !props.can('quick-send')) return props.showUpgrade?.('快捷发送')
   if (!docId) return
   const mark = state.selection ? await addSelectionMark(state.selection.text, props.quickMarkColor || 'blue', props.quickMarkStyle || 'highlight') : null
-  if (mark) await (await import('@/utils/copy')).sendMarkToDoc(mark, docId, { bookUrl: (window as any).__currentBookUrl || '', isPdf: isPdf.value, showMsg: (msg: string, type?: string) => showMessage(msg, type === 'error' ? 2000 : 1500, type as any), i18n: props.i18n, marks: props.manager })
+  if (mark) await (await import('@/utils/copy')).sendMarkToDoc(mark, docId, { bookUrl: getBookUrl(), isPdf: isPdf.value, showMsg: (msg: string, type?: string) => showMessage(msg, type === 'error' ? 2000 : 1500, type as any), i18n: props.i18n, marks: props.manager })
   closeAll()
 }
 const handleCopyText = () => {
@@ -430,7 +433,7 @@ const handleOpenBlock = () => state.currentMark?.blockId && openBlock(state.curr
 const handleShowFloat = (e: MouseEvent) => state.currentMark?.blockId && showFloat(state.currentMark.blockId, e.target as HTMLElement)
 const goToMark = () => {
   if (!state.currentMark) return
-  jump(state.currentMark, (window as any).__activeView, (window as any).__activeReader, props.manager)
+  jump(state.currentMark, props.currentView, props.reader, props.manager)
   closeAll()
 }
 const handleSave = async () => {
@@ -442,7 +445,7 @@ const handleSave = async () => {
       else if (state.currentMark.type === 'ink') Object.assign(updates, { text: state.text.trim() || state.currentMark.text })
       else Object.assign(updates, { text: state.text.trim(), style: state.style })
       const { saveMarkEdit } = await import('@/utils/copy')
-      await saveMarkEdit(state.currentMark, updates, { marks: props.manager, bookUrl: (window as any).__currentBookUrl || '', isPdf: isPdf.value, reader: (window as any).__activeReader, pdfViewer: (window as any).__activeView?.viewer, shapeCache: new Map() })
+      await saveMarkEdit(state.currentMark, updates, { marks: props.manager, bookUrl: getBookUrl(), isPdf: isPdf.value, reader: props.reader, pdfViewer: props.pdfViewer, shapeCache: new Map() })
       Object.assign(state.currentMark, updates)
       showMessage(props.i18n?.saved || '已保存', 1000)
       state.isEditing = false
@@ -473,7 +476,7 @@ const handleCancel = () => state.currentMark ? setPanelState('card', { ...markDa
 const handleImport = async () => {
   if (!state.currentMark) return
   const { importMark } = await import('@/utils/copy')
-  await importMark(state.currentMark, { bookUrl: (window as any).__currentBookUrl || '', isPdf: isPdf.value, showMsg: (msg: string, type?: string) => showMessage(msg, type === 'error' ? 2000 : 1500, type as any), i18n: props.i18n, marks: props.manager })
+  await importMark(state.currentMark, { bookUrl: getBookUrl(), isPdf: isPdf.value, showMsg: (msg: string, type?: string) => showMessage(msg, type === 'error' ? 2000 : 1500, type as any), i18n: props.i18n, marks: props.manager })
 }
 </script>
 

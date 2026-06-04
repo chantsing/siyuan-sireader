@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI translation, Anki flashcards
 
-[![Version](https://img.shields.io/badge/version-1.3.1-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-1.3.5-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,31 @@ Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI tr
 ---
 
 ## 📝 Latest Updates
+
+### v1.3.5 (2026.6.4)
+
+### Added
+
+- Added a TTS background playback mini panel with voice, speed, auto page-turning, read-aloud highlight, pause, stop, previous paragraph, and next paragraph controls.
+- Added an EPUB "Start Reading" animation switch, disabled by default to avoid extra loading work when opening books.
+- Added one-click chapter copy from the table of contents for easier excerpting and organization.
+- Added hover previews for book annotation links in documents, showing the original context including the annotated sentence and adjacent previous and next sentences, with on-demand preview loading when the book is not open.
+
+### Improved
+
+- PDF reader no longer shows the "Start Reading" animation and opens directly into content.
+- Improved the TXT reading path with a new lightweight TXT parser, opening directly in the reader without converting to EPUB, improving open speed and reducing compatibility issues from format conversion.
+- Improved annotation popup action tooltip placement so it expands leftward and avoids top-edge clipping.
+
+### Fixed
+
+- Fixed EPUB left/right keyboard page turning possibly failing after switching tabs, clearing search, or refreshing the view, unifying the page-turning entry for keyboard, mouse wheel, and mouse side buttons [#33](https://github.com/mm-o/siyuan-sireader/issues/33).
+- Fixed the bottom search toolbar disappearing when clicking the reading body, and fixed the popped-up search bar still being affected by toolbar opacity [#32](https://github.com/mm-o/siyuan-sireader/issues/32).
+- Fixed some EPUB built-in images or background images being covered by reader container and page backgrounds, causing incomplete display [#28](https://github.com/mm-o/siyuan-sireader/issues/28).
+- Fixed some large scanned PDFs opening to blank pages, improving rendering compatibility for national-standard and specification-style PDFs.
+- Fixed cloud-drive books being downloaded unexpectedly when added, keeping cloud-drive books added and read online as expected.
+- Fixed the "Add custom book source" button being misaligned.
+- Fixed bound-document auto-sync reverting book names to "Reading", now preferring the latest modified book name from the bookshelf.
 
 ### v1.3.1 (2026.6.2)
 

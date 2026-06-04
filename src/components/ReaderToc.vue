@@ -13,17 +13,17 @@
     </div>
 
     <template v-else>
-      <div v-show="!showThumbnail" class="fn__flex-1 fn__flex-column sy__file bs-view bs-tree">
+      <div v-show="!showThumbnail" class="fn__flex-1 fn__flex-column file-tree sy__file bs-view bs-tree-view">
         <div
           ref="tocRef"
-          class="fn__flex-1 bs-tree__scroll"
+          class="fn__flex-1 fn__hidescrollbar"
           @click="onTocClick"
           @contextmenu.prevent.stop
           @mouseover="e => (e.target as HTMLElement).hasAttribute('data-toc-item') && e.stopPropagation()"
         ></div>
       </div>
 
-      <div v-show="showThumbnail" class="fn__flex-1 fn__flex-column sy__file bs-view bs-tree">
+      <div v-show="showThumbnail" class="fn__flex-1 fn__flex-column sy__file bs-view">
         <div ref="thumbContainer" class="fn__flex-1 bs-view bs-grid">
           <div v-if="!isPdfMode" class="ft__secondary" style="grid-column:1/-1;padding:8px 12px">仅 PDF 支持缩略图</div>
           <div v-else v-for="i in pageCount" :key="i" class="bs-grid-item">
@@ -59,17 +59,20 @@ import { Menu, showMessage } from 'siyuan'
 import DeckHub from './deck/DeckHub.vue'
 import DockShell from './ui/DockShell.vue'
 import { useReaderState } from '@/core/epub/state'
+import { getTocChapterText } from '@/core/epub/chapterText'
 import { exportBookLink } from '@/utils/copy'
 import { bookshelfManager } from '@/core/bookshelf'
 import { jump } from '@/utils/jump'
 import type { TOCItem } from '@/core/epub/types'
 
-const props = withDefaults(defineProps<{ mode?: 'toc' | 'deck'; i18n?: any }>(), {
+const props = withDefaults(defineProps<{ mode?: 'toc' | 'deck'; i18n?: any; context?: any }>(), {
   mode: 'toc',
   i18n: () => ({}),
 })
 
-const { activeView, activeReader } = useReaderState()
+const globalReaderState = useReaderState()
+const activeView = computed(() => props.context?.activeView || globalReaderState.activeView.value)
+const activeReader = computed(() => props.context?.activeReader || globalReaderState.activeReader.value)
 
 const keyword = ref('')
 const tocRef = ref<HTMLElement>()
@@ -88,7 +91,7 @@ const searchPlaceholder = computed(() => props.mode === 'deck' ? '搜索 / 卡�
 const tocLabel = (item: TOCItem) => item.label || (item as any).title || ''
 const tocKey = (item: TOCItem, parentKey = 'root') => item.href || `${parentKey}/${tocLabel(item)}`
 const goToLocation = async (location: string | number) => activeView.value?.goTo(location)
-const getUrl = () => (window as any).__currentBookUrl
+const getUrl = () => props.context?.bookUrl || (window as any).__currentBookUrl
 const showMsg = (msg: string, type = 'info') => showMessage(msg, type === 'error' ? 3000 : 1500, type as any)
 const esc = (value: string) => {
   const div = document.createElement('div')
@@ -186,8 +189,8 @@ const renderTocItem = (item: TOCItem, level: number, parentKey: string, bookmark
     ? `<span class="b3-list-item__action b3-tooltips b3-tooltips__nw" data-act="bookmark" aria-label="${hasBookmark ? '移除书签' : '添加书签'}"><svg><use xlink:href="#iconBookmark"></use></svg></span>`
     : ''
   const hideActionClass = hasBookmark ? '' : ' b3-list-item--hide-action'
-  const row = `<li class="b3-list-item${hideActionClass}${isCurrent ? ' b3-list-item--focus' : ''}" data-key="${esc(key)}" data-href="${item.href ? encodeURIComponent(item.href) : ''}" data-label="${encodeURIComponent(tocLabel(item))}" data-has-child="${hasChild}" data-type="navigation-root" data-toc-item>
-    <span style="padding-left:${level * 8}px" class="b3-list-item__toggle b3-list-item__toggle--hl${hasChild ? '' : ' fn__hidden'}">
+  const row = `<li class="b3-list-item${hideActionClass}${isCurrent ? ' b3-list-item--focus' : ''}" style="--file-toggle-width:${level * 18 + 18}px" data-key="${esc(key)}" data-href="${item.href ? encodeURIComponent(item.href) : ''}" data-label="${encodeURIComponent(tocLabel(item))}" data-has-child="${hasChild}" data-type="${level ? 'navigation-file' : 'navigation-root'}" data-toc-item>
+    <span style="padding-left:${level * 18}px" class="b3-list-item__toggle b3-list-item__toggle--hl${hasChild ? '' : ' fn__hidden'}">
       <svg class="b3-list-item__arrow${isOpen ? ' b3-list-item__arrow--open' : ''}"><use xlink:href="#iconRight"></use></svg>
     </span>
     <span class="b3-list-item__text ariaLabel" data-toc-item>${esc(tocLabel(item) || '未命名章节')}</span>
@@ -198,7 +201,7 @@ const renderTocItem = (item: TOCItem, level: number, parentKey: string, bookmark
   const children = hasChild && isOpen
     ? item.subitems!.map(child => renderTocItem(child, level + 1, key, bookmarks)).join('')
     : ''
-  return `${row}${children}`
+  return `${row}${children ? `<ul class="b3-list b3-list--background bs-tree-children">${children}</ul>` : ''}`
 }
 
 const renderToc = () => {
@@ -267,7 +270,7 @@ const sendTocItem = async (href: string, label: string, clipboard = false) => {
         bookUrl,
         bookInfo: bookUrl ? await bookshelfManager.getBook(bookUrl) : null,
         reader: activeReader.value,
-        settings: clipboard ? { ...((window as any).__sireader_settings || {}), noteInsertTarget: 'clipboard' } : undefined,
+        settings: clipboard ? { ...(props.context?.settings || (window as any).__sireader_settings || {}), noteInsertTarget: 'clipboard' } : undefined,
         showMsg,
       },
     )
@@ -281,12 +284,24 @@ const copyTocText = async (label: string) => {
   showMsg('已复制文本')
 }
 
+const copyTocChapterContent = async (href: string, label: string) => {
+  try {
+    if (isPdfMode.value) return showMsg('PDF 暂不支持复制目录章节全文', 'error')
+    const text = await getTocChapterText(activeView.value?.book, href, label)
+    await navigator.clipboard.writeText(text)
+    showMsg('已复制章节全文')
+  } catch (error: any) {
+    showMsg(error.message || '复制章节全文失败', 'error')
+  }
+}
+
 const openTocMenu = (event: MouseEvent, href: string, label: string) => {
   const m = new Menu()
   ;[
     { icon: 'iconUpload', label: '导出', click: () => void sendTocItem(href, label) },
     { icon: 'iconCopy', label: '复制链接', click: () => void sendTocItem(href, label, true) },
     { icon: 'iconCopy', label: '复制文本', click: () => void copyTocText(label) },
+    { icon: 'iconCopy', label: '复制章节全文', click: () => void copyTocChapterContent(href, label) },
   ].forEach(item => m.addItem(item))
   m.open({ x: event.clientX, y: event.clientY })
 }
@@ -403,14 +418,10 @@ onUnmounted(() => {
 <style scoped lang="scss">
 :deep(.sr-toc-body){display:flex;flex-direction:column;min-height:0;overflow:hidden}
 .bs-view{min-height:0;height:100%;padding:0;box-sizing:border-box}
-.bs-tree{overflow:hidden;--bs-tree-border:color-mix(in srgb,var(--b3-theme-on-surface-light) 30%,transparent);--b3-list-hover:color-mix(in srgb,var(--b3-theme-primary) 12%,transparent)}
-.bs-tree__scroll{display:flex;flex-direction:column;gap:6px;min-height:0;overflow:auto;scrollbar-gutter:stable;padding:8px 0 8px 8px;box-sizing:border-box}
-.bs-tree :deep(ul){margin:0;padding:0;list-style:none}
-.bs-tree :deep(.b3-list),.bs-grid .b3-list{margin:0;background:transparent}
-.bs-tree :deep(ul.b3-list.b3-list--background),.bs-grid .b3-list{border:1px solid var(--bs-tree-border);border-radius:var(--b3-border-radius)}
-.bs-tree :deep(.b3-list-item[data-type="navigation-root"]){margin:0;border-radius:var(--b3-border-radius)}
-.bs-tree :deep(.b3-list-item__toggle){display:flex;align-items:center;justify-content:center;flex:0 0 auto;width:18px;min-width:18px}
-.bs-tree :deep(.b3-list-item__arrow){transition:transform .18s ease}
+.bs-tree-view{padding-top:8px}
+.bs-tree-view :deep(.b3-list){padding:0;margin:0}
+.bs-tree-view :deep(.bs-tree-children){padding:0;margin:0}
 .bs-grid{display:grid;gap:6px;overflow:auto;scrollbar-gutter:stable;align-content:start;padding:8px 0 8px 8px;box-sizing:border-box;grid-template-columns:repeat(auto-fill,minmax(92px,1fr))}
+.bs-grid .b3-list{margin:0}
 .bs-grid-item{position:relative;min-width:0;cursor:pointer}
 </style>

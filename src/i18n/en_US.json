@@ -334,6 +334,8 @@
   "toolbarOpacityDesc": "Adjust the opacity of the bottom toolbar when not hovered (0%=opaque, 100%=fully transparent)",
   "openDocAssets": "Use Plugin PDF Reader",
   "openDocAssetsDesc": "When enabled, document links and local PDFs in the bookshelf will open in the plugin reader first; when disabled, SiYuan's native PDF tab will be used instead",
+  "epubOpeningSplash": "EPUB Opening Splash",
+  "epubOpeningSplashDesc": "Show the opening animation when an EPUB is first opened. Turning it off improves open speed",
   "interfaceLayout": "Open & Interface",
   "readingTheme": "Reading Theme",
   "dictionaryTools": "Dictionary Tools",

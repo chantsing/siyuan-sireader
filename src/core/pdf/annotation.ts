@@ -263,7 +263,7 @@ const PDF_DRAG_KEY = 'pdfDragAnnotation'
 type DragState = { type: 'mark' | 'shape' | 'ink'; id: string; item: any; page: number; x: number; y: number; moved: boolean }
 
 // 处理 PDF 文本选择，显示标注菜单
-export const handlePdfSelection = (viewer: any, mgr: any, show: (d: any, anchor: { x: number; y: number }) => void) => {
+export const handlePdfSelection = (viewer: any, mgr: any, show: (d: any, anchor: { x: number; y: number; panelY?: number }) => void) => {
   const sel = window.getSelection()
   if (!sel?.toString().trim()) return
 
@@ -303,7 +303,7 @@ export const initPdfAnnotationEvents = (
   container: HTMLElement,
   viewer: any,
   mgr: any,
-  showSelectionMenu: (d: any, anchor: { x: number; y: number }) => void
+  showSelectionMenu: (d: any, anchor: { x: number; y: number; panelY?: number }) => void
 ) => {
   let dragState: DragState | null = null
   let pendingDx = 0
@@ -368,7 +368,7 @@ export const initPdfAnnotationEvents = (
   }
   const openEditor = (item: any, x: number, y: number) => {
     if (!item) return false
-    window.dispatchEvent(new CustomEvent('sireader:edit-mark', { detail: { item, position: { x, y }, edit: false } }))
+    window.dispatchEvent(new CustomEvent('sireader:edit-mark', { detail: { item, manager: mgr, position: { x, y }, edit: false } }))
     return true
   }
   const tryOpenTargetEditor = (e: MouseEvent) => openEditor(findTarget(getPageInfo(e), e.target)?.item, getEditorPos(e).x, getEditorPos(e).y)

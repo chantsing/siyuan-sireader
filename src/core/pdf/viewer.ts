@@ -98,7 +98,7 @@ export class PDFViewer {
       useSystemFonts: false,
       disableFontFace: false,
       isEvalSupported: false,
-      maxImageSize: 16777216
+      maxImageSize: -1
     }).promise) as any
     this.pages.set(1, markRaw(await this.pdf.getPage(1)))
     await this.fitWidth()
