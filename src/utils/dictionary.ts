@@ -487,8 +487,6 @@ import{Dialog,showMessage}from'siyuan'
 let dialog:Dialog|null=null
 let state:{word:string;dictId:string;data?:DictCardData}={word:'',dictId:''}
 let selectionInfo:{cfi?:string;section?:number;page?:number;rects?:any[];text:string}|null=null
-let lastSelectedDeckId='default'
-
 export async function openDict(word:string,_x?:number,_y?:number,selection?:{cfi?:string;section?:number;page?:number;rects?:any[];text:string}){
   state={word,dictId:'',data:undefined}
   selectionInfo=selection||null
@@ -498,52 +496,10 @@ export async function openDict(word:string,_x?:number,_y?:number,selection?:{cfi
   const allDicts=[...offlineDicts.map(d=>({id:`offline:${d.id}`,name:d.name,icon:'#iconDatabase'})),...onlineDicts.filter(d=>d.enabled)]
   const makeIcon=(icon:string)=>icon.startsWith('#')?`<svg style="width:14px;height:14px"><use xlink:href="${icon}"/></svg>`:`<img src="${icon}" style="width:14px;height:14px">`
   
-  let deckSelector=''
-  if(selectionInfo){
-    const{getPack}=await import('@/components/deck')
-    const decks=await getPack()
-    deckSelector=`<select id="dict-deck-select" class="b3-select" style="padding:4px 8px;font-size:12px;margin-left:8px">${decks.map(d=>`<option value="${d.id}" ${d.id===lastSelectedDeckId?'selected':''}>${d.name}</option>`).join('')}</select><button class="b3-button b3-button--outline" id="dict-deck-btn" style="padding:4px 12px;font-size:12px;margin-left:4px"><svg style="width:14px;height:14px"><use xlink:href="#iconAdd"/></svg> 加入卡包</button>`
-  }
-  
   const tabs=allDicts.map(d=>`<button class="b3-button b3-button--outline" data-id="${d.id}" style="padding:4px 8px;font-size:12px">${makeIcon(d.icon)} ${d.name}</button>`).join('')
-  dialog=new Dialog({title:'📖 词典',content:`<style>${DICT_CARD_CSS}</style><div class="b3-dialog__content" style="display:flex;flex-direction:column;gap:8px;height:100%"><div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">${tabs}${deckSelector}</div><div class="dict-body fn__flex-1" style="overflow-y:auto;padding:8px"></div></div>`,width:'540px',height:'600px'})
+  dialog=new Dialog({title:'📖 词典',content:`<style>${DICT_CARD_CSS}</style><div class="b3-dialog__content" style="display:flex;flex-direction:column;gap:8px;height:100%"><div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">${tabs}</div><div class="dict-body fn__flex-1" style="overflow-y:auto;padding:8px"></div></div>`,width:'540px',height:'600px'})
   
   dialog.element.querySelectorAll('[data-id]').forEach(btn=>btn.addEventListener('click',()=>switchDict((btn as HTMLElement).dataset.id!)))
-  
-  if(selectionInfo){
-    dialog.element.querySelector('#dict-deck-btn')?.addEventListener('click',async()=>{
-      const license=await(await import('@/core/license')).LicenseManager.getLicense()
-      if(!(await import('@/core/license')).LicenseManager.can('dict-deck',license))return(await import('siyuan')).showMessage('需要体验会员',2000,'info'),(window as any)._openLicense?.()
-      if(!state.data)return
-      const deckSelect=dialog?.element.querySelector('#dict-deck-select')as HTMLSelectElement
-      const deckId=deckSelect?.value||'default'
-      lastSelectedDeckId=deckId
-      
-      const{addCard}=await import('@/components/deck')
-      const phoneticText=state.data.phonetic?` /${state.data.phonetic}/`:state.data.phonetics?.map(p=>p.text).join(' ')||''
-      const success=await addCard(deckId,
-        `${state.word}${phoneticText}`,
-        renderDictCard(state.data),
-        {
-          tags:[state.dictId],
-          source:'dict',
-          position:{cfi:selectionInfo.cfi,section:selectionInfo.section,page:selectionInfo.page,rects:selectionInfo.rects},
-          bookUrl:(window as any).__currentBookUrl||'',
-          bookTitle:(window as any).__currentBookTitle||'',
-          modelCss:DICT_CARD_CSS
-        }
-      )
-      if(success){
-        const btn=dialog?.element.querySelector('#dict-deck-btn')as HTMLButtonElement
-        if(btn){
-          btn.innerHTML='<svg style="width:14px;height:14px"><use xlink:href="#iconCheck"/></svg> 已加入'
-          btn.disabled=true
-          btn.style.opacity='0.6'
-        }
-        showMessage(`已加入「${deckSelect?.selectedOptions[0]?.text||'默认卡组'}」`,1500,'info')
-      }else showMessage('加入失败',2000,'error')
-    })
-  }
   
   switchDict(allDicts[0]?.id||'youdao')
 }

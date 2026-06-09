@@ -21,6 +21,10 @@ export const createPrivateSearchAccess = () => ({
   isSourceVisible: source => !source?.private,
   handleManagePanelClick: () => {},
 })
+export const callWereadAgentDirect = async () => { throw new Error('微信读书私密模块未安装') }
+export const createWereadOnlineBookInfo = () => { throw new Error('微信读书私密模块未安装') }
+export const getWereadReadUrl = bookId => bookId ? 'https://weread.qq.com/web/reader/' + encodeURIComponent(bookId) : ''
+export const testWereadAgentKey = async () => { throw new Error('微信读书私密模块未安装') }
 `
 
 export default defineConfig(({

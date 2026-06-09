@@ -34,11 +34,6 @@ export default class PluginSample extends Plugin {
     usePlugin(this)
     init(this)
     this.addHotkeys()
-
-    const idle = (fn: () => void) => (window as any).requestIdleCallback ? (window as any).requestIdleCallback(fn, { timeout: 10000 }) : setTimeout(fn, 10000)
-    idle(() => import('@/components/deck/siyuan-card')
-      .then(({ enableAutoSync }) => enableAutoSync())
-      .catch(error => console.error('[SiReader] Deck autosync init failed:', error)))
   }
 
   private addHotkeys() {

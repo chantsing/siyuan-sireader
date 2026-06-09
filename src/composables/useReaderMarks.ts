@@ -7,7 +7,7 @@ import { drawInk, renderInkCanvas as renderInk } from '@/core/pdf/ink'
 import { PDF_SHAPE_COLORS, PDF_SHAPE_OPTIONS, renderShapeCanvas as renderShape } from '@/core/pdf/shape'
 import { copyMark as copyMarkUtil, hideFloat, openBlock, showFloat } from '@/utils/copy'
 import { jump } from '@/utils/jump'
-import { hideMarkPreview, showMarkPreview } from '@/utils/markPreview'
+import { hideMarkPreview } from '@/utils/markPreview'
 import { collectMarkTags, formatMarkTags, getMarkTags, parseMarkTags } from '@/components/MarkCard.vue'
 
 type MarkSort = 'time' | 'date' | 'chapter' | 'page' | 'custom'
@@ -267,7 +267,10 @@ export const useReaderMarks = (i18n?: any, context?: any) => {
     }
   }
 
-  const copyMark = (item: any) => copyMarkUtil(item, { bookUrl: getUrl(), isPdf: isPdfMode.value, reader: activeReader.value, pdfViewer: (activeView.value as any)?.viewer, settings: activeView.value?.settings, shapeCache, showMsg })
+  const getCopySettings = () => activeView.value?.isOnlineContext
+    ? { ...(activeView.value?.settings || {}), noteInsertTarget: 'clipboard' }
+    : activeView.value?.settings
+  const copyMark = (item: any) => copyMarkUtil(item, { bookUrl: getUrl(), isPdf: isPdfMode.value, reader: activeReader.value, pdfViewer: (activeView.value as any)?.viewer, settings: getCopySettings(), shapeCache, showMsg })
   const importMark = async (item: any) => {
     const { importMark: doImport } = await import('@/utils/copy')
     const url = getUrl()
@@ -308,14 +311,8 @@ export const useReaderMarks = (i18n?: any, context?: any) => {
 
   const goTo = (item: any) => jump(item, activeView.value, activeReader.value, marks.value)
   const onBlockEnter = (event: MouseEvent, id: string) => showFloat(id, event.target as HTMLElement)
-  const onMarkEnter = (event: MouseEvent, item: any) => {
-    if (editingId.value || dragState.value.from) return
-    showMarkPreview(item, event.currentTarget as HTMLElement, {
-      isPdf: isPdfMode.value,
-      reader: activeReader.value,
-      view: activeView.value,
-      pdfViewer: (activeView.value as any)?.viewer,
-    })
+  const onMarkEnter = (_event: MouseEvent, _item: any) => {
+    return
   }
   const onMarkLeave = () => hideMarkPreview()
 

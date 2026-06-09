@@ -30,11 +30,6 @@ export function init(p: Plugin) {
   document.body.appendChild(div)
   app = createApp(App)
   app.mount(div)
-
-  import('@/components/deck').then(({ initDatabase, initPack }) => {
-    initDatabase()
-    initPack(p)
-  }).catch(e => console.error('[SiReader] Init failed:', e))
 }
 
 export function destroy() {

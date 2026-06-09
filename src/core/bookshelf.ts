@@ -2,7 +2,7 @@
  * 书架管理 - 极简架构
  */
 import { getDatabase } from './database';
-import { loadBookFile, normalizeBookTitle, readDirEntries, removeManagedFile, saveBookFile, saveCoverFile, saveOptionalCover, toFileUrl } from './bookStore';
+import { loadBookFile, normalizeBookTitle, normalizeSiyuanCloudUrl, readDirEntries, removeManagedFile, saveBookFile, saveCoverFile, saveOptionalCover, SIYUAN_CLOUD_BASE, toFileUrl } from './bookStore';
 
 export type BookFormat = 'pdf' | 'epub' | 'mobi' | 'azw3' | 'txt';
 export type BookStatus = 'unread' | 'reading' | 'finished';
@@ -70,13 +70,12 @@ const fmt = {
 };
 export const buildBookMetadata = (meta: any = {}) => ({ publisher: meta.publisher, publishDate: meta.published || meta.publishDate, language: meta.language, isbn: meta.identifier || meta.isbn, description: meta.intro || meta.description, series: meta.series, sourceName: meta.sourceName, fileSize: meta.fileSize })
 export interface SiyuanCloudNode { name: string; path: string; parent: string; is_dir: boolean; size?: number }
-const CLOUD = '/plugin/private/siyuan-cloud'
 const BOOK_RE = /\.(epub|pdf|mobi|azw3|azw|fb2|cbz|txt)$/i
 export const normalizeCloudPath = (path = '/') => `/${path}`.replace(/\/+/g, '/').replace(/\/$/, '') || '/'
-export const siyuanCloudUrl = (path: string) => `${location.origin}${CLOUD}/p${decodeURI(encodeURI(path)).replace(/#/g, '%23').replace(/\?/g, '%3F')}`
+export const siyuanCloudUrl = (path: string) => `${SIYUAN_CLOUD_BASE}/p${decodeURI(encodeURI(normalizeCloudPath(path))).replace(/#/g, '%23').replace(/\?/g, '%3F')}`
 export const isCloudBookPath = (path: string) => BOOK_RE.test(path)
 const cloudApi = async (api: string, body: any) => {
-  const r = await fetch(`${CLOUD}/api/fs/${api}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json())
+  const r = await fetch(`${SIYUAN_CLOUD_BASE}/api/fs/${api}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json())
   return r?.code === 0 || r?.code === 200 ? r.data || {} : {}
 }
 const mapCloudNodes = (items: any[], parent = '/') => items.map(x => {
@@ -411,19 +410,20 @@ class BookshelfManager {
   
   async addUrlBook(url: string, coverUrl?: string, bookInfo?: { title?: string; author?: string }, parsedMeta?: any) {
     await this.init()
+    const bookUrl = normalizeSiyuanCloudUrl(url)
     
     // HTTP书源快速通道：跳过文件下载和元数据提取
     if (bookInfo?.title) {
-      const format = this.getFormat(url)
-      const cover = await this.downloadCover(coverUrl, url)
-      await this.addBook({ url, title: normalizeBookTitle(bookInfo.title) || bookInfo.title, author: bookInfo.author || '未知作者', cover, format, path: url, size: 0, metadata: {} })
-      return url
+      const format = this.getFormat(bookUrl)
+      const cover = await this.downloadCover(coverUrl, bookUrl)
+      await this.addBook({ url: bookUrl, title: normalizeBookTitle(bookInfo.title) || bookInfo.title, author: bookInfo.author || '未知作者', cover, format, path: bookUrl, size: 0, metadata: {} })
+      return bookUrl
     }
     
     // 常规路径：预览阶段可能已临时读取文件，但入库时保留链接本身，不托管远端正文。
     const { filePath, name, format, meta } = parsedMeta
-      ? { filePath: url, name: parsedMeta.title || this.fileBaseName(url), format: this.getFormat(url), meta: parsedMeta }
-      : await this.parseUrlBook(url)
+      ? { filePath: bookUrl, name: parsedMeta.title || this.fileBaseName(bookUrl), format: this.getFormat(bookUrl), meta: parsedMeta }
+      : await this.parseUrlBook(bookUrl)
     let cover = await this.downloadCover(coverUrl, filePath)
     if (!cover) cover = await saveOptionalCover(meta.coverBlob, filePath)
     return this.savePreparedBook({ url: filePath, path: filePath, format, size: parsedMeta?.fileSize || 0, meta, name, cover })
@@ -444,7 +444,8 @@ class BookshelfManager {
     const isHttp = /^https?:\/\//.test(url), isAbsolute = /^[a-zA-Z]:[\\\/]/.test(url) || url.startsWith('/')
     if (!isHttp && !isAbsolute && !url.includes('/') && !url.includes('\\')) throw new Error('请输入有效的链接或文件路径')
     
-    const filePath = isAbsolute && !url.startsWith('file://') ? toFileUrl(url) : url
+    url = normalizeSiyuanCloudUrl(url)
+    const filePath = url.startsWith(SIYUAN_CLOUD_BASE) ? url : isAbsolute && !url.startsWith('file://') ? toFileUrl(url) : url
     const name = this.fileBaseName(url), format = this.getFormat(url)
     const meta = format === 'txt'
       ? await this.extractMeta(new File([], `${name}.txt`, { type: 'text/plain' }), format, name)

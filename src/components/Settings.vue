@@ -471,8 +471,6 @@ onMounted(() => {
 </template>
 
 <style scoped lang="scss">
-@use './deck/deck.scss';
-
 .bs-view{min-height:0;height:100%;padding:0;box-sizing:border-box}
 .bs-tree{overflow:hidden;--bs-tree-border:color-mix(in srgb,var(--b3-theme-on-surface-light) 30%,transparent);--b3-list-hover:color-mix(in srgb,var(--b3-theme-primary) 12%,transparent)}
 .bs-tree__scroll{display:flex;flex-direction:column;gap:6px;min-height:0;overflow:auto;scrollbar-gutter:stable;padding:8px 0 8px 8px;box-sizing:border-box}

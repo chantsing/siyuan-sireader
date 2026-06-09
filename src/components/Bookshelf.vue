@@ -6,7 +6,7 @@
           <div v-if="!keyword" class="sr-empty-hint">暂无书籍，点击右上角添加内容</div>
         </div>
 
-        <component :is="View" v-else :key="`${viewMode}-${currentGroup || 'root'}`" v-bind="viewProps" @select-group="setGroup" @book-click="readBook" @book-menu="showContextMenu" @group-menu="showGroupMenu" @clear-delete="clearConfirmDelete" @remove-book="removeBook" @move-book-group="moveBookToGroup" @move-book-home="moveBookToHome" @toggle-select-book="toggleSelectBook" />
+        <component :is="View" v-else :key="`${viewMode}-${currentGroup || 'root'}`" v-bind="viewProps" @select-group="setGroup" @book-click="readBook" @book-menu="showContextMenu" @group-menu="showGroupMenu" @move-book-group="moveBookToGroup" @move-book-home="moveBookToHome" @toggle-select-book="toggleSelectBook" />
       </Transition>
 
       <div v-if="selecting" class="sr-selection-bar" @click.stop>
@@ -14,9 +14,15 @@
           <template v-for="item in row.items" :key="item.key">
             <span v-if="item.text" class="sr-selection-count">{{ item.text }}</span>
             <input v-else-if="item.input" v-model="batchTags" class="b3-text-field sr-selection-input" :placeholder="item.input" />
-            <button v-else class="sr-chip" type="button" :class="{ 'is-active': item.active, 'is-danger': item.danger }" :disabled="item.disabled" @click="item.click">{{ item.label }}</button>
+            <button v-else class="sr-chip" type="button" :class="{ 'is-active': item.active, 'is-danger': item.danger, 'is-primary': item.primary }" :disabled="item.disabled" @click="item.click">{{ item.label }}</button>
           </template>
         </div>
+      </div>
+
+      <div v-if="confirmDelete" class="sr-selection-bar sr-confirm-bar" :class="{ 'sr-confirm-bar--above-selection': selecting }" @click.stop>
+        <span class="sr-selection-count">{{ confirmDeleteText }}</span>
+        <button class="b3-button b3-button--outline" type="button" @click="clearConfirmDelete">取消</button>
+        <button class="b3-button b3-button--remove" type="button" @click="confirmDeleteAction">删除</button>
       </div>
 
     <template #overlay>
@@ -68,7 +74,6 @@
                     <button class="b3-button sr-grow sr-group-label" :class="g.type === 'smart' ? 'b3-button--cancel' : 'b3-button--outline'" type="button" @click="setGroup(g.id, true)"><strong>{{ g.name }}</strong><span class="sr-entry-meta">{{ groupCounts[g.id] || 0 }} 本</span></button>
                     <span class="sr-inline" @click.stop><span v-for="a in groupRowActions(g)" :key="a.label" class="block__icon block__icon--show sr-icon-btn sr-icon-btn--sm" :class="a.warn && 'block__icon--warning'" :aria-label="a.label" @click="a.click"><svg><use :xlink:href="a.icon" /></svg></span></span>
                   </div>
-                  <div v-if="confirmDelete?.type === 'group' && confirmDelete.id === g.id" class="sr-confirm"><span>确认删除该分组？</span><button class="b3-button b3-button--outline" type="button" @click="clearConfirmDelete">取消</button><button class="b3-button b3-button--remove" type="button" @click="deleteGroup(g)">删除</button></div>
                 </template>
               </div>
               <div v-if="editingGroup" class="sr-editor">
@@ -172,7 +177,7 @@ const sortType = ref<SortType>('time'), viewMode = ref<BookshelfViewMode>('grid'
 const batchMode = ref<'rate' | 'status' | 'tags' | 'groups' | null>(null)
 const selecting = ref(false), selectedBookUrls = ref<string[]>([]), groupCounts = ref<Record<string, number>>({})
 const editingBook = ref<string | null>(null), editingGroup = ref<GroupConfig | null>(null)
-const confirmDelete = ref<{ type: 'group' | 'book'; id: string; item: any } | null>(null)
+const confirmDelete = ref<{ type: 'group' | 'book'; id: string; item: any } | { type: 'batch'; id: string; count: number; urls: string[] } | null>(null)
 const modalMode = ref<BookshelfModalMode>(null), panelBook = ref<Book | null>(null), importMode = ref<ImportMode>('file')
 const importBulkTags = ref(''), importBulkStatus = ref<BookStatus | ''>(''), importBulkRating = ref(0), importBulkGroups = ref<string[]>([])
 const batchTags = ref(''), batchGroups = ref<string[]>([])
@@ -200,7 +205,7 @@ const toolbarStartActions = computed(() => currentGroup.value ? [{ id: 'back', i
 const toolbarActions = computed(() => [{ id: 'view', icon: viewModeIcon.value, label: '切换视图' }, { id: 'select', icon: selecting.value ? '#iconCheck' : '#iconUncheck', label: selecting.value ? '退出选择' : '选择书籍' }, { id: 'organize', icon: '#lucide-sliders-horizontal', label: '整理书架' }, { id: 'manage', icon: '#lucide-book-plus', label: '添加内容' }])
 const modalTitle = computed(() => modalMode.value ? MODAL_TITLES[modalMode.value] : '书架')
 const panelCover = computed(() => panelBook.value ? getCoverUrl(panelBook.value) : '')
-const viewProps = computed(() => ({ items: displayItems.value, mode: viewMode.value, gridStyle: gridStyle.value, confirmDeleteId: confirmDelete.value?.type === 'book' ? confirmDelete.value.id : null, groupCounts: groupCounts.value, statusMap: STATUS_MAP, getCoverUrl, getGroupCoverUrls, getProgress, currentGroup: currentGroup.value, selecting: selecting.value, selectedUrls: selectedBookUrls.value }))
+const viewProps = computed(() => ({ items: displayItems.value, mode: viewMode.value, gridStyle: gridStyle.value, groupCounts: groupCounts.value, statusMap: STATUS_MAP, getCoverUrl, getGroupCoverUrls, getProgress, currentGroup: currentGroup.value, selecting: selecting.value, selectedUrls: selectedBookUrls.value }))
 
 const getSortKey = (item: any, type: string) => item.type === 'group'
   ? (type === 'name' ? item.data.name : type === 'time' ? (item.data as any).created || 0 : item.data.order)
@@ -242,8 +247,8 @@ const batchRows = computed(() => {
   const modeButton = (value: typeof batchMode.value, label: string) => ({ key: `m-${value}`, label, active: batchMode.value === value, disabled: !selectedCount.value, click: () => batchMode.value = batchMode.value === value ? null : value })
   const chip = (key: string, label: string, click: () => void, extra = {}) => ({ key, label, click, ...extra })
   const rows: any[] = [
-    { key: 'main', items: [{ key: 'count', text: `选中 ${selectedCount.value}` }, chip('clear', '清空', clearSelection, { disabled: !selectedCount.value }), chip('all', '全选', selectDisplayedBooks), chip('invert', '反选', invertDisplayedBooks), chip('exit', '退出', exitSelection)] },
-    { key: 'ops', items: [modeButton('rate', '评分'), modeButton('status', '状态'), modeButton('tags', '标签'), modeButton('groups', '分组'), chip('remove', '删除', () => batchOp('remove'), { danger: true, disabled: !selectedCount.value })] },
+    { key: 'main', items: [{ key: 'count', text: `选中 ${selectedCount.value}` }, chip('clear', '清空', clearSelection, { disabled: !selectedCount.value }), chip('all', '全选', selectDisplayedBooks), chip('invert', '反选', invertDisplayedBooks), chip('exit', '退出', exitSelection, { primary: true })] },
+    { key: 'ops', items: [modeButton('rate', '评分'), modeButton('status', '状态'), modeButton('tags', '标签'), modeButton('groups', '分组'), chip('remove', '删除', confirmBatchRemove, { danger: true, disabled: !selectedCount.value })] },
   ]
   if (batchMode.value === 'rate') rows.push({ key: 'rate', items: batchRatingOptions.value.map(([v, label]) => chip(`r-${v}`, label, () => batchOp('rate', v))) })
   if (batchMode.value === 'status') rows.push({ key: 'status', items: STATUS_OPTIONS.map(([v, label]) => chip(`s-${v}`, label, () => batchOp('status', v))) })
@@ -259,6 +264,7 @@ const setGroup = (id: string | null, close = false) => {
 }
 const clearConfirmDelete = () => { confirmDelete.value = null }
 const confirmGroupDelete = (group: GroupConfig) => { modalMode.value = 'manage'; confirmDelete.value = { type: 'group', id: group.id, item: group } }
+const confirmBatchRemove = () => { if (selectedCount.value) confirmDelete.value = { type: 'batch', id: 'batch', count: selectedCount.value, urls: [...selectedBookUrls.value] } }
 const groupRowActions = (g: GroupConfig) => [{ label: '打开分组', icon: '#iconFolder', click: () => setGroup(g.id, true) }, { label: '编辑分组', icon: '#iconEdit', click: () => startEditGroup(g) }, { label: '删除分组', icon: '#lucide-trash-2', warn: true, click: () => confirmGroupDelete(g) }]
 const handleToolbarAction = (id: string) => {
   if (id === 'back') setGroup(null)
@@ -275,7 +281,7 @@ const toggleFilterItem = (key: string, value: any) => key === 'rating' ? filterM
 const isFilterActive = (key: string, value: any) => key === 'rating' ? filterMap[key].value === value : filterMap[key].value.includes(value)
 const closePopups = () => { modalMode.value = null; editingGroup.value = null; batchMode.value = null; clearConfirmDelete(); resetImport() }
 const resetOrganize = () => { filterStatus.value = []; filterRating.value = 0; filterFormats.value = []; filterTags.value = []; sortType.value = 'time'; sortReverse.value = false; viewMode.value = 'grid'; batchMode.value = null }
-const setSelectedUrls = (urls: string[]) => { selectedBookUrls.value = Array.from(new Set(urls)) }
+const setSelectedUrls = (urls: string[]) => { selectedBookUrls.value = Array.from(new Set(urls)); if (confirmDelete.value?.type === 'batch') clearConfirmDelete() }
 const clearSelection = () => { setSelectedUrls([]); batchMode.value = null }
 const exitSelection = () => { selecting.value = false; clearSelection() }
 const toggleSelecting = () => { selecting.value ? exitSelection() : (selecting.value = true) }
@@ -320,6 +326,7 @@ const toggleBatchGroup = (gid: string) => toggleArrayItem(batchGroups.value, gid
 const buildImportPatch = (): BookBulkPatch => ({ ...(importTagList.value.length ? { tags: { add: importTagList.value } } : {}), ...(importBulkStatus.value ? { status: importBulkStatus.value } : {}), ...(importBulkRating.value ? { rating: importBulkRating.value } : {}), ...(importBulkGroups.value.length ? { groups: { add: importBulkGroups.value } } : {}) })
 const buildBatchListPatch = (kind: 'tags' | 'groups', values?: string[]): BookBulkPatch => ({ [kind]: { [kind === 'tags' ? batchTagAction.value : batchGroupAction.value]: values ?? (kind === 'tags' ? batchTagList.value : batchGroups.value) } })
 const batchScopeText = () => `已选 ${selectedCount.value} 本`
+const confirmDeleteText = computed(() => confirmDelete.value?.type === 'batch' ? `确认移出 ${confirmDelete.value.count} 本？` : confirmDelete.value?.type === 'group' ? '确认删除该分组？' : '确认移出书架？')
 
 const createGroupDraft = (type: GroupType): GroupConfig => ({ id: `group_${Date.now()}`, name: '', icon: type === 'smart' ? '⚡' : '📁', order: groups.value.length, type, rules: createDefaultGroupRules() })
 const startEditGroup = (g?: GroupConfig, type: GroupType = 'folder') => {
@@ -382,6 +389,21 @@ const removeBook = async (book: Book) => {
   await refresh()
   showResult(res.success, res.failed, '已移出书架', '删除失败')
 }
+const removeBatchBooks = async () => {
+  if (confirmDelete.value?.type !== 'batch') return
+  const res = await bookshelfManager.removeBooks(confirmDelete.value.urls)
+  clearConfirmDelete()
+  batchMode.value = null
+  await refresh()
+  showResult(res.success, res.failed, `已移出 ${res.success} 本`)
+}
+const confirmDeleteAction = async () => {
+  const target = confirmDelete.value
+  if (!target) return
+  if (target.type === 'book') return removeBook(target.item)
+  if (target.type === 'group') return deleteGroup(target.item)
+  return removeBatchBooks()
+}
 const parseImportUrls = async () => { try { await parseDraftUrls() } catch (e) { showMessage(e instanceof Error ? e.message : '解析失败', 2000, 'error') } }
 const listCloud = async (path = '/') => {
   cloudLoading.value = true; cloudError.value = ''
@@ -430,10 +452,7 @@ const batchOp = async (op: 'rate' | 'status' | 'remove' | 'tags' | 'groups', val
   const urls = selectedBookUrls.value
   if (!urls.length) return
   const done = async (res: any, action: string) => { batchMode.value = null; await refresh(); allTags.value = await bookshelfManager.getAllTags(); showResult(res.success, res.failed, `${action} ${res.success} 本`) }
-  if (op === 'remove') {
-    if (!confirm(`确定移出 ${batchScopeText()}？`)) return
-    return done(await bookshelfManager.removeBooks(urls), '已移出')
-  }
+  if (op === 'remove') return confirmBatchRemove()
   if (op === 'rate') return done(await bookshelfManager.batchUpdateRating(urls, Number(value || 0)), value ? '已评分' : '已清除')
   if (op === 'status') return done(await bookshelfManager.batchUpdateStatus(urls, value as BookStatus), '已更新')
   if (op === 'tags') {
@@ -508,13 +527,13 @@ watch(viewMode, v => settingsLoaded && saveUiSetting('bookshelf_viewMode', v))
 .sr-entry-meta{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sr-form-item{display:flex;flex-direction:column;gap:4px;padding:0 0 12px;border-bottom:1px solid var(--b3-border-color);font-size:12px}.sr-form-item:last-child{border-bottom:none}
 .sr-chips{display:flex;flex-wrap:wrap;gap:calc(var(--sr-gap) / 2)}
-.sr-chip{display:inline-flex;align-items:center;justify-content:center;padding:3px 8px;border:1px solid var(--b3-border-color);border-radius:999px;background:var(--b3-theme-background);color:var(--b3-theme-on-surface);font-size:11px;font-weight:600;line-height:1.2;white-space:nowrap}button.sr-chip{cursor:pointer}button.sr-chip:hover{background:var(--b3-list-hover)}.sr-chip.is-active{border-color:var(--b3-theme-primary);background:var(--b3-theme-primary-lightest);color:var(--b3-theme-primary)}.sr-chip.is-danger{background:var(--b3-theme-error);border-color:var(--b3-theme-error);color:#fff}
+.sr-chip{display:inline-flex;align-items:center;justify-content:center;padding:3px 8px;border:1px solid var(--b3-border-color);border-radius:999px;background:var(--b3-theme-background);color:var(--b3-theme-on-surface);font-size:11px;font-weight:600;line-height:1.2;white-space:nowrap}button.sr-chip{cursor:pointer}button.sr-chip:hover{background:var(--b3-list-hover)}.sr-chip.is-active{border-color:var(--b3-theme-primary);background:var(--b3-theme-primary-lightest);color:var(--b3-theme-primary)}.sr-chip.is-primary{border-color:var(--b3-theme-primary);background:var(--b3-theme-primary);color:#fff}.sr-chip.is-danger{background:var(--b3-theme-error);border-color:var(--b3-theme-error);color:#fff}
 .sr-select{min-height:32px;font-size:inherit;border-radius:8px}
 .sr-row{display:flex;gap:var(--sr-gap);flex-wrap:wrap;align-items:center}
 .sr-actions-end{justify-content:flex-end}.sr-grow{flex:1;min-width:0}.sr-inline{display:flex;align-items:center;gap:4px;flex:0 0 auto;flex-wrap:nowrap}.sr-group-item{display:flex;align-items:center;gap:8px;margin-top:8px}
 .sr-group-label{display:flex;align-items:center;justify-content:flex-start;gap:4px;min-width:0;min-height:32px;padding:0 12px;font-size:12px}
 .sr-group-label strong,.sr-group-label .sr-entry-meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sr-section-line{padding-top:12px;border-top:1px solid var(--b3-border-color)}.sr-confirm{display:flex;align-items:center;gap:var(--sr-gap);margin:6px 0 8px;padding:var(--sr-gap);border:1px solid var(--b3-border-color);border-radius:var(--b3-border-radius-b);background:var(--b3-theme-background)}.sr-confirm span{flex:1;min-width:0}
+.sr-section-line{padding-top:12px;border-top:1px solid var(--b3-border-color)}.sr-confirm-bar{z-index:30;flex-direction:row;align-items:center;border-color:color-mix(in srgb,var(--b3-theme-error) 24%,var(--b3-border-color));background:color-mix(in srgb,var(--b3-theme-surface) 94%,var(--b3-theme-error));box-shadow:0 8px 24px #0002}.sr-confirm-bar--above-selection{bottom:76px}
 .sr-editor{display:flex;flex-direction:column;margin-top:12px;padding:12px;background:var(--b3-theme-background);border:1px solid var(--b3-border-color);border-radius:10px}
 .sr-editor-head{padding:0 0 12px;border-bottom:1px solid var(--b3-border-color);font-size:13px;font-weight:600}
 .sr-editor .sr-form-item{padding:0;border-bottom:none}.sr-editor .sr-form-item + .sr-form-item{margin-top:10px}.sr-editor-actions{margin-top:12px;padding-top:0}

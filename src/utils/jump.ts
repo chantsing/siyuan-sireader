@@ -146,7 +146,8 @@ export const gotoEPUB=(cfi:string,id:string|undefined,reader:any,markManager:any
 // 统一跳转入口 - 自动判断类型并跳转闪烁
 export const jump=(item:any,activeView:any,activeReader:any,marks:any)=>{
   const ctx=getJumpContext(activeView,activeReader,marks)
-  if(ctx.isPdf&&item.page)gotoPDF(item.page,item.id,ctx.pdfViewer,ctx.markManager,ctx.shapeManager)
+  if(ctx.view?.isOnlineContext&&item.cfi)ctx.view.goTo(item.cfi)
+  else if(ctx.isPdf&&item.page)gotoPDF(item.page,item.id,ctx.pdfViewer,ctx.markManager,ctx.shapeManager)
   else if(item.cfi)gotoEPUB(item.cfi,item.id,ctx.reader,ctx.markManager)
   else if(typeof item==='number'&&ctx.isPdf)gotoPDF(item,undefined,ctx.pdfViewer,ctx.markManager,ctx.shapeManager)
 }

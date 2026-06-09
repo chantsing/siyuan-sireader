@@ -272,6 +272,8 @@ export class FoliateReader {
   private eventListeners = new Map<string, Set<Function>>()
   private themeObserver?: MutationObserver
   private resizeObserver?: ResizeObserver
+  private resizeTimer: any = null
+  private lastResizeWidth = 0
   private syncThemeObserver = (auto: boolean) => auto
     ? this.themeObserver ||= watchTheme(() => this.applySettings())
     : (this.themeObserver?.disconnect(), this.themeObserver = undefined)
@@ -286,7 +288,7 @@ export class FoliateReader {
     this.view = createFoliateView(options.container)
     this.searchManager = new EPUBSearch(this.view)
     this.setupEventListeners()
-    this.resizeObserver = new ResizeObserver(() => requestAnimationFrame(() => this.applySettings()))
+    this.resizeObserver = new ResizeObserver(() => this.scheduleResize())
     this.resizeObserver.observe(this.container)
     this.listenToSettingsChanges()
   }
@@ -310,6 +312,19 @@ export class FoliateReader {
     configureView(this.view, this.settings)
     applyCustomCSS(this.view, this.settings)
     refreshRenderer(this.view)
+  }
+
+  private scheduleResize() {
+    const width = Math.round(this.container.clientWidth)
+    if (!width || Math.abs(width - this.lastResizeWidth) < 4) return
+    this.lastResizeWidth = width
+    this.resize(180)
+  }
+
+  resize = (delay = 60) => {
+    if (!this.container.isConnected) return
+    clearTimeout(this.resizeTimer)
+    this.resizeTimer = setTimeout(() => this.applySettings(), delay)
   }
 
   private handleLoad(detail: any) { refreshMarginals(this.view); this.bindContentImages(detail?.doc, detail?.index); this.emit('load', detail) }
@@ -509,6 +524,7 @@ export class FoliateReader {
     await this.marks?.destroy()
     this.themeObserver?.disconnect()
     this.resizeObserver?.disconnect()
+    clearTimeout(this.resizeTimer)
     this.eventListeners.clear()
     this.view.book?.destroy?.()
     try { this.view.remove() } catch {}

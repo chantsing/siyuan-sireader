@@ -90,6 +90,7 @@ const openingSplashKey = props.bookInfo?.url || props.url || props.file?.name ||
 const seenOpeningSplash = openingSplashKey ? sessionStorage.getItem(`sireader-opening:${openingSplashKey}`) === '1' : false
 const isPdfBook = computed(() => props.file?.name.endsWith('.pdf') || props.url?.split('?')[0].endsWith('.pdf') || props.bookInfo?.format === 'pdf')
 const showOpeningSplash = computed(() => {
+  if (props.bookInfo?.temporary) return false
   if (isPdfBook.value || !currentSettings.value?.epubOpeningSplash) return false
   return !seenOpeningSplash && (!!props.file || !(props.bookInfo?.progress > 0 || props.bookInfo?.pos?.cfi || props.bookInfo?.pos?.page || props.bookInfo?.pos?.chapter))
 })
@@ -288,14 +289,15 @@ const init=async()=>{
     currentBookUrl.value=bookUrl
     ;(window as any).__currentBookUrl=bookUrl
     const isPdf=isPdfBook.value
+    const isTemporary=!!props.bookInfo?.temporary
     const{bookshelfManager}=await import('@/core/bookshelf')
-    const onProgress=async()=>{updateBookmarkState();await bookshelfManager.updateProgressAuto(bookUrl,reader,pdfViewer.value,currentView.value);updatePageInfo()}
+    const onProgress=async()=>{updateBookmarkState();!isTemporary&&await bookshelfManager.updateProgressAuto(bookUrl,reader,pdfViewer.value,currentView.value);updatePageInfo()}
     const loadSource=async()=>{
       if(props.file)return props.file
       if(props.url)return props.url
       const path=props.bookInfo?.path
       if(!path)return null
-      const direct=browserSource(path)
+      const direct=isPdf?browserSource(path):''
       if(direct)return direct
       return bookshelfManager.loadFile(path)
     }
@@ -306,10 +308,10 @@ const init=async()=>{
       await reader.open(await loadSource()||await Promise.reject(new Error('未提供书籍')),props.bookInfo?.format)
       const view=reader.getView()
       markManager.value=createMarkManager({format:'epub',view,plugin:props.plugin,bookUrl,bookName:getBookName(),reader})
-      await markManager.value.init()
+      !isTemporary&&await markManager.value.init()
       ;(view as any).marks=markManager.value
       reader.on('image-menu', openImageMenu)
-      bookshelfManager.restoreProgress(bookUrl,reader).catch(()=>{})
+      !isTemporary&&bookshelfManager.restoreProgress(bookUrl,reader).catch(()=>{})
       reader.on('relocate',onProgress)
       setupEpubKeyboard(
         reader,
@@ -325,15 +327,15 @@ const init=async()=>{
     }
     await syncTTS()
     markPanelRef.value?.setupAnnotationListeners()
-    if (openingSplashKey) sessionStorage.setItem(`sireader-opening:${openingSplashKey}`, '1')
+    if (!isTemporary && openingSplashKey) sessionStorage.setItem(`sireader-opening:${openingSplashKey}`, '1')
   }catch(e){
     error.value=e instanceof Error?e.message:'加载失败'
     markPanelRef.value?.closeAll()
   }finally{
     loading.value=false
     setTimeout(()=>readerSplashRef.value?.dismiss(),300)
-    await restorePos(getBookUrl(),reader,pdfViewer.value,getMobilePosition)
-    props.bookInfo?.pos?.cfi&&initJump(props.bookInfo.pos.cfi,currentBookUrl.value)
+    if(!props.bookInfo?.temporary)await restorePos(getBookUrl(),reader,pdfViewer.value,getMobilePosition)
+    !props.bookInfo?.temporary&&props.bookInfo?.pos?.cfi&&initJump(props.bookInfo.pos.cfi,currentBookUrl.value)
   }
 }
 const handleCopy=(item:any)=>{
@@ -346,8 +348,9 @@ const handleCopyToClipboard=(item:any)=>{
 }
 const handleOpenDict=(text:string,x:number,y:number,selection:any)=>selection&&openDictDialog(text,x,y,selection)
 const isEpubScrollMode=()=>getSettings()?.viewMode==='scroll'
-const flipPage=(dir:'prev'|'next')=>{
+const flipPage=async(dir:'prev'|'next')=>{
   if(dir==='next'&&readerSplashRef.value?.isVisible())return readerSplashRef.value.dismiss()
+  if(props.bookInfo?.temporary&&typeof props.bookInfo?.webpageTurn==='function')return props.bookInfo.webpageTurn(dir)
   if(isPdfMode.value)return currentView.value?.nav?.[dir]?.()
   if(reader)return isEpubScrollMode() ? reader[dir]() : reader[dir==='prev'?'goLeft':'goRight']()
   return currentView.value?.[dir]?.()||currentView.value?.[dir==='prev'?'goLeft':'goRight']?.()
@@ -442,6 +445,8 @@ const events=[['sireaderSettingsUpdated',handleSettingsUpdate],['sireader:goto',
 const suppressError=(e:PromiseRejectionEvent)=>/createTreeWalker|destroy/.test(e.reason?.message||'')&&e.preventDefault()
 const setupTabObserver=()=>{if(isMobile())return;let el=containerRef.value?.parentElement;while(el){if(el.hasAttribute('data-id')){const h=document.querySelector(`li[data-type="tab-header"][data-id="${el.getAttribute('data-id')}"]`);if(h){const obs=new MutationObserver(ms=>ms.forEach(m=>{if(m.type!=='attributes'||m.attributeName!=='class')return;const focused=(m.target as HTMLElement).classList.contains('item--focus');focused&&setActiveReader(currentView.value,reader,getSettings());focused&&window.dispatchEvent(new CustomEvent('sireader:tab-switched'));syncReaderFocus(focused&&hasReaderFocus())}));obs.observe(h,{attributes:true,attributeFilter:['class']});(containerRef.value as any).__observer=obs;break}}el=el.parentElement}}
 const handleShapeCreated=async(e:CustomEvent)=>{const{shape,source,x,y,edit}=e.detail;if(source&&!shapeToolManager?.ownsController?.(source))return;await finishPdfAnnotation(shape,x,y,edit)}
+const resize=()=>isPdfMode.value?pdfViewer.value?.resize?.():reader?.resize?.()
+defineExpose({ resize })
 onMounted(()=>{init();containerRef.value?.focus();events.forEach(([e,h])=>window.addEventListener(e,h as any));window.addEventListener('unhandledrejection',suppressError);window.addEventListener('shape-created',handleShapeCreated as any);window.addEventListener('blur',handleWindowBlur);window.addEventListener('focus',handleWindowFocus);document.addEventListener('visibilitychange',handleVisibilityChange);setupTabObserver();const c=containerRef.value;c&&(c.addEventListener('focusin',handleFocusIn),c.addEventListener('focusout',handleFocusOut),c.addEventListener('keydown',handleKeydown));bindTouchPaging(c);bindTouchPaging(viewerContainerRef.value);window.dispatchEvent(new CustomEvent('reader:open',{detail:{bookUrl:getBookUrl()}}));syncReaderFocus(true)})
 onUnmounted(async()=>{syncReaderFocus(false);window.dispatchEvent(new CustomEvent('reader:close'));savePosition();clearTimeout(pdfToolbarSaveTimer);readerSplashRef.value?.cleanup();clearActiveReader(currentView.value);await markManager.value?.destroy();try{reader?.destroy();currentView.value?.cleanup?.();currentView.value?.viewer?.destroy?.()}catch{};inkToolManager?.destroy?.();shapeToolManager?.destroy?.();setTimeout(()=>viewerContainerRef.value&&(viewerContainerRef.value.innerHTML=''),50);events.forEach(([e,h])=>window.removeEventListener(e,h as any));window.removeEventListener('unhandledrejection',suppressError);window.removeEventListener('shape-created',handleShapeCreated as any);window.removeEventListener('blur',handleWindowBlur);window.removeEventListener('focus',handleWindowFocus);document.removeEventListener('visibilitychange',handleVisibilityChange);(containerRef.value as any)?.__observer?.disconnect();const c=containerRef.value;c&&(c.removeEventListener('focusin',handleFocusIn),c.removeEventListener('focusout',handleFocusOut),c.removeEventListener('keydown',handleKeydown));unbindTouchPaging();const{bookshelfManager}=await import('@/core/bookshelf');await bookshelfManager.flush();bookshelfManager.cleanup()})
 </script>

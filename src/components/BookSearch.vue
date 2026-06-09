@@ -69,6 +69,7 @@
                 <small>{{ sourceDesc(src) }}</small>
               </div>
               <div class="sr-manage-actions">
+                <button v-if="isWebSource(src)" class="sr-text-btn" @click="openWebSource(src)">打开</button>
                 <button class="sr-text-btn" @click="startEditSource(src)">{{ TEXT.edit }}</button>
                 <button v-if="src.type === 'custom'" class="sr-text-btn danger" @click="removeCustomSource(src.id)">{{ TEXT.remove }}</button>
                 <input type="checkbox" class="b3-switch" :checked="src.enabled" @change="toggleSource(src.id)">
@@ -192,7 +193,7 @@ const toolbarMenuAction = computed(() => ({ id: 'source', icon: '#lucide-sliders
 const toolbarActions = computed(() => [{ id: 'manage', icon: '#lucide-settings-2', label: TEXT.manageTitle }])
 
 const normalizeExtensions = (value: string) => Array.from(new Set(value.split(/[,，\s]+/).map(item => item.trim().toLowerCase()).filter(Boolean)))
-const sourceDesc = (source: HttpSourceConfig) => source.type === 'custom' ? TEXT.sourceDescCustom : source.domains?.length ? TEXT.sourceDescAnna : TEXT.sourceDescBuiltin
+const sourceDesc = (source: HttpSourceConfig) => isWebSource(source) ? '网页书源' : source.type === 'custom' ? TEXT.sourceDescCustom : source.domains?.length ? TEXT.sourceDescAnna : TEXT.sourceDescBuiltin
 const shouldShowCover = (book: any) => book.coverUrl && !failedCovers.has(book.coverUrl)
 const handleCoverError = (book: any) => failedCovers.add(book.coverUrl)
 const onDetailCoverError = (event: Event) => ((event.target as HTMLImageElement).src = '/icons/book-placeholder.svg')
@@ -245,6 +246,13 @@ const toggleSourceMenu = () => (showManagePanel.value = false, showSourceMenu.va
 const toggleManagePanel = () => (showSourceMenu.value = false, showManagePanel.value = !showManagePanel.value)
 const handleToolbarAction = (id: string) => { if (id === 'source') toggleSourceMenu(); else if (id === 'manage') toggleManagePanel() }
 const pickSource = (id: string) => (selectedSource.value = id, showSourceMenu.value = false)
+const isWebSource = (source: HttpSourceConfig) => source.type === 'qingtian'
+const openWebSource = (source: HttpSourceConfig) => {
+  const base = (source.currentDomain || source.url || '').replace(/\/+$/g, '')
+  if (!base) return
+  window.dispatchEvent(new CustomEvent('sireader:open-online-reader', { detail: { title: source.name || TEXT.readOnline, url: `${base}/online_search` } }))
+  closeOverlays()
+}
 const handleManagePanelClick = (event: MouseEvent) => privateSearchAccess.handleManagePanelClick(event)
 const checkInShelf = async (book: any) => {
   await Promise.all([
@@ -349,8 +357,6 @@ onUnmounted(() => {
 </script>
 
 <style scoped lang="scss">
-@use './deck/deck.scss';
-
 .sr-search{position:relative;display:flex;flex-direction:column;height:100%;overflow:hidden;background:var(--b3-theme-background)}
 .sr-btn-icon{display:inline-flex;align-items:center;justify-content:center;width:28px;min-width:28px;max-width:28px;height:28px;min-height:28px;max-height:28px;flex:0 0 28px;padding:0!important;line-height:1;background:transparent;color:var(--b3-theme-on-surface);opacity:.5;border-radius:4px;border:none;box-sizing:border-box;cursor:pointer;overflow:hidden;
   svg{width:14px;height:14px;flex:0 0 14px}

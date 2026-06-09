@@ -21,6 +21,9 @@ index b648a0da4c07a85d04c53b9be5dbdc0c60b7d47a..bd39a397ee04ae843d016be8ea337632
 +        iframe.src = src
 +        return
 +    }
++    // SiYuan mobile WebView can fail to load chapter blob URLs in sandboxed
++    // iframes. Keep this fallback, but avoid feeding whole books as URLs so
++    // the conversion is limited to the current section document.
 +    const res = await fetch(src)
 +    const blob = await res.blob()
 +    const type = blob.type || ''
@@ -75,6 +78,9 @@ index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..71b510cf30145e3bce83ab736062c244
 +        iframe.src = src
 +        return
 +    }
++    // SiYuan mobile WebView can fail to load chapter blob URLs in sandboxed
++    // iframes. Keep this fallback, but avoid feeding whole books as URLs so
++    // the conversion is limited to the current section document.
 +    const res = await fetch(src)
 +    const blob = await res.blob()
 +    const type = blob.type || ''
@@ -159,6 +165,19 @@ index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..71b510cf30145e3bce83ab736062c244
          }
          #header {
              grid-column: 3 / 4;
+@@ -628,7 +668,12 @@ export class Paginator extends HTMLElement {
+     attributeChangedCallback(name, _, value) {
+         switch (name) {
+             case 'flow':
+                 this.render()
++                if (this.scrolled && this.#view) {
++                    this.#prewarm(this.#index)
++                    this.#ensurePrevView()
++                    this.#ensureNextView()
++                }
+                 break
+             case 'gap':
+             case 'margin':
 @@ -639,7 +679,13 @@ export class Paginator extends HTMLElement {
      open(book) {
          this.bookDir = book.dir
@@ -184,7 +203,6 @@ index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..71b510cf30145e3bce83ab736062c244
 -        }
 -        this.#view = new View({
 +    #prewarm(index = this.#index) {
-+        return
 +        const targets = [-1, 1].map(dir => this.#adjacentIndex(dir, index)).filter(i => i != null)
 +        const keep = new Set([index, ...targets])
 +        for (const i of [...this.#prewarmed])
@@ -274,7 +292,6 @@ index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..71b510cf30145e3bce83ab736062c244
 +        return rect ? rect[this.#vertical ? 'left' : 'top'] : 0
 +    }
 +    #ensurePrevView() {
-+        return
 +        if (!this.scrolled || this.#prevView || this.#prevViewTask) return
 +        const index = this.#adjacentIndex(-1, this.#index)
 +        if (index == null) return
@@ -302,7 +319,6 @@ index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..71b510cf30145e3bce83ab736062c244
 +            .finally(() => this.#prevViewTask = null)
 +    }
 +    #ensureNextView() {
-+        return
 +        if (!this.scrolled || this.#nextView || this.#nextViewTask) return
 +        const index = this.#adjacentIndex(1, this.#index)
 +        if (index == null) return
@@ -336,7 +352,6 @@ index 95c4d0dae16bd96c3ace91bbd87fd1bea1c9f571..71b510cf30145e3bce83ab736062c244
 +        return { start, end: start + this.#getViewSize(view) }
 +    }
 +    #syncScrolledWindow() {
-+        return
 +        if (!this.scrolled) return
 +        const midpoint = this.start + this.size / 2
 +        const current = this.#getViewRange(this.#view)
@@ -661,7 +676,7 @@ index 6babab63987edac57076f1533026238ba90c455f..9e8e370cf082b27d96130cdaf5b47632
  
 +const RANGE_CHUNK = 256 * 1024
 +const rangeCache = new Map()
-+const isRangeEPUB = url => /\.epub($|[?#])/i.test(url) && !url.startsWith('file:')
++const isRangeEPUB = url => false && /\.epub($|[?#])/i.test(url) && !url.startsWith('file:')
 +const fetchRange = async (url, start, length) => {
 +    const end = start + length - 1
 +    for (const cached of rangeCache.values())

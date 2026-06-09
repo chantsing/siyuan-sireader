@@ -2,12 +2,12 @@
 
 # 📖 SiReader
 
-**Professional eBook Reader · Smart Annotation · Flashcard Learning**
+**Professional eBook Reader · Smart Annotation**
 
 Transform SiYuan Notes into a professional eBook reader  
-Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI translation, Anki flashcards
+Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, and AI translation. Flashcard features have moved to the standalone Sideck plugin.
 
-[![Version](https://img.shields.io/badge/version-1.3.5-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-1.3.6-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,40 @@ Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI tr
 ---
 
 ## 📝 Latest Updates
+
+### v1.3.6 (2026.6.7)
+
+### Added
+
+- Added Qingtian book-source web reading support, so online books can open directly in the SiReader reading tab without downloading them as local files.
+- Added WeRead Agent API integration, allowing an API Key to sync WeRead bookshelves, search results, notes, reading statistics, and recommended books.
+- Added WeRead web reading support, opening books in the SiReader online reading tab while reusing the reader table of contents and annotation sidebar.
+- Added WeRead table-of-contents support for chapter structure, chapter word count, and chapter popularity, with jumps to the corresponding web chapter.
+- Added WeRead annotation page support for my highlights, my thoughts, public thoughts, popular highlights, and public thoughts under popular highlights.
+- WeRead books can now be added to the SiReader bookshelf, with added status recognized in the bookshelf, search results, and note lists.
+- WeRead table-of-contents and annotation export links now use universal web links, opening directly in browsers while being intercepted inside SiReader documents to reuse the online reading tab.
+- Added a WeRead entry and dedicated icon, with support for opening the WeRead management page from the top bar.
+
+### Improved
+
+- Improved online reading tab opening logic so Qingtian and WeRead web reading prefer activating an already-open tab instead of opening duplicates.
+- Improved the WeRead API Key setup flow so clicking test completes validation and saving, with a help entry for getting an API Key.
+- Improved WeRead page layout and dark-mode adaptation, with compact statistics and colors following the SiYuan theme.
+- Improved WeRead table-of-contents, annotation, and copy flows by reusing existing local-book TOC, annotation, copy, and jump logic.
+- WeRead annotation copy now writes to the clipboard by default, avoiding influence from the global "insert into current document" setting.
+- Improved reader event handling to reduce stutter while dragging the sidebar.
+- Improved response speed after deleting annotations with shortcuts, reducing long waits caused by delete operations.
+- Split card packs, flashcard study, Anki import, and FSRS-related capabilities into the standalone Sideck plugin, removing the corresponding startup links and dedicated dependencies from the main reader plugin to reduce startup load.
+
+### Fixed
+
+- Fixed books being unable to move out of the bookshelf in tree view and missing a secondary confirmation entry.
+- Fixed PDF shape annotation shortcuts possibly causing SiYuan to freeze or crash.
+- Fixed SiPan book imports saving temporary addresses such as `127.0.0.1:61102`, which stopped opening after port changes; SiPan relative links are now saved and old imported links remain compatible.
+- Fixed EPUB continuous-scroll mode not mounting previous and next chapters after switching modes, preventing smooth continuation between chapters.
+- Fixed WeRead table-of-contents and annotation links in documents possibly reporting that the book does not exist, opening the browser, or opening duplicate tabs.
+- Fixed the WeRead annotation page incorrectly showing Mark Context previews.
+- Fixed WeRead web reading tab cleanup not destroying the table of contents and annotation sidebar in sync with local-book logic after closing.
 
 ### v1.3.5 (2026.6.4)
 
@@ -364,20 +398,10 @@ Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI tr
 | | Format Filter | Filter search results by format |
 | | Quick Add | One-click add search results to bookshelf |
 | | Chapter Search | Search book chapter content |
-| **🎴 Flashcard** | Anki Import | Full .apkg file import, Preserve deck structure and card content |
-| | SiYuan Sync | Import SiYuan flashcards, Real-time bidirectional sync (Add/Delete/Modify auto-sync) |
-| | FSRS Algorithm | Advanced memory algorithm, Auto-calculate card stability and difficulty |
-| | Template Editing | View and edit deck templates (Front/Back/CSS), Real-time preview |
-| | Advanced Search | Support deck/tag/status/property multi-filter |
-| | Special Cards | Image occlusion, LaTeX formula rendering, Cloze support |
-| | Spaced Repetition | Four-level rating system, Smart learning queue, Custom learning steps |
-| | Data Statistics | 11 visualization charts: Ring/Line/Bubble/Radar/Heatmap charts |
-| | Comprehensive Settings | 30+ configurable parameters, Daily limits, Learning steps, Advanced options |
 | **📖 Dictionary** | Online Dictionaries | 7 sources (Cambridge/Youdao/Haici/Character/Phrase/Zdic/Bing) |
 | | Offline Dictionary | Support StarDict and dictd formats |
 | | Smart Recognition | Auto-select the most suitable dictionary |
 | | Dictionary Management | Add/Delete offline dictionaries |
-| | Add to Deck | Add words to deck for review |
 | **🌐 Translation** | Translation Services | Azure/Google/Yandex/AI Translation(Free)/AI Translation(SiYuan) |
 | | Selected Translation | Translate selected text directly |
 | | Translation Panel | Independent translation panel to display results |
@@ -443,22 +467,10 @@ Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI tr
 | | Source Management | - | - | ✓ | ✓ | ✓ |
 | | Format Filter | - | - | ✓ | ✓ | ✓ |
 | | Chapter Search | - | - | ✓ | ✓ | ✓ |
-| **🎴 Flashcard** | Basic | ✓ | ✓ | ✓ | ✓ | ✓ |
-| | Anki Import | ✓ | ✓ | ✓ | ✓ | ✓ |
-| | Spaced Repetition | ✓ | ✓ | ✓ | ✓ | ✓ |
-| | Deck Management | ✓ | ✓ | ✓ | ✓ | ✓ |
-| | Learning Settings | ✓ | ✓ | ✓ | ✓ | ✓ |
-| | Statistics Charts | ✓ | ✓ | ✓ | ✓ | ✓ |
-| | Template Editing | ✓ | ✓ | ✓ | ✓ | ✓ |
-| | Advanced Search | ✓ | ✓ | ✓ | ✓ | ✓ |
-| | Special Cards | ✓ | ✓ | ✓ | ✓ | ✓ |
-| | SiYuan Sync | - | - | ✓ | ✓ | ✓ |
-| | FSRS Algorithm | - | - | - | ✓ | ✓ |
 | **📖 Dictionary** | Online | 2 (Youdao/Bing) | All 7 | All 7 | All 7 | All 7 |
 | | Offline | - | ✓ | ✓ | ✓ | ✓ |
 | | Smart Recognition | ✓ | ✓ | ✓ | ✓ | ✓ |
 | | Management | - | ✓ | ✓ | ✓ | ✓ |
-| | Add to Deck | - | ✓ | ✓ | ✓ | ✓ |
 | **🌐 Translation** | Services | - | ✓ | ✓ | ✓ | ✓ |
 | | Selected Text | - | ✓ | ✓ | ✓ | ✓ |
 | **⚙️ Others** | Custom Shortcuts | - | ✓ | ✓ | ✓ | ✓ |
@@ -470,10 +482,10 @@ Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, AI tr
 
 ### Membership Tiers
 
-**🆓 Free** - Basic reading + Full annotation + Full flashcard  
-**⭐ Trial (7 days)** - Full features (except Quick annotate/Quick send/Online search/SiYuan sync/FSRS)  
-**💎 Monthly** - Full features (except Quick annotate/Quick send/FSRS)  
-**👑 Annual** - Full features + Quick annotate + Quick send + FSRS + Priority support  
+**🆓 Free** - Basic reading + Full annotation  
+**⭐ Trial (7 days)** - Full features (except Quick annotate/Quick send/Online search)  
+**💎 Monthly** - Full features (except Quick annotate/Quick send)  
+**👑 Annual** - Full features + Quick annotate + Quick send + Priority support  
 **🏆 Lifetime** - All features + Lifetime updates + Highest priority
 
 ---

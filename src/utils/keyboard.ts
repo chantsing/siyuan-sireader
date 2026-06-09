@@ -31,6 +31,7 @@ export const createKeyboardHandler = (handlers: KeyboardHandlers, isPdfMode: () 
     }
 
     const k = e.key
+    const key = k.length === 1 ? k.toLowerCase() : k
     const c = e.ctrlKey || e.metaKey
 
     // 通用快捷键
@@ -49,18 +50,16 @@ export const createKeyboardHandler = (handlers: KeyboardHandlers, isPdfMode: () 
       PageUp: handlers.handlePdfPageUp,
       PageDown: handlers.handlePdfPageDown,
       r: handlers.handlePdfRotate,
-      R: handlers.handlePdfRotate,
       t: handlers.handlePdfTextTool,
-      T: handlers.handlePdfTextTool,
       h: handlers.handlePdfHandTool,
-      H: handlers.handlePdfHandTool,
       i: handlers.handlePdfInkTool,
-      I: handlers.handlePdfInkTool,
       s: handlers.handlePdfShapeTool,
-      S: handlers.handlePdfShapeTool,
     }
 
-    if (pdfKeys[k]) return pdfKeys[k]?.(), consume()
+    if (pdfKeys[key]) {
+      if (e.repeat && ['t', 'h', 'i', 's'].includes(key)) return consume()
+      return pdfKeys[key]?.(), consume()
+    }
 
     if (c) {
       if (k === '+' || k === '=') handlers.handlePdfZoomIn?.(), consume()

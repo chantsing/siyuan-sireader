@@ -2,6 +2,7 @@ import { putFile, readDir, removeFile } from '@/api'
 import { usePlugin } from '@/main'
 
 export const PUBLIC_ROOT = '/public/siyuan-sireader'
+export const SIYUAN_CLOUD_BASE = '/plugin/private/siyuan-cloud'
 
 const BOOKS_DIR = 'books'
 const COVERS_DIR = 'covers'
@@ -29,7 +30,7 @@ const hash = (str: string) => {
 }
 
 const publicToDataPath = (path = '') => path.startsWith('/public/') ? path.replace('/public/', '/data/public/') : path
-const isRemotePath = (path = '') => /^(https?:\/\/|file:\/\/)/i.test(path)
+const isRemotePath = (path = '') => /^(https?:\/\/|file:\/\/)|^\/plugin\/private\//i.test(path)
 const isPublicPath = (path = '') => path.startsWith('/public/') || path.startsWith('/data/public/')
 const getRecordKey = (url: string) => `${RECORDS_DIR}/${hash(url)}.json`
 const req = (id: string) => { try { return (window as any).require?.(id) } catch { return null } }
@@ -77,6 +78,11 @@ const putPublicFile = async (blob: Blob, publicPath: string, name?: string) => {
 export const isSupportedBookFile = (name = '') => new RegExp(`\\.(${SUPPORTED_BOOK_EXTS.join('|')})$`, 'i').test(name)
 export const filterSupportedBookFiles = (files: File[]) => files.filter(file => isSupportedBookFile(file.name))
 export const readDirEntries = async (path: string) => (await readDir(path).catch(() => ({ data: [] as any[] })))?.data || []
+
+export const normalizeSiyuanCloudUrl = (value = '') => {
+  const i = value.indexOf(SIYUAN_CLOUD_BASE)
+  return i >= 0 ? value.slice(i) : value
+}
 
 export const readFileBlob = async (path: string) => {
   const res = await readFileResponse(path)
@@ -192,6 +198,14 @@ export const saveOptionalCover = async (blob: Blob | undefined, url: string) => 
 
 // 统一读取入口，避免上层重复判断 http / file / public / data 路径。
 export const loadBookFile = async (path: string): Promise<File> => {
+  path = normalizeSiyuanCloudUrl(path)
+  if (path.startsWith(`${SIYUAN_CLOUD_BASE}/`)) {
+    const res = await fetch(path)
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+    return new File([await res.arrayBuffer()], path.split('/').pop()?.split('?')[0] || 'book', {
+      type: res.headers.get('content-type') || 'application/octet-stream',
+    })
+  }
   if (path.startsWith('http://') || path.startsWith('https://')) {
     const res = await fetch(path)
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`)

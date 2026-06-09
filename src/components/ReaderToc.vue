@@ -8,55 +8,48 @@
     toolbar-tooltip-dir="sw"
     @toolbar-action="handleToolbarAction"
   >
-    <div v-if="mode === 'deck'" class="fn__flex-1" style="min-height:0;overflow:hidden">
-      <DeckHub :keyword="keyword" :activeTab="deckTab" @update:activeTab="deckTab = $event" />
+    <div v-show="!showThumbnail" class="fn__flex-1 fn__flex-column file-tree sy__file bs-view bs-tree-view">
+      <div
+        ref="tocRef"
+        class="fn__flex-1 fn__hidescrollbar"
+        @click="onTocClick"
+        @contextmenu.prevent.stop
+        @mouseover="e => (e.target as HTMLElement).hasAttribute('data-toc-item') && e.stopPropagation()"
+      ></div>
     </div>
 
-    <template v-else>
-      <div v-show="!showThumbnail" class="fn__flex-1 fn__flex-column file-tree sy__file bs-view bs-tree-view">
-        <div
-          ref="tocRef"
-          class="fn__flex-1 fn__hidescrollbar"
-          @click="onTocClick"
-          @contextmenu.prevent.stop
-          @mouseover="e => (e.target as HTMLElement).hasAttribute('data-toc-item') && e.stopPropagation()"
-        ></div>
-      </div>
-
-      <div v-show="showThumbnail" class="fn__flex-1 fn__flex-column sy__file bs-view">
-        <div ref="thumbContainer" class="fn__flex-1 bs-view bs-grid">
-          <div v-if="!isPdfMode" class="ft__secondary" style="grid-column:1/-1;padding:8px 12px">仅 PDF 支持缩略图</div>
-          <div v-else v-for="i in pageCount" :key="i" class="bs-grid-item">
-            <div class="b3-list b3-list--background">
-              <div
-                class="b3-list-item"
-                :data-page="i"
-                style="display:flex;flex-direction:column;gap:8px;align-items:stretch;padding:8px 12px;cursor:pointer"
-                @click="goToPage(i)"
-              >
-                <div style="display:block;aspect-ratio:3/4;overflow:hidden">
-                  <img
-                    v-if="loadedThumbs[i]"
-                    :src="loadedThumbs[i]"
-                    :alt="`第 ${i} 页`"
-                    style="display:block;width:100%;height:100%;object-fit:contain"
-                  >
-                  <div v-else style="display:flex;align-items:center;justify-content:center;width:100%;height:100%">{{ i }}</div>
-                </div>
-                <div class="b3-list-item__text">第 {{ i }} 页</div>
+    <div v-show="showThumbnail" class="fn__flex-1 fn__flex-column sy__file bs-view">
+      <div ref="thumbContainer" class="fn__flex-1 bs-view bs-grid">
+        <div v-if="!isPdfMode" class="ft__secondary" style="grid-column:1/-1;padding:8px 12px">仅 PDF 支持缩略图</div>
+        <div v-else v-for="i in pageCount" :key="i" class="bs-grid-item">
+          <div class="b3-list b3-list--background">
+            <div
+              class="b3-list-item"
+              :data-page="i"
+              style="display:flex;flex-direction:column;gap:8px;align-items:stretch;padding:8px 12px;cursor:pointer"
+              @click="goToPage(i)"
+            >
+              <div style="display:block;aspect-ratio:3/4;overflow:hidden">
+                <img
+                  v-if="loadedThumbs[i]"
+                  :src="loadedThumbs[i]"
+                  :alt="`第 ${i} 页`"
+                  style="display:block;width:100%;height:100%;object-fit:contain"
+                >
+                <div v-else style="display:flex;align-items:center;justify-content:center;width:100%;height:100%">{{ i }}</div>
               </div>
+              <div class="b3-list-item__text">第 {{ i }} 页</div>
             </div>
           </div>
         </div>
       </div>
-    </template>
+    </div>
   </DockShell>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Menu, showMessage } from 'siyuan'
-import DeckHub from './deck/DeckHub.vue'
 import DockShell from './ui/DockShell.vue'
 import { useReaderState } from '@/core/epub/state'
 import { getTocChapterText } from '@/core/epub/chapterText'
@@ -65,7 +58,7 @@ import { bookshelfManager } from '@/core/bookshelf'
 import { jump } from '@/utils/jump'
 import type { TOCItem } from '@/core/epub/types'
 
-const props = withDefaults(defineProps<{ mode?: 'toc' | 'deck'; i18n?: any; context?: any }>(), {
+const props = withDefaults(defineProps<{ mode?: 'toc'; i18n?: any; context?: any }>(), {
   mode: 'toc',
   i18n: () => ({}),
 })
@@ -80,13 +73,12 @@ const thumbContainer = ref<HTMLElement>()
 const showThumbnail = ref(false)
 const reverse = ref(false)
 const loadedThumbs = ref<Record<number, string>>({})
-const deckTab = ref<'cards' | 'packs' | 'stats' | 'review' | 'settings'>('cards')
 const expandedKeys = ref<Record<string, boolean>>({})
 const currentHref = ref('')
 
 const isPdfMode = computed(() => (activeView.value as any)?.isPdf || false)
 const pageCount = computed(() => (activeView.value as any)?.pageCount || 0)
-const searchPlaceholder = computed(() => props.mode === 'deck' ? '搜索 / 卡组 / 标签 / 属性' : '搜索目录...')
+const searchPlaceholder = computed(() => '搜索目录...')
 
 const tocLabel = (item: TOCItem) => item.label || (item as any).title || ''
 const tocKey = (item: TOCItem, parentKey = 'root') => item.href || `${parentKey}/${tocLabel(item)}`
@@ -143,15 +135,7 @@ const branchKeys = computed(() => {
 })
 const hasExpanded = computed(() => branchKeys.value.some(key => expandedKeys.value[key]))
 
-const toolbarActions = computed(() => props.mode === 'deck'
-  ? [
-      { id: 'cards', icon: '#lucide-square-star', label: '卡片', active: deckTab.value === 'cards' },
-      { id: 'packs', icon: '#lucide-shopping-bag', label: '卡组', active: deckTab.value === 'packs' },
-      { id: 'review', icon: '#lucide-zap', label: '闪卡', active: deckTab.value === 'review' },
-      { id: 'stats', icon: '#lucide-chart-pie', label: '统计', active: deckTab.value === 'stats' },
-      { id: 'settings', icon: '#lucide-settings-2', label: '设置', active: deckTab.value === 'settings' },
-    ]
-  : [
+const toolbarActions = computed(() => [
       { id: 'thumbnail', icon: showThumbnail.value ? '#lucide-scroll-text' : '#lucide-panels-top-left', label: showThumbnail.value ? '目录' : '缩略图', show: isPdfMode.value },
       { id: 'expand', icon: hasExpanded.value ? '#lucide-panel-top-close' : '#lucide-panel-top-open', label: hasExpanded.value ? '折叠' : '展开', show: !showThumbnail.value },
       { id: 'reverse', icon: reverse.value ? '#lucide-arrow-up-1-0' : '#lucide-arrow-down-0-1', label: reverse.value ? '倒序' : '正序' },
@@ -357,10 +341,6 @@ const onTocClick = async (event: MouseEvent) => {
 }
 
 const handleToolbarAction = (id: string) => {
-  if (props.mode === 'deck') {
-    if (['cards', 'packs', 'review', 'stats', 'settings'].includes(id)) deckTab.value = id as typeof deckTab.value
-    return
-  }
   if (id === 'thumbnail') showThumbnail.value = !showThumbnail.value
   else if (id === 'expand') setAllExpanded(!hasExpanded.value)
   else if (id === 'reverse') reverse.value = !reverse.value

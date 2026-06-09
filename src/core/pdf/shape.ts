@@ -253,6 +253,7 @@ export class ShapeController {
   private pdfViewer: any = null
   private listeners: Array<{ el: HTMLElement; type: string; handler: any }> = []
   private containerClickHandler: ((e: MouseEvent) => void) | null = null
+  private clickContainer: HTMLElement | null = null
 
   constructor(private onSave: (shape?: ShapeAnnotation) => Promise<void>, private onShapeClick?: (shape: ShapeAnnotation) => void) {}
 
@@ -344,22 +345,20 @@ export class ShapeController {
 
   async endDrawing(pdfViewer?: any) {
     if (!this.currentPage || !this.startPos) return
-    if (this.config.shapeType !== 'textbox' && !this.previewShape) return
-    const previewShape = this.previewShape!
     const page = this.currentPage
+    const previewShape = this.previewShape
+    this.resetDrawing()
+    if (!previewShape) return
     const [x1, y1, x2, y2] = previewShape.rect
-    if (this.config.shapeType !== 'textbox' && (Math.abs(x2 - x1) < 10 || Math.abs(y2 - y1) < 10)) {
-      this.resetDrawing()
-      return
-    }
+    if (this.config.shapeType !== 'textbox' && (Math.abs(x2 - x1) < 10 || Math.abs(y2 - y1) < 10)) return
 
     let rect: [number, number, number, number] = [x1, y1, x2, y2]
-    const viewport = this.getCurrentViewport(pdfViewer)
+    const viewport = getPdfViewport(pdfViewer || this.pdfViewer, page)
     if (viewport) rect = compactRect(screenRectToPdfRect(viewport, [x1, y1, x2, y2]))
 
     const { getChapterName } = await import('@/core/MarkManager')
     const view = pdfViewer?.getPDF?.()
-    const chapter = getChapterName({ page: this.currentPage, isPdf: true, toc: view?.flatToc || view?.toc }) || `第${this.currentPage}页`
+    const chapter = getChapterName({ page, isPdf: true, toc: view?.flatToc || view?.toc }) || `第${page}页`
 
     const shape: ShapeAnnotation = {
       ...previewShape,
@@ -380,8 +379,6 @@ export class ShapeController {
       const popupY = this.config.shapeType === 'textbox' ? y1 : Math.max(y1, y2) + 10
       setTimeout(() => window.dispatchEvent(new CustomEvent('shape-created', { detail: { shape, source: this, x: rectBox.left + popupX, y: rectBox.top + popupY + 10, edit: false } })), 50)
     }
-
-    this.resetDrawing()
   }
 
   render(page: number, canvas: HTMLCanvasElement, pdfViewer?: any) {
@@ -461,6 +458,9 @@ export class ShapeController {
   clear(page: number) { this.managers.get(page)?.clear(); this.drawers.get(page)?.clear() }
 
   async toggle(active: boolean, container: HTMLElement) {
+    if (active === !!this.listeners.length) return
+    this.unbindEvents()
+    this.resetDrawing()
     active ? container.dataset.pdfShapeTool = 'true' : delete container.dataset.pdfShapeTool
     container.style.userSelect = active ? 'none' : 'text'
     container.style.cursor = active ? 'crosshair' : 'default'
@@ -469,13 +469,13 @@ export class ShapeController {
       this.bindEvents(container)
       this.unbindContainerClick()
     } else {
-      this.unbindEvents()
       this.bindContainerClick(container)
     }
   }
 
   private bindEvents(container: HTMLElement) {
     const start = (e: MouseEvent | TouchEvent) => {
+      if (e instanceof MouseEvent && e.button !== 0) return
       if (container.dataset.pdfDragAnnotation === 'true') return
       const target = e.target as HTMLElement
       if (!target.classList.contains('pdf-shape-layer')) return
@@ -486,11 +486,13 @@ export class ShapeController {
       if (e instanceof MouseEvent) e.preventDefault()
     }
     const move = (e: MouseEvent | TouchEvent) => {
+      if (!this.currentPage) return
       if (container.dataset.pdfDragAnnotation === 'true') return
       this.draw(e)
       if (e instanceof MouseEvent) e.preventDefault()
     }
     const end = async () => {
+      if (!this.currentPage) return
       if (container.dataset.pdfDragAnnotation === 'true') return
       await this.endDrawing(this.pdfViewer)
     }
@@ -543,6 +545,7 @@ export class ShapeController {
 
   private bindContainerClick(container: HTMLElement) {
     this.unbindContainerClick()
+    this.clickContainer = container
     this.containerClickHandler = (e: MouseEvent) => {
       const target = e.target as HTMLElement
       if (target.closest('[data-shape-note-marker]')) return
@@ -563,15 +566,16 @@ export class ShapeController {
 
   private unbindContainerClick() {
     if (this.containerClickHandler) {
-      document.querySelectorAll('.viewer-container').forEach(el => el.removeEventListener('click', this.containerClickHandler!))
+      this.clickContainer?.removeEventListener('click', this.containerClickHandler)
       this.containerClickHandler = null
+      this.clickContainer = null
     }
   }
 
   ensureClickEvents(container: HTMLElement) { this.bindContainerClick(container) }
   toJSON() { const all: ShapeAnnotation[] = []; this.managers.forEach(manager => all.push(...manager.toJSON())); return all }
   fromJSON(data: ShapeAnnotation[]) { data.forEach(shape => this.getManager(shape.page).fromJSON([shape])) }
-  destroy() { this.unbindEvents(); this.unbindContainerClick(); this.managers.clear(); this.drawers.clear() }
+  destroy() { this.resetDrawing(); this.unbindEvents(); this.unbindContainerClick(); this.managers.clear(); this.drawers.clear() }
 }
 
 export class ShapeToolManager {
@@ -716,9 +720,9 @@ export class ShapeToolManager {
     if (!this.controller) return false
     const shape = this.getLocalShape(id)
     if (!shape) return false
-    try { await (await import('@/utils/copy')).syncMarkOnDelete(shape) } catch (e) { console.error('[DeleteShapeBlock]', e) }
     await removeAnnotation(id)
     this.removeShape(id, shape.page)
+    import('@/utils/copy').then(({ syncMarkOnDelete }) => syncMarkOnDelete(shape)).catch(e => console.error('[DeleteShapeBlock]', e))
     return true
   }
 

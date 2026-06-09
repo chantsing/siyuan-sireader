@@ -100,10 +100,6 @@
         </template>
       </div>
       <div class="bs-title ariaLabel" :aria-label="mainText(item)">{{ mainText(item) }}</div>
-      <div v-if="isBook(item) && confirmDeleteId === item.data.url" class="bs-confirm" @click.stop>
-        <button class="b3-button b3-button--outline" type="button" @click="emit('clear-delete')">取消</button>
-        <button class="b3-button b3-button--remove" type="button" @click="emit('remove-book', item.data)">删除</button>
-      </div>
       </div>
   </div>
 
@@ -174,10 +170,6 @@
         <span v-for="text in sideTexts(item)" :key="text" class="ft__secondary">{{ text }}</span>
       </div>
 
-      <div v-if="isBook(item) && confirmDeleteId === item.data.url" class="bs-confirm" @click.stop>
-        <button class="b3-button b3-button--outline" type="button" @click="emit('clear-delete')">取消</button>
-        <button class="b3-button b3-button--remove" type="button" @click="emit('remove-book', item.data)">删除</button>
-      </div>
       </div>
   </div>
 </template>
@@ -199,7 +191,6 @@ const props = withDefaults(defineProps<{
   items: Item[]
   mode: BookshelfViewMode
   gridStyle?: Record<string, string>
-  confirmDeleteId?: string | null
   groupCounts?: Record<string, number>
   statusMap: Record<BookStatus, string>
   getCoverUrl: (book: Book) => string
@@ -210,7 +201,7 @@ const props = withDefaults(defineProps<{
   selectedUrls?: string[]
   dense?: boolean
   showGroupMeta?: boolean
-}>(), { gridStyle: () => ({}), confirmDeleteId: null, groupCounts: () => ({}), currentGroup: null, dense: false, showGroupMeta: true })
+}>(), { gridStyle: () => ({}), groupCounts: () => ({}), currentGroup: null, dense: false, showGroupMeta: true })
 
 const emit = defineEmits<{
   'select-group': [id: string]
@@ -218,8 +209,6 @@ const emit = defineEmits<{
   'book-menu': [book: Book, event: MouseEvent]
   'group-menu': [group: GroupConfig, event: MouseEvent]
   'toggle-import': [item: BookImportItem]
-  'clear-delete': []
-  'remove-book': [book: Book]
   'move-book-group': [url: string, groupId: string]
   'move-book-home': [url: string]
   'toggle-select-book': [book: Book]
@@ -504,6 +493,5 @@ const tagStyle = (tag: string) => {
 .bs-row__meta{display:flex;flex-wrap:nowrap;gap:4px;margin-top:auto;font-size:10px;line-height:1.2;color:var(--b3-theme-on-surface-variant);white-space:nowrap;overflow:hidden}
 .bs-row__side{display:flex;flex:0 0 auto;flex-direction:column;align-items:flex-end;justify-content:center;gap:8px;padding:12px 0 12px 8px;margin-left:auto}
 .bs-row__side .ft__secondary{max-width:100%;font-size:11px;line-height:1.2;text-align:right;color:var(--b3-theme-on-surface-variant)}
-.bs-confirm{position:absolute;right:6px;bottom:6px;z-index:2;display:flex;gap:4px;padding:4px;border:1px solid var(--b3-border-color);border-radius:var(--b3-border-radius);background:var(--b3-theme-background)}
 @keyframes bs-cover-fade{from{opacity:0}to{opacity:1}}
 </style>

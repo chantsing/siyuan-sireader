@@ -1,6 +1,7 @@
 import { bookshelfManager } from '@/core/bookshelf'
 import type { RemoteBookInfo, RemoteDownloadRequest, OnlineBookImportInfo } from '@/composables/useBookImport'
 import { registerPrivateSources } from '@private-sources'
+import { registerWereadAgentSources } from '@/weread/agent'
 
 type HttpSourceType = 'anna' | 'gutenberg' | 'standardebooks' | 'custom' | (string & {})
 
@@ -74,6 +75,11 @@ interface HttpSourceExtension {
   getDownloadPlan?: (book: HttpBook, source: HttpSourceConfig | undefined, helpers: HttpSourceHelpers, onProgress?: DownloadProgress) => Promise<RemoteDownloadRequest>
   getOnlineBookInfo?: (book: HttpBook) => OnlineBookImportInfo
 }
+
+const toForwardProxyHeaders = (headers: Array<{ name: string; value: string }> = []) =>
+  headers
+    .filter(header => header.name && header.value !== undefined && header.value !== null && header.value !== '')
+    .map(header => ({ [header.name]: header.value }))
 
 const DEFAULT_SOURCES: HttpSourceConfig[] = [
   {
@@ -506,7 +512,7 @@ export class HttpSourceManager {
     const response = await fetch('/api/network/forwardProxy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, method, contentType, headers, payload, timeout }),
+      body: JSON.stringify({ url, method, contentType, headers: toForwardProxyHeaders(headers), payload, timeout }),
     }).catch(() => null)
     const res = response?.ok ? await response.json().catch(() => null) : null
     return res?.code === 0 ? res.data as { body: string; headers: Record<string, string>; status: number } : null
@@ -625,5 +631,6 @@ export class HttpSourceManager {
 }
 
 export const httpSourceManager = new HttpSourceManager()
+registerWereadAgentSources(httpSourceManager)
 registerPrivateSources(httpSourceManager)
 export type { HttpSourceConfig, HttpBook, HttpSourceSelectors, HttpSourceType, HttpSourceExtension, HttpSourceHelpers }

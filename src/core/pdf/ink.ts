@@ -265,9 +265,10 @@ export class InkController{
     const page=this.currentPage
     const active=this.getActiveDrawer(page)
     const path=active?.drawer.endDrawing()
-    if(!path){this.resetDrawing();return}
-    const viewport=this.getCurrentViewport(viewer)
-    if(!viewport){this.resetDrawing();return}
+    this.resetDrawing()
+    if(!path)return
+    const viewport=getPdfViewport(viewer||this.pdfViewer,page)
+    if(!viewport)return
     const pdfPath=compactPath({
       ...path,
       points:path.points.map(point=>{
@@ -275,12 +276,11 @@ export class InkController{
         return point.pressure===undefined?next:{...next,pressure:point.pressure}
       })
     })
-    if(pdfPath.points.length<2){this.resetDrawing();return}
-    const annotation=this.getManager(page).addPath(pdfPath)
+    if(pdfPath.points.length<2)return
+    this.getManager(page).addPath(pdfPath)
     const save=this.onSave?.()
     save?.catch(()=>{})
     this.redrawPage(page,viewer)
-    this.resetDrawing()
   }
 
   render(page:number,canvas:HTMLCanvasElement,viewer?:any){
@@ -324,23 +324,26 @@ export class InkController{
 
   async toggle(active:boolean){
     if(!this.container)return
+    if(active===!!this.listeners.length)return
+    this.unbindEvents()
+    this.resetDrawing()
     active ? this.container.dataset.pdfInkTool='true' : delete this.container.dataset.pdfInkTool
     this.container.style.userSelect=active?'none':'text'
     this.container.style.cursor=active?'crosshair':'default'
     setPdfLayerInteractivity('pdf-ink-layer',active)
-    active?this.bindEvents():this.unbindEvents()
+    if(active)this.bindEvents()
   }
 
   private bindEvents(){
     if(!this.container)return
-    const start=async(e:MouseEvent|TouchEvent)=>{if(this.container?.dataset.pdfDragAnnotation==='true')return;const t=e.target as HTMLElement;if(!t.classList.contains('pdf-ink-layer'))return;const cv=t as HTMLCanvasElement,p=+(cv.dataset.page||0);if(!p)return;await this.startDrawing(e,cv,p);e instanceof MouseEvent&&e.preventDefault()}
-    const move=(e:MouseEvent|TouchEvent)=>{if(this.container?.dataset.pdfDragAnnotation==='true')return;this.draw(e);e instanceof MouseEvent&&e.preventDefault()}
-    const end=async()=>{if(this.container?.dataset.pdfDragAnnotation==='true')return;await this.endDrawing(this.pdfViewer)}
+    const start=async(e:MouseEvent|TouchEvent)=>{if(e instanceof MouseEvent&&e.button!==0)return;if(this.container?.dataset.pdfDragAnnotation==='true')return;const t=e.target as HTMLElement;if(!t.classList.contains('pdf-ink-layer'))return;const cv=t as HTMLCanvasElement,p=+(cv.dataset.page||0);if(!p)return;await this.startDrawing(e,cv,p);e instanceof MouseEvent&&e.preventDefault()}
+    const move=(e:MouseEvent|TouchEvent)=>{if(!this.currentPage)return;if(this.container?.dataset.pdfDragAnnotation==='true')return;this.draw(e);e instanceof MouseEvent&&e.preventDefault()}
+    const end=async()=>{if(!this.currentPage)return;if(this.container?.dataset.pdfDragAnnotation==='true')return;await this.endDrawing(this.pdfViewer)}
     this.bindPointerEvents(start,move,end)
   }
 
   private unbindEvents(){this.listeners.forEach(({el,type,handler})=>el.removeEventListener(type,handler));this.listeners=[]}
-  destroy(){this.unbindEvents();this.managers.clear();this.drawers.clear()}
+  destroy(){this.resetDrawing();this.unbindEvents();this.managers.clear();this.drawers.clear()}
 }
 
 /** 墨迹工具管理器 */
@@ -436,9 +439,9 @@ export class InkToolManager{
     if(!this.controller)return false
     const ink = this.getLocalInk(id)
     if(!ink)return false
-    try{await (await import('@/utils/copy')).syncMarkOnDelete(ink)}catch(e){console.error('[DeleteInkBlock]',e)}
     await removeAnnotation(id)
     this.removeInk(id,ink.page)
+    import('@/utils/copy').then(({syncMarkOnDelete})=>syncMarkOnDelete(ink)).catch(e=>console.error('[DeleteInkBlock]',e))
     return true
   }
 

@@ -100,8 +100,6 @@ export class MarkManager{
     await this.load()
     this.initialized=true
     if(this.format!=='pdf')await this.loadCalibre()
-    await this.loadDeck()
-    window.addEventListener('sireader:deck-updated',()=>this.loadDeck())
   }
 
   /** 从数据库加载标注 */
@@ -235,16 +233,6 @@ export class MarkManager{
         }
       }
       this.save()
-    }catch(e){console.error('[Mark]',e)}
-  }
-
-  /** 加载词典卡包 */
-  private async loadDeck(){
-    try{
-      // TODO: 词汇卡片功能待重构
-      // const{getCards}=await import('@/components/deck/card')
-      // const cards=...
-      window.dispatchEvent(new Event('sireader:marks-updated'))
     }catch(e){console.error('[Mark]',e)}
   }
 
@@ -493,16 +481,7 @@ export class MarkManager{
     if(!m||!await this.del(m.id))return false
     
     // 同步删除文档块
-    if(m.blockId)try{await (await import('@/utils/copy')).syncMarkOnDelete(m)}catch(e){console.error('[DeleteBlock]',e)}
-    
-    // 删除词典卡包
-    if(m.type==='vocab'&&m.text){
-      try{
-        // TODO: 词汇卡片功能待重构
-        // const{removeCard}=await import('@/components/deck')
-        // await removeCard(...)
-      }catch(e){console.error('[Mark]',e)}
-    }
+    if(m.blockId)import('@/utils/copy').then(({syncMarkOnDelete})=>syncMarkOnDelete(m)).catch(e=>console.error('[DeleteBlock]',e))
     
     // 清理渲染
     if(this.format==='pdf')this.renderPdfMark(m)

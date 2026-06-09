@@ -7,12 +7,12 @@ import { isMobile } from '@/utils/mobile'
 type TabPosition = 'right' | 'bottom'
 type NativePdfTarget = { kind: 'asset' | 'pdf'; path: string }
 type OpenModeSettings = Pick<ReaderSettings, 'openMode' | 'openDocAssets'>
-type ReaderTabData = { file?: File; url?: string; blockId?: string | null; bookInfo?: any }
+type ReaderTabData = { file?: File; url?: string; blockId?: string | null; bookInfo?: any; context?: any }
 const BOOK_RE = /\.(epub|pdf|mobi|azw3|azw|fb2|cbz|txt)(?:[?#].*)?$/i
 
 // 查找已打开的阅读器标签页
-export const findOpenedTab = (bookName: string, pluginName: string) => {
-  const type = `${pluginName}custom_tab_book_reader`
+export const findOpenedTab = (bookName: string, pluginName: string, tabType = 'custom_tab_book_reader') => {
+  const type = `${pluginName}${tabType}`
   const find = (o: any, id: string): any => o?.id === id ? o : o?.children?.reduce((r: any, c: any) => r || find(c, id), null)
   for (const el of document.querySelectorAll<HTMLElement>('.layout-tab-bar .item[data-id]')) {
     if ((el.getAttribute('data-title') || el.querySelector('.item__text')?.textContent) !== bookName) continue
@@ -34,8 +34,16 @@ export const openReaderTab = (plugin: Plugin, title: string, data: ReaderTabData
   })
 }
 
-export const openOnlineReaderTab = (plugin: Plugin, title: string, url: string, settings?: Pick<ReaderSettings, 'openMode'>, onReady?: () => void) =>
-  openReaderTab(plugin, title, { url }, `${plugin.name}online_reader`, settings, onReady)
+const activateOpenedTab = (tab: HTMLElement | null, onReady?: () => void) => {
+  if (!tab) return false
+  tab.click()
+  onReady?.()
+  return true
+}
+
+export const openOnlineReaderTab = (plugin: Plugin, title: string, url: string, settings?: Pick<ReaderSettings, 'openMode'>, onReady?: () => void, context?: any) =>
+  activateOpenedTab(findOpenedTab(title, plugin.name, 'online_reader'), onReady)
+  || openReaderTab(plugin, title, { url, bookInfo: { title }, context }, `${plugin.name}online_reader`, settings, onReady)
 
 const normalizeNativePdfPath = (path: string) => {
   if (!path || /^https?:\/\//i.test(path) || /^file:\/\//i.test(path)) return null
@@ -96,11 +104,6 @@ export const openOrActivateBook = (plugin: Plugin, book: Book, settings: ReaderS
 
   if (openWithSiyuanPdf(plugin, book, settings, onReady)) return
   
-  const tab = findOpenedTab(book.title, plugin.name)
-  if (tab) {
-    tab.click()
-    onReady?.()
-    return
-  }
+  if (activateOpenedTab(findOpenedTab(book.title, plugin.name), onReady)) return
   openReaderTab(plugin, book.title, { bookInfo: book }, `${plugin.name}custom_tab_book_reader`, settings, onReady)
 }

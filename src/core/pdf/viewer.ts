@@ -56,6 +56,7 @@ export class PDFViewer {
   private themeObserver?: MutationObserver
   private resizeObserver?: ResizeObserver
   private resizeTimer: any = null
+  private lastResizeWidth = 0
   private renderVersion = 0
   private themeSignature = ''
   private wheelZoomTimer: any = null
@@ -159,8 +160,11 @@ export class PDFViewer {
   private setupResizeObserver() {
     if (typeof ResizeObserver === 'undefined') return
     this.resizeObserver = new ResizeObserver(() => {
-      clearTimeout(this.resizeTimer)
-      this.resizeTimer = setTimeout(() => { void this.handleContainerResize() }, 80)
+      if (this.autoScaleMode !== 'fit-width') return
+      const width = Math.round(this.container.clientWidth)
+      if (!width || Math.abs(width - this.lastResizeWidth) < 4) return
+      this.lastResizeWidth = width
+      this.resize(180)
     })
     this.resizeObserver.observe(this.container)
   }
@@ -172,6 +176,12 @@ export class PDFViewer {
       return
     }
     this.refreshRenderedPages()
+  }
+
+  resize = (delay = 60) => {
+    if (!this.container.isConnected) return
+    clearTimeout(this.resizeTimer)
+    this.resizeTimer = setTimeout(() => { void this.handleContainerResize() }, delay)
   }
 
   // 渲染页面
@@ -323,7 +333,7 @@ export class PDFViewer {
     this.container.dispatchEvent(new CustomEvent('pdf-scale-change', { detail: { scale: this.scale, mode } }))
   }
   async setScale(s: number) { await this.applyScale(s, 'custom') }
-  async fitWidth() { const p = this.pages.get(1); if (p) await this.applyScale((this.container.clientWidth - 40) / p.getViewport({ scale: 1 }).width, 'fit-width') }
+  async fitWidth() { const p = this.pages.get(1); if (p) { this.lastResizeWidth = Math.round(this.container.clientWidth); await this.applyScale((this.container.clientWidth - 40) / p.getViewport({ scale: 1 }).width, 'fit-width') } }
   async setRotation(d: 0 | 90 | 180 | 270) { this.rotation = d; await this.rerenderLayout() }
   private handleWheelZoom = (e: WheelEvent) => {
     if (!e.ctrlKey) return

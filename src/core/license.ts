@@ -45,13 +45,8 @@ const PAID_FEATURES: Record<string, string> = {
   // 词典功能
   'dict-offline': 'trial',      // 离线词典
   'dict-advanced': 'trial',     // 高级词典（剑桥/海词/汉字/词语/汉典）
-  'dict-deck': 'trial',         // 加入卡组
-  
   // 同步功能
   'siyuan-sync': 'monthly',     // 思源同步
-  
-  // 闪卡功能
-  'fsrs': 'annual',             // FSRS算法
 }
 
 // 会员等级

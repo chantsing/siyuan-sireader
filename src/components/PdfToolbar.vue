@@ -229,6 +229,7 @@ const emitSettings = () => {
 }
 
 const emitMode = (mode: ToolMode) => {
+  if (applyingSettings) return
   emit('ink-toggle', mode === 'ink')
   emit('shape-toggle', mode === 'shape')
 }
@@ -288,6 +289,7 @@ const applyContainerMode = (mode: ToolMode) => {
 }
 
 const applyMode = (mode: ToolMode, syncPopup = true) => {
+  if (toolMode.value === mode) return
   toolMode.value = mode
   applyContainerMode(mode)
   emitMode(mode)

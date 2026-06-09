@@ -54,7 +54,6 @@ export const UI_CONFIG = { interfaceItems: [{ key: 'openMode', opts: ['newTab', 
 export const DEFAULT_NAV_ITEMS: NavItem[] = [
   { id: 'bookshelf', icon: 'lucide-library-big', tip: 'bookshelf', enabled: true, order: 0 },
   { id: 'search', icon: 'lucide-book-search', tip: 'search', enabled: true, order: 1 },
-  { id: 'deck', icon: 'lucide-wallet-cards', tip: '卡包', enabled: true, order: 2 },
   { id: 'toc', icon: 'lucide-scroll-text', tip: '目录', enabled: true, order: 3 },
   { id: 'mark', icon: 'lucide-square-pen', tip: '标注', enabled: true, order: 4 },
   { id: 'appearance', icon: 'lucide-settings-2', tip: '设置', enabled: true, order: 7 }
@@ -187,7 +186,7 @@ export const resetToDefaults = (s: any) => Object.assign(s, { textSettings: DEFA
 // ===== 链接格式化 =====
 const applyTpl=(t:string,v:Record<string,string>)=>{const ph:Record<string,string>={};let i=0;Object.entries(v).forEach(([k,val])=>{const p=`\x00${i++}\x00`;ph[p]=val;k.split('|').forEach(s=>t=t.replace(new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'g'),p))});return Object.entries(ph).reduce((r,[p,val])=>r.replace(new RegExp(p,'g'),val),t)}
 const encodeReadableParam=(v:string)=>{try{v=decodeURI(`${v}`)}catch{}return v.replace(/%/g,'%25').replace(/&/g,'%26').replace(/#/g,'%23').replace(/\?/g,'%3F').replace(/\+/g,'%2B')}
-export const buildSireaderLink=(bookUrl:string,cfi:string,id='')=>`sireader://open?url=${encodeReadableParam(bookUrl)}&cfi=${encodeReadableParam(cfi)}${id?`&id=${encodeReadableParam(id)}`:''}`
+export const buildSireaderLink=(bookUrl:string,cfi:string,id='')=>/^https?:\/\//i.test(cfi)?cfi:`sireader://open?url=${encodeReadableParam(bookUrl)}&cfi=${encodeReadableParam(cfi)}${id?`&id=${encodeReadableParam(id)}`:''}`
 export const formatBookLink=(u:string,t:string,a:string,c:string,f:string,x:string,fmt:string,n='',i='',id='')=>applyTpl(fmt,{'书名|{{title}}':t,'作者|{{author}}':a,'章节|{{chapter}}':c,'位置|{{location}}':f,'链接|{{url}}':buildSireaderLink(u,f,id),'文本|{{text}}':x,'笔记|{{note}}':n,'截图|{{image}}':i}).replace(/> \n/g,'').replace(/\n\n+/g,'\n')
 export const parseBookLink=(u:string):{bookUrl:string;cfi:string;id?:string}|null=>{try{const m=u.match(/^sireader:\/\/open\?(.+)$/);if(!m)return null;const p=new URLSearchParams(m[1].replace(/&amp;/g,'&'));let url=p.get('url'),c=p.get('cfi'),id=p.get('id')||undefined;if(!url||!c)return null;const e=url.indexOf('://');if(!id&&e!==-1){const pt=url.slice(e+3);for(const r of[/_(highlight-[^_&]+)$/,/_(note-[^_&]+)$/,/_(shape_\d+_[^_&]+)$/,/_(ink_\d+_[^_&]+)$/,/_(bookmark-[^_&]+)$/,/_(vocab-[^_&]+)$/]){const mt=pt.match(r);if(mt){id=mt[1];url=url.slice(0,-(id.length+1));break}}}return{bookUrl:url,cfi:c,id}}catch{return null}}
 
