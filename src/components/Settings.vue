@@ -68,7 +68,7 @@ const licenseMedia = computed(() => getLicenseMedia(license.value, userAvatar.va
 const ttsFields = computed(() => [...ttsItems, ...ttsOptions.map(item => ({ ...item, desc: ttsI18nKey(item.key,'Desc') }))])
 const linkFormatPresetOptions = Object.keys(LINK_FORMAT_PRESETS) as (keyof typeof LINK_FORMAT_PRESETS)[]
 const translateEngines = Object.keys(translators)
-const translateEngineLabels = Object.values(translators).map(engine => engine.name)
+const translateEngineLabels = translateEngines.map(key => `translationEngine${key.split('-').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join('')}`)
 const themeItems = computed(() => customThemeItems.filter(item => item.key !== 'bgImg'))
 const presetThemeItem = computed(() => ({
   key: 'theme',

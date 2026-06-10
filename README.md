@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, and AI translation. Flashcard features have moved to the standalone Sideck plugin.
 
-[![Version](https://img.shields.io/badge/version-1.3.7-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-1.3.8-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,12 @@ Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, and A
 ---
 
 ## 📝 Latest Updates
+
+### v1.3.8 (2026.6.10)
+
+### Fixed
+
+- Fixed default translation engine dropdown items not using internationalized labels, causing option text to be empty and the dropdown list to look blank.
 
 ### v1.3.7 (2026.6.10)
 

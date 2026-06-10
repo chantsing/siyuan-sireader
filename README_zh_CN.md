@@ -7,7 +7,7 @@
 让思源笔记变身专业阅读器，支持 EPUB/PDF/TXT/在线小说  
 提供智能标注、TTS 朗读、词典查询、AI 翻译等功能；闪卡能力已拆分到独立 Sideck 插件
 
-[![Version](https://img.shields.io/badge/version-1.3.7-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-1.3.8-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,12 @@
 ---
 
 ## 📝 最新更新
+
+### v1.3.8 (2026.6.10)
+
+### 修复
+
+- 修复默认翻译引擎下拉项未使用国际化文案导致选项文本为空、下拉列表看起来空白的问题。
 
 ### v1.3.7 (2026.6.10)
 

@@ -96,7 +96,7 @@ export const SettingItem = defineComponent({
     const checked = (e: Event) => (e.target as HTMLInputElement).checked
     const control = () => {
       const item = props.item as any
-      if (item.opts) return h('select', { value: props.modelValue, class: 'b3-select sr-control', onChange: (e: Event) => emit('change', value(e)) }, item.opts.map((opt: string, i: number) => h('option', { key: opt, value: opt }, item.labels?.[i] ? (props.i18n as any)?.[item.labels[i]] : (props.i18n as any)?.[opt] || opt)))
+      if (item.opts) return h('select', { value: props.modelValue, class: 'b3-select sr-control', onChange: (e: Event) => emit('change', value(e)) }, item.opts.map((opt: string, i: number) => h('option', { key: opt, value: opt }, item.labels?.[i] ? (props.i18n as any)[item.labels[i]] : (props.i18n as any)[opt])))
       if (item.type === 'checkbox') return h('label', { class: 'fn__flex-center' }, [h('input', { checked: props.modelValue, type: 'checkbox', class: 'b3-switch', onChange: (e: Event) => emit('change', checked(e)) })])
       if (item.type === 'color' || item.type === 'text') return h('input', { value: props.modelValue, type: item.type, class: item.type === 'color' ? 'sr-control' : 'b3-text-field sr-control', onChange: (e: Event) => emit('change', value(e)) })
       return h('input', { value: props.modelValue, type: 'range', class: 'b3-slider sr-control b3-tooltips b3-tooltips__n', min: item.min, max: item.max, step: item.step, 'aria-label': `${props.modelValue}${item.unit || ''}`, onInput: (e: Event) => emit('input', Number(value(e))) })
