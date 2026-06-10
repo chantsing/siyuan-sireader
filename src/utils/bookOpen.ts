@@ -3,6 +3,9 @@ import type { Plugin } from 'siyuan'
 import { bookshelfManager, type Book } from '@/core/bookshelf'
 import type { ReaderSettings } from '@/composables/useSetting'
 import { isMobile } from '@/utils/mobile'
+import { wereadBookIdOf } from '@/weread/agent'
+import { createWereadContextFromSource } from '@/weread/context'
+import { httpSourceManager } from '@/utils/HttpSources'
 
 type TabPosition = 'right' | 'bottom'
 type NativePdfTarget = { kind: 'asset' | 'pdf'; path: string }
@@ -92,9 +95,13 @@ export const getOrAddAssetBook = async (manager: typeof bookshelfManager, assetP
 }
 
 // 打开或激活书籍
-export const openOrActivateBook = (plugin: Plugin, book: Book, settings: ReaderSettings, onReady?: () => void) => {
+export const openOrActivateBook = async (plugin: Plugin, book: Book, settings: ReaderSettings, onReady?: () => void) => {
   const readUrl = /^https?:\/\//i.test(book?.path || '') && !BOOK_RE.test(book.path) && book.path
-  if (readUrl) return openOnlineReaderTab(plugin, book.title, readUrl, settings, onReady)
+  if (readUrl) {
+    await httpSourceManager.init()
+    const context = /^https:\/\/weread\.qq\.com\/web\/reader\//i.test(readUrl) ? createWereadContextFromSource({ ...book, bookId: wereadBookIdOf(book) }, httpSourceManager.getSource('weread-agent')) : undefined
+    return openOnlineReaderTab(plugin, book.title, readUrl, settings, onReady, context)
+  }
 
   if (isMobile()) {
     window.dispatchEvent(new CustomEvent('reader:mobile-open', { detail: { book } }))

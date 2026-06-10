@@ -143,10 +143,10 @@ const insertCurrent = async (text: string, settings: ReaderSettings) => {
 
 // ===== 笔记文档复用 =====
 const getDocIdByAttr = async (value: string) => !value ? '' : (await api.sql(`SELECT b.id FROM blocks b JOIN attributes a ON a.block_id = b.id WHERE b.type = 'd' AND a.name = '${ATTR}' AND a.value = '${escapeSql(value)}' LIMIT 1`).catch(() => []))?.[0]?.id || ''
-const getCreateDocPath = async (parentID?: string) => {
+const getCreateDocPath = async (parentID?: string, notebook?: string) => {
   const docId = createNodeId()
   if (!parentID) return { docId, path: `/${docId}.sy` }
-  const parentPath = (await api.getPathByID(parentID)).path
+  const parentPath = (await api.getPathByID(parentID, notebook)).path
   return { docId, path: `${parentPath.replace(/\.sy$/, '')}/${docId}.sy` }
 }
 const appendToNoteDoc = async (title: string, settings: ReaderSettings, text: string, key: string, parentID?: string) => {
@@ -164,7 +164,7 @@ const appendToNoteDoc = async (title: string, settings: ReaderSettings, text: st
     }
     return api.appendBlock('markdown', text, id)
   }
-  const { path } = await getCreateDocPath(parentID)
+  const { path } = await getCreateDocPath(parentID, notebook)
   const created = String((await api.createDoc(notebook, path, sanitize(title), ''))?.id || '')
   if (!created) throw new Error('创建笔记文档失败')
   await api.setBlockAttrs(created, { [ATTR]: key })

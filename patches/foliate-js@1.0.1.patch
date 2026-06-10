@@ -753,3 +753,13 @@ index 6babab63987edac57076f1533026238ba90c455f..9e8e370cf082b27d96130cdaf5b47632
      if (typeof file === 'string') file = await fetchFile(file)
      let book
      if (file.isDirectory) {
+diff --git a/view.js b/view.js
+index 16461a02d09451626b7b70e32013e92143f0d1ef..27ff90d8d5eed6d60e2f7497d918f013960d46ec 100644
+--- a/view.js
++++ b/view.js
+@@ -579,4 +579,4 @@ export class View extends HTMLElement {
+     }
+ }
+ 
+-customElements.define('foliate-view', View)
++if (!customElements.get('foliate-view')) customElements.define('foliate-view', View)

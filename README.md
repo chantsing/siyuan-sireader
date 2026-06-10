@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, and AI translation. Flashcard features have moved to the standalone Sideck plugin.
 
-[![Version](https://img.shields.io/badge/version-1.3.6-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-1.3.7-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,36 @@ Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, and A
 ---
 
 ## 📝 Latest Updates
+
+### v1.3.7 (2026.6.10)
+
+### Added
+
+- Added a text-selection translation switch, supporting automatic translation panel popup after selecting text.
+- Added a fixed translation engine setting to remember the commonly used translation service and avoid manual switching each time.
+- Added a public online page-script API, supporting independent script injection into web reading pages through SiYuan JS snippets, with top-bar buttons, menus, commands, styles, and persistent configuration.
+- Added an independent WeRead classic reader script example, allowing external JS snippets to control background color, wide-screen display, immersive reading, auto reading, idle mode, spacebar page turning, screen wake lock, footer buttons, scrollbars, and related effects.
+
+### Improved
+
+- Improved text-selection translation timing so translation starts after selection ends, reducing repeated requests while text is still being selected.
+- Improved bookshelf list view so ratings can now be shown directly in book rows like the "finished" status.
+- Improved annotation hover-card note input by switching to multiline input and reducing focus and key conflicts.
+- Improved WeRead search-result details by completing rating, category, publisher, publish time, table of contents, highlights, thoughts, and related information.
+- Unified WeRead search page, WeRead page, and bookshelf opening logic, reusing the same reading links, table of contents, and note context.
+- Moved online reading page web-enhancement capability to the public API, leaving concrete site features and styles entirely to independent JS scripts for easier user DIY.
+- Improved WeRead book-detail table of contents with a tree structure that supports expand, collapse, full scrolling, and chapter jumping.
+- Improved mobile settings panel navigation by hiding the WeRead icon entry that does not need to appear in settings.
+
+### Fixed
+
+- Fixed left/right keyboard page turning failing after switching tabs, clearing search, or refreshing the interface.
+- Fixed PDF reading progress possibly being incorrectly saved as 100% when exiting before finishing.
+- Fixed plugin update or sync causing duplicate `foliate-view` registration and preventing the plugin from loading.
+- Fixed sidebar icons possibly disappearing after sync.
+- Fixed WeRead search results possibly opening as 404 when opened directly from the search page.
+- Fixed the WeRead API Key test success message continuing to display below the page; it now uses an immediate notification instead.
+- Fixed a SiYuan v3.6.5 compatibility issue where creating child note documents could report `Field [notebook] is required`.
 
 ### v1.3.6 (2026.6.7)
 

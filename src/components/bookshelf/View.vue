@@ -149,6 +149,7 @@
         <div v-if="isBook(item)" class="bs-tags" :class="{ 'is-stacked': bookTags(item.data).length > 1 }">
           <span class="bs-tag bs-tag--type">{{ item.data.format.toUpperCase() }}</span>
           <span class="bs-tag bs-tag--state" :class="`bs-tag--${item.data.status}`">{{ statusMap[item.data.status] }}</span>
+          <span v-if="item.data.rating" class="bs-tag bs-tag--state">{{ starText(item.data.rating) }}</span>
           <span v-for="tag in bookTags(item.data)" :key="tag" class="bs-tag" :style="tagStyle(tag)">{{ tag }}</span>
         </div>
         <div v-else-if="isGroup(item) && item.data.type === 'smart'" class="bs-tags">
@@ -384,7 +385,7 @@ const compactIndent = (row: CompactRow) => row.level * (props.dense ? 12 : 18)
 const compactItemStyle = (row: CompactRow) => ({ '--file-toggle-width': `${compactIndent(row) + (props.dense ? 14 : 18)}px` })
 const compactToggleStyle = (row: CompactRow) => ({ paddingLeft: `${compactIndent(row)}px` })
 const compactPath = (row: CompactRow) => isGroup(row.item) ? row.item.data.id : isBook(row.item) ? row.item.data.url : row.item.data.id
-const starText = (rating: number) => '★'.repeat(Math.max(0, Math.min(5, rating)))
+const starText = (rating: number) => `★${Math.max(0, Math.min(5, rating))}`
 const watermarkClass = (status: BookStatus) => `bs-watermark--${status}`
 const mainText = (item: Item) => isGroup(item) ? item.data.name : isBook(item) ? item.data.title : item.data.preview?.title || item.data.label
 const groupChips = (group: GroupConfig) => [

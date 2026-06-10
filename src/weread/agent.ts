@@ -201,19 +201,19 @@ export const testWereadAgentKey = async (apiKey: string) => {
 
 export const createWereadOnlineBookInfo = (book: any): OnlineBookImportInfo => {
   const info = book?.bookInfo || book?.book || book
-  const bookId = compact(info?.bookId || book?.bookId)
+  const bookId = wereadBookIdOf(book)
   const title = compact(info?.title || info?.name)
   return {
     url: pcReadUrlOf(bookId),
     readUrl: pcReadUrlOf(bookId),
     title,
     author: compact(info?.author || info?.authorName) || '未知作者',
-    coverUrl: compact(info?.cover),
+    coverUrl: compact(info?.cover || info?.coverUrl),
     format: 'txt',
     intro: compact(info?.intro || info?.description || info?.bookIntro),
     language: 'zh',
     publisher: compact(info?.publisher),
-    published: compact(info?.publishTime || info?.publishDate),
+    published: compact(info?.publishTime || info?.publishDate || info?.year),
     identifier: bookId,
     sourceName: SOURCE.name,
     tags: [SOURCE.name, info?.category, '在线阅读'].filter(Boolean),
@@ -223,10 +223,14 @@ export const createWereadOnlineBookInfo = (book: any): OnlineBookImportInfo => {
 export const getWereadReadUrl = pcReadUrlOf
 export const getWereadChapterReadUrl = pcChapterReadUrlOf
 const compact = (value = '') => String(value || '').replace(/\s+/g, ' ').trim()
+export const wereadBookIdOf = (book: any) => {
+  const info = book?.bookInfo || book?.book || book?.albumInfo || book || {}
+  return compact(info?.bookId || book?.bookId || book?.privateData?.bookId || info?.albumId || book?.albumId || book?.identifier)
+}
 
-const toBook = (item: any, source: HttpSourceConfig): HttpBook | null => {
+export const toWereadHttpBook = (item: any, source: Pick<HttpSourceConfig, 'id' | 'name' | 'url'> = SOURCE): HttpBook | null => {
   const info = item?.bookInfo || item?.book || item
-  const bookId = compact(info?.bookId || item?.bookId)
+  const bookId = wereadBookIdOf(item)
   const title = compact(info?.title || info?.name)
   if (!bookId || !title) return null
   const rating = Number(info?.newRating || info?.rating || 0)
@@ -235,9 +239,9 @@ const toBook = (item: any, source: HttpSourceConfig): HttpBook | null => {
     name: title,
     author: compact(info?.author || info?.authorName) || '未知作者',
     bookUrl: detailUrlOf(bookId),
-    readUrl: readUrlOf(bookId),
+    readUrl: pcReadUrlOf(bookId),
     canDownload: false,
-    privateData: { bookId, searchIdx: item?.searchIdx },
+    privateData: { bookId, searchIdx: item?.searchIdx, raw: item },
     coverUrl: compact(info?.cover),
     intro: compact(info?.intro || info?.description || info?.bookIntro),
     extension: 'WEB',
@@ -245,10 +249,53 @@ const toBook = (item: any, source: HttpSourceConfig): HttpBook | null => {
     publisher: compact(info?.publisher),
     year: compact(info?.publishTime || info?.publishDate),
     identifier: bookId,
+    pages: compact(info?.totalWords ? `${Math.round(Number(info.totalWords) / 10000)}万字` : ''),
     sourceName: source.name,
     sourceId: source.id,
     sourceUrl: source.url,
     kind: ['微信读书', ratingText, info?.newRatingDetail?.title].filter(Boolean).join(' / '),
+  }
+}
+
+export const loadWereadHttpBookDetail = async (book: HttpBook, source?: Pick<HttpSourceConfig, 'id' | 'name' | 'url' | 'auth'> | null) => {
+  const apiKey = source ? apiKeyOf(source as HttpSourceConfig) : ''
+  const bookId = wereadBookIdOf(book)
+  if (!apiKey || !bookId) return book
+  const [infoRes, chapterRes, progressRes, markRes, mineRes, bestRes, publicRes] = await Promise.allSettled([
+    callWereadAgentDirect(apiKey, '/book/info', { bookId }),
+    callWereadAgentDirect(apiKey, '/book/chapterinfo', { bookId }),
+    callWereadAgentDirect(apiKey, '/book/getprogress', { bookId }),
+    callWereadAgentDirect(apiKey, '/book/bookmarklist', { bookId }),
+    callWereadAgentDirect(apiKey, '/review/list/mine', { bookid: bookId, count: 20 }),
+    callWereadAgentDirect(apiKey, '/book/bestbookmarks', { bookId, chapterUid: 0 }),
+    callWereadAgentDirect(apiKey, '/review/list', { bookId, count: 10 }),
+  ])
+  const info = infoRes.status === 'fulfilled' ? infoRes.value : {}
+  const chapters = chapterRes.status === 'fulfilled' ? chapterRes.value?.chapters || [] : []
+  const progress = progressRes.status === 'fulfilled' ? progressRes.value : {}
+  const marks = markRes.status === 'fulfilled' ? markRes.value?.updated || [] : []
+  const mineReviews = mineRes.status === 'fulfilled' ? mineRes.value?.reviews || [] : []
+  const best = bestRes.status === 'fulfilled' ? bestRes.value : {}
+  const publicReviews = publicRes.status === 'fulfilled' ? publicRes.value?.reviews || [] : []
+  const raw = book.privateData?.raw || book
+  const detail = toWereadHttpBook({ ...raw, bookInfo: { ...(raw.bookInfo || {}), ...(info.bookInfo || info.book || info) } }, source || undefined) || book
+  return {
+    ...book,
+    ...detail,
+    intro: detail.intro || book.intro,
+    privateData: {
+      ...(book.privateData || {}),
+      ...(detail.privateData || {}),
+      detail: info,
+      stats: {
+        progress: Number(progress?.book?.progress || progress?.progress || 0),
+        chapters: chapters.length,
+        marks: marks.length,
+        reviews: mineReviews.length + publicReviews.length,
+        bestMarks: Number(best?.totalCount || best?.total || best?.items?.length || 0),
+        readingTime: Number(progress?.book?.readingTime || 0),
+      },
+    },
   }
 }
 
@@ -265,7 +312,7 @@ const parseSearchResults = (data: WereadAgentResponse, source: HttpSourceConfig)
 
   const seen = new Set<string>()
   return rows
-    .map(item => toBook(item, source))
+    .map(item => toWereadHttpBook(item, source))
     .filter((book): book is HttpBook => {
       const id = String(book?.privateData?.bookId || '')
       if (!book || !id || seen.has(id)) return false

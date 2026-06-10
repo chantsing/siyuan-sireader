@@ -269,7 +269,7 @@ export class HttpSourceManager {
       .filter((result): result is PromiseFulfilledResult<HttpBook[]> => result.status === 'fulfilled')
       .flatMap(result => result.value.map(book => ({
         ...book,
-        kind: [book.extension, book.language, book.year].filter(Boolean).join(' / '),
+        kind: book.kind || [book.extension, book.language, book.year].filter(Boolean).join(' / '),
       })))
   }
 

@@ -53,25 +53,26 @@
         </button>
       </div>
       <div class="sr-title" :style="{ '--mark-color': markColor }">
-        <div class="sr-title-text">{{ text }}</div>
+        <div class="sr-title-text" :title="text">{{ text }}</div>
       </div>
     </div>
     <div v-else class="sr-title" :class="{ 'sr-title-bookmark': bookmark }" :style="{ '--mark-color': markColor }">
-      <div v-if="chapter" class="sr-inline-chapter">{{ chapter }}</div>
-      <div v-if="text" class="sr-title-text">{{ text }}</div>
+      <div v-if="chapter" class="sr-inline-chapter" :title="chapter">{{ chapter }}</div>
+      <div v-if="text" class="sr-title-text" :title="text">{{ text }}</div>
       <slot name="meta" />
     </div>
 
     <textarea
       v-if="editing"
-      ref="noteRef"
       :value="note"
-      class="sr-note sr-note-edit"
+      class="b3-text-field sr-note-edit"
       placeholder="添加笔记…"
-      rows="1"
-      @input="onNoteInput"
+      rows="4"
+      @input="emit('update:note', ($event.target as HTMLTextAreaElement).value)"
+      @keydown.stop
+      @keyup.stop
     />
-    <div v-else-if="note" class="sr-note">{{ note }}</div>
+    <div v-else-if="note" class="sr-note" :title="note">{{ note }}</div>
 
     <slot name="extra" />
 
@@ -106,12 +107,11 @@ export const collectMarkTags = (source: any[] | any = [], extra: unknown[] = [])
 </script>
 
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
 
 type ColorOption = { key: string; value: string; bg: string }
 type StyleOption = { value: string; label: string; icon?: string }
 
-const props = withDefaults(defineProps<{
+withDefaults(defineProps<{
   time: string
   tags?: string[]
   tagOptions?: string[]
@@ -155,19 +155,6 @@ const emit = defineEmits<{
   go: []
 }>()
 
-const noteRef = ref<HTMLTextAreaElement | null>(null)
-const getLineHeight = (el: HTMLElement) => Number.parseFloat(getComputedStyle(el).lineHeight) || 19
-const resizeNote = () => {
-  const textarea = noteRef.value
-  if (!textarea) return
-  textarea.style.height = 'auto'
-  textarea.style.height = `${Math.max(getLineHeight(textarea), textarea.scrollHeight)}px`
-}
-const onNoteInput = (event: Event) => {
-  emit('update:note', (event.target as HTMLTextAreaElement).value)
-  resizeNote()
-}
-watch(() => [props.editing, props.note], () => nextTick(resizeNote), { immediate: true })
 </script>
 
 <style scoped lang="scss">
@@ -205,7 +192,7 @@ button.sr-tag-chip.active{opacity:1;background:var(--b3-theme-primary-lightest);
 .sr-style-icon[data-type="double"]{border-bottom:3px double currentColor}
 .sr-style-icon[data-type="squiggly"]{text-decoration:underline wavy;text-decoration-thickness:1px;text-underline-offset:3px}
 .sr-note{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:var(--b3-theme-on-surface);cursor:text;white-space:normal}
-.sr-note-edit{flex:0 0 auto;display:block;width:100%;height:auto;min-height:var(--sr-line,19px);padding:0;border:0;background:transparent;box-sizing:border-box;resize:none;outline:none;overflow:hidden;color:var(--b3-theme-on-surface);font:inherit;font-size:13px;line-height:var(--sr-line,19px);white-space:pre-wrap}
+.sr-note-edit{width:100%;min-height:76px;resize:vertical;font-size:13px;line-height:1.5}
 .sr-card-foot{display:flex;align-items:center;justify-content:space-between;gap:var(--sr-gap,4px)}
 .sr-text-btn{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0;border:none;background:transparent;color:var(--b3-theme-on-surface-variant);font-size:12px;line-height:1;cursor:pointer}
 .sr-text-btn svg{width:14px;height:14px;flex-shrink:0}

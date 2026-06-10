@@ -308,9 +308,12 @@ export class PDFViewer {
 
   // 页面导航
   getCurrentPage() { 
+    const total = this.pdf?.numPages || 1, fallback = Math.min(Math.max(this.current || 1, 1), total)
+    if (!this.container.isConnected || !this.container.clientHeight) return fallback
     const s = this.container.scrollTop + this.container.clientHeight / 2, ps = this.container.querySelectorAll('.pdf-page')
+    if (!ps.length) return fallback
     for (let i = 0; i < ps.length; i++) if ((ps[i] as HTMLElement).offsetTop + (ps[i] as HTMLElement).offsetHeight > s) return i + 1
-    return this.pdf?.numPages || 1 
+    return total 
   }
   
   getLocation(): PDFLocation { 

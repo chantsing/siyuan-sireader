@@ -8,6 +8,7 @@ import { offlineDictManager, onlineDictManager } from '@/utils/dictionary'
 import { usePlugin } from '@/main'
 import { useLicense } from '@/composables/useLicense'
 import { focusMobileEditable } from '@/utils/mobile'
+import { translators } from '@/services/translator'
 
 const props = defineProps<{modelValue:ReaderSettings;i18n:any;onSave:()=>Promise<void>}>()
 const emit = defineEmits<{'update:modelValue':[value:ReaderSettings]}>()
@@ -66,6 +67,8 @@ const {license,userAvatar,code:activationCode,loading:loadingLicense,processing,
 const licenseMedia = computed(() => getLicenseMedia(license.value, userAvatar.value, props.i18n))
 const ttsFields = computed(() => [...ttsItems, ...ttsOptions.map(item => ({ ...item, desc: ttsI18nKey(item.key,'Desc') }))])
 const linkFormatPresetOptions = Object.keys(LINK_FORMAT_PRESETS) as (keyof typeof LINK_FORMAT_PRESETS)[]
+const translateEngines = Object.keys(translators)
+const translateEngineLabels = Object.values(translators).map(engine => engine.name)
 const themeItems = computed(() => customThemeItems.filter(item => item.key !== 'bgImg'))
 const presetThemeItem = computed(() => ({
   key: 'theme',
@@ -182,7 +185,7 @@ const dragDrop = async (e:DragEvent, to:number, type:'nav'|'dict'|'quickDoc', re
 const ttsI18nKey = (key:string, suffix='') => `tts${key.charAt(0).toUpperCase()}${key.slice(1)}${suffix}`
 
 // 计算属性
-const navItems = computed(() => (settings.value.navItems || DEFAULT_NAV_ITEMS).filter(item => item.id !== 'dictionary').sort((a, b) => a.order - b.order))
+const navItems = computed(() => (settings.value.navItems || DEFAULT_NAV_ITEMS).filter(item => !['dictionary', 'weread'].includes(item.id)).sort((a, b) => a.order - b.order))
 const docRows = (field:any) => (field.docs || []).map((doc:any, i:number) => ({
   key: doc.id,
   text: doc.name,
@@ -396,9 +399,11 @@ onMounted(() => {
             </template>
         </SettingSection>
 
-        <SettingSection :title="i18n.dictionaryTools || '词典工具'" :icon="settingSectionIcon('root', 'dictionary')" :open="isOpen('dictionary')" @toggle="toggleAccordion('dictionary')">
+        <SettingSection :title="i18n.dictionaryTools || '词典翻译'" :icon="settingSectionIcon('root', 'dictionary')" :open="isOpen('dictionary')" @toggle="toggleAccordion('dictionary')">
             <input ref="fileInput" type="file" multiple accept=".ifo,.idx,.dict,.dict.dz,.dz,.index,.syn" class="fn__none" @change="handleUpload">
             <input ref="folderInput" type="file" multiple webkitdirectory directory accept=".ifo,.idx,.dict,.dict.dz,.dz,.index,.syn" class="fn__none" @change="handleUpload">
+            <SettingItem :item="{key:'translationAutoOnSelection',type:'checkbox'}" :model-value="settings.translation.autoOnSelection" :label="i18n.translationAutoOnSelection || '划词自动翻译'" :hint="i18n.translationAutoOnSelectionDesc || '选中文本后直接打开翻译面板'" :i18n="i18n" @change="value => (settings.translation.autoOnSelection = value, save())" />
+            <SettingItem :item="{key:'translationEngine',opts:translateEngines,labels:translateEngineLabels}" :model-value="settings.translation.engine" :label="i18n.translationEngine || '默认翻译引擎'" :i18n="i18n" @change="value => (settings.translation.engine = value, save())" />
             <SettingRows v-if="loadingDict" :rows="[]" :loading="true" :i18n="i18n" />
             <template v-else>
               <template v-for="section in dictSections" :key="section.key">

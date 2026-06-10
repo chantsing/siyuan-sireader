@@ -4,6 +4,11 @@
       <div class="sr-online__title">{{ title || '在线阅读' }}</div>
       <div v-if="status" class="sr-online__status">{{ status }}</div>
       <div class="sr-online__actions">
+        <div v-for="item in toolbarItems" :key="item.id" class="sr-online__more">
+          <button class="sr-online__btn b3-tooltips b3-tooltips__sw" :class="{ active: toolbarActive(item) }" :aria-label="item.title" @click.stop="openToolbarMenu(item, $event)">
+            <svg v-if="item.icon"><use :xlink:href="item.icon"></use></svg><span>{{ item.text || item.title }}</span>
+          </button>
+        </div>
         <button class="sr-online__btn b3-tooltips b3-tooltips__sw" :class="{ active: mode === 'web' }" aria-label="显示原网页" @click="mode = 'web'">
           <svg><use xlink:href="#lucide-eye"></use></svg><span>网页</span>
         </button>
@@ -19,8 +24,16 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
-import { showMessage } from 'siyuan'
+import { Menu, showMessage } from 'siyuan'
 import { clearActiveReader, setActiveReader } from '@/core/epub/state'
+import {
+  createPageBridgeScript,
+  getRuntimePageScriptsForUrl,
+  type PageScript,
+  type PageScriptMenuItem,
+  type PageScriptToolbarItem,
+  wrapPageScript,
+} from '@/core/pageScripts'
 
 const props = defineProps<{
   url: string
@@ -29,23 +42,28 @@ const props = defineProps<{
   mountReader: (el: HTMLElement, props: any) => Promise<any>
 }>()
 
-const HIDE_SCROLLBAR = `(() => { const id = 'sireader-webview-scrollbar'; if (document.getElementById(id)) return; const style = document.createElement('style'); style.id = id; style.textContent = '*{scrollbar-width:none!important}::-webkit-scrollbar{width:0!important;height:0!important}'; document.documentElement.appendChild(style) })()`
-
 const webPaneRef = ref<HTMLElement>()
 const readerPaneRef = ref<HTMLElement>()
 const mode = ref<'web' | 'reader'>('web')
 const status = ref('')
 const busy = ref(false)
 const turning = ref<'prev' | 'next' | null>(null)
+const toolbarItems = ref<PageScriptToolbarItem[]>([])
+const pageState = ref<Record<string, any>>({})
+
 let frame: any = null
 let readerApp: any = null
 let tabObserver: MutationObserver | null = null
+let pageScriptRunId = 0
 
 const actionText = computed(() => {
   if (turning.value === 'next') return '下一页'
   if (turning.value === 'prev') return '上一页'
   return busy.value ? '转换中' : '转换'
 })
+
+const currentFrameUrl = () =>
+  (typeof frame?.getURL === 'function' ? frame.getURL() : frame?.getAttribute?.('src')) || props.url
 
 const createFrame = (url: string) => {
   const isWebview = !!(window as any).require
@@ -54,8 +72,21 @@ const createFrame = (url: string) => {
   if (isWebview) el.setAttribute('partition', 'persist:siyuan-sireader-online')
   el.setAttribute('src', url)
   el.setAttribute(isWebview ? 'allowpopups' : 'allowfullscreen', 'true')
-  if (isWebview) el.addEventListener('dom-ready', () => (el as any).executeJavaScript?.(HIDE_SCROLLBAR).catch(() => {}))
+  if (isWebview) {
+    el.addEventListener('dom-ready', () => runPageScripts())
+    el.addEventListener('did-finish-load', () => runPageScripts())
+    el.addEventListener('did-navigate-in-page', () => runPageScripts())
+  } else {
+    el.addEventListener('load', () => runPageScripts())
+  }
   return el
+}
+
+const executePageScript = async (script: string) => {
+  if (typeof frame?.executeJavaScript === 'function') return frame.executeJavaScript(script, true)
+  const win = (frame as HTMLIFrameElement | null)?.contentWindow
+  if (!win) return null
+  return win.eval(script)
 }
 
 const runInPage = async (script: string) => {
@@ -70,6 +101,108 @@ const runInPage = async (script: string) => {
     shadowText: '',
     html: doc.documentElement?.outerHTML || '',
   }
+}
+
+const contextScripts = async (url: string): Promise<PageScript[]> => {
+  const context = props.context || {}
+  const raw = typeof context.getScripts === 'function'
+    ? await context.getScripts(url)
+    : context.scripts ?? context.script
+  return (Array.isArray(raw) ? raw : [raw])
+    .map((item: any, index: number): PageScript | null => {
+      if (typeof item === 'string') return { id: `context-${index}`, name: `上下文脚本 ${index + 1}`, matches: ['*'], code: item }
+      if (item?.code || item?.css) return { id: item.id || `context-${index}`, name: item.name || `上下文脚本 ${index + 1}`, matches: item.matches || ['*'], ...item }
+      return null
+    })
+    .filter((item): item is PageScript => !!item)
+}
+
+const executableScripts = async (url: string) => [
+  ...getRuntimePageScriptsForUrl(url),
+  ...await contextScripts(url),
+]
+
+const syncPageBridge = async () => {
+  const snapshot = await executePageScript('window.__sireaderPageBridge?.dump?.() || null').catch(() => null)
+  if (!snapshot || typeof snapshot !== 'object') return
+  toolbarItems.value = Array.isArray(snapshot.toolbarItems) ? snapshot.toolbarItems : []
+  pageState.value = snapshot.state || {}
+}
+
+const runPageScripts = async () => {
+  const runId = ++pageScriptRunId
+  await waitForPage()
+  if (runId !== pageScriptRunId || !frame) return
+  const url = currentFrameUrl()
+  const scripts = await executableScripts(url)
+  await executePageScript(createPageBridgeScript()).catch(() => {})
+  for (const script of scripts) {
+    if (runId !== pageScriptRunId || !frame) return
+    await executePageScript(wrapPageScript(script)).catch(() => {})
+  }
+  await syncPageBridge()
+}
+
+const runScriptCommand = async (command?: string, payload: Record<string, unknown> = {}) => {
+  if (!command) return
+  const script = `window.__sireaderPageBridge?.runCommand?.(${JSON.stringify(command)}, ${JSON.stringify(payload)}) || null`
+  const snapshot = await executePageScript(script).catch(() => null)
+  if (snapshot && typeof snapshot === 'object') {
+    toolbarItems.value = Array.isArray(snapshot.toolbarItems) ? snapshot.toolbarItems : toolbarItems.value
+    pageState.value = snapshot.state || pageState.value
+  } else {
+    await syncPageBridge()
+  }
+}
+
+const toolbarActive = (item: PageScriptToolbarItem) => !!(item.activeKey && pageState.value[item.activeKey])
+const menuActive = (item: PageScriptMenuItem) => {
+  if (item.activeKey) return !!pageState.value[item.activeKey]
+  if (item.valueKey && 'activeValue' in item) return pageState.value[item.valueKey] === item.activeValue
+  return false
+}
+const menuMeta = (item: PageScriptMenuItem) => {
+  if (item.type === 'checkbox') return menuActive(item) ? '已开启' : '已关闭'
+  if (!item.valueKey) return item.description || ''
+  const value = pageState.value[item.valueKey]
+  return value === undefined || value === null || value === '' ? (item.description || '') : `${value}${item.unit || ''}`
+}
+
+const runMenuItem = async (item: PageScriptMenuItem) => {
+  await runScriptCommand(item.command, item.payload || {})
+}
+
+const menuIconHTML = (item: PageScriptMenuItem) =>
+  item.color ? `<span class="b3-menu__icon" style="background:${item.color};border-radius:50%;box-shadow:inset 0 0 0 1px var(--b3-border-color)"></span>` : undefined
+
+const toNativeMenuItem = (item: PageScriptMenuItem): any => {
+  if (item.type === 'separator') return { type: 'separator' }
+  if (item.children?.length) {
+    return {
+      label: item.title,
+      type: 'submenu',
+      accelerator: menuMeta(item),
+      iconHTML: menuIconHTML(item),
+      current: menuActive(item),
+      submenu: item.children.map(toNativeMenuItem),
+    }
+  }
+  return {
+    label: item.title,
+    accelerator: menuMeta(item),
+    iconHTML: menuIconHTML(item),
+    current: menuActive(item),
+    click: () => void runMenuItem(item),
+  }
+}
+
+const openToolbarMenu = async (item: PageScriptToolbarItem, event: MouseEvent) => {
+  if (!item.menu?.length) return runScriptCommand(item.command)
+  const rect = (event.currentTarget as HTMLElement | null)?.getBoundingClientRect()
+  await syncPageBridge()
+  const menu = new Menu()
+  item.menu.map(toNativeMenuItem).forEach(menuItem => menu.addItem(menuItem))
+  menu.open({ x: rect?.right ?? event.clientX, y: rect?.bottom ?? event.clientY })
 }
 
 const loadFrameUrl = async (url: string) => {
@@ -200,7 +333,7 @@ const mountConverted = async (file: File, title: string) => {
 const convertCurrentPage = async (afterTurn = false) => {
   const { createReadableWebpageTxtFile } = await import('@private-sources')
   const snapshot = await getSnapshot()
-  const currentUrl = snapshot?.url || (typeof frame?.getURL === 'function' ? frame.getURL() : frame?.getAttribute('src')) || props.url
+  const currentUrl = snapshot?.url || currentFrameUrl()
   const result = await createReadableWebpageTxtFile(currentUrl, snapshot || '')
   status.value = `${afterTurn ? '已翻页并转换' : '已转换'} ${result.page.text.length} 字`
   mode.value = 'reader'

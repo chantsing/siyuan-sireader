@@ -15,6 +15,7 @@ import { useStats } from '@/composables/useStats'
 import { READER_ICON_ID } from '@/utils/icon'
 import { isMobile } from '@/utils/mobile'
 import { useReaderState } from '@/core/epub/state'
+import { listPageScripts, registerPageScript, setPageScriptEnabled, unregisterPageScript } from '@/core/pageScripts'
 import DockShell from '@/components/ui/DockShell.vue'
 import BookSearch from '@/components/BookSearch.vue'
 import BookShelf from '@/components/BookShelf.vue'
@@ -53,7 +54,7 @@ const SettingsDock = defineComponent({
     const { canShowToc } = useReaderState()
     const activeTab = ref('bookshelf')
     const model = ref(props.modelValue)
-    const navItems = computed(() => (model.value.navItems?.length ? model.value.navItems : SETTINGS_TABS).filter((item: any) => item.id !== 'dictionary').sort((a: any, b: any) => a.order - b.order))
+    const navItems = computed(() => (model.value.navItems?.length ? model.value.navItems : SETTINGS_TABS).filter((item: any) => !['dictionary', 'weread'].includes(item.id)).sort((a: any, b: any) => a.order - b.order))
     const tabs = computed(() => navItems.value.filter((item: any) => item.enabled && (item.id === 'appearance' || item.id === 'bookshelf' || item.id === 'search' || canShowToc.value)).map((item: any) => ({ id: item.id, icon: item.icon, tip: props.i18n?.[item.tip] || item.tip })))
     const tooltipDir = computed(() => ({ left: 'e', right: 'w', top: 's', bottom: 'n' }[model.value.navPosition] || 'n'))
     const handleUpdate = (value: any) => {
@@ -147,7 +148,12 @@ const mountReader = async (el: HTMLElement, props: any) => {
 ;(window as any).sireader = {
   mountReader: async (el: HTMLElement, props: any) => await mountReader(el, props),
   openEpubTab: async (file: File, title?: string) => (await import('@/utils/bookOpen')).openReaderTab(plugin, title || file.name.replace(/\.[^.]+$/, ''), { file }, `${plugin.name}epub_reader`),
+  registerPageScript,
+  unregisterPageScript,
+  listPageScripts,
+  setPageScriptEnabled,
 }
+window.dispatchEvent(new CustomEvent('sireader:api-ready', { detail: (window as any).sireader }))
 
 // 注册标签页
 plugin.addTab({

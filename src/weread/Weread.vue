@@ -16,8 +16,6 @@
         <button class="wr-btn b3-tooltips b3-tooltips__sw" aria-label="测试 API Key 并保存到书源配置" :disabled="loading.test" @click="testKey"><svg><use xlink:href="#lucide-radio"/></svg>测试</button>
       </div>
     </div>
-    <div v-if="keyHint" class="wr-key-hint" :class="{ ok: keyHintOk }">{{ keyHint }}</div>
-
     <div class="wr-search">
       <input v-model.trim="keyword" class="b3-text-field" :placeholder="activeTab === 'shelf' ? '搜索当前书架' : '搜索微信读书书城'" @keyup.enter="handleSearch">
       <button class="wr-btn primary b3-tooltips b3-tooltips__s" :aria-label="activeTab === 'shelf' ? '筛选当前书架' : '按关键词搜索微信读书书城'" :disabled="activeTab !== 'shelf' && loading.search" @click="handleSearch"><svg><use xlink:href="#lucide-search"/></svg>{{ activeTab === 'shelf' ? '筛选' : '搜索' }}</button>
@@ -239,15 +237,14 @@
           </div>
           <div class="wr-detail-body">
             <template v-if="detailTab === 'chapters'">
-              <div class="wr-toc">
-                <div v-for="chapter in chapters" :key="chapter.chapterUid" class="b3-list-item" :style="{ '--file-toggle-width': `${Math.max(0, (chapter.level || 1) - 1) * 18 + 18}px` }" @click="goChapter(chapter)">
-                  <span :style="{ paddingLeft: `${Math.max(0, (chapter.level || 1) - 1) * 18}px` }" class="b3-list-item__toggle b3-list-item__toggle--hl fn__hidden"></span>
-                  <span class="b3-list-item__text ariaLabel" :aria-label="chapter.title">{{ chapter.title || '未命名章节' }}</span>
-                  <span class="fn__space"></span>
-                  <span class="wr-chapter-meta">{{ chapter.wordCount || 0 }} 字</span>
-                  <button class="b3-list-item__action b3-tooltips b3-tooltips__nw" aria-label="复制章节链接" @click.stop="exportChapter(chapter)"><svg><use xlink:href="#iconCopy"/></svg></button>
-                  <button class="b3-list-item__action b3-tooltips b3-tooltips__nw" aria-label="加载本章划线热度" @click.stop="loadUnderlines(chapter.chapterUid)"><svg><use xlink:href="#lucide-zap"/></svg></button>
-                </div>
+              <div class="wr-toc fn__flex-1 fn__flex-column file-tree sy__file bs-view bs-tree-view">
+                <div
+                  class="fn__flex-1 fn__hidescrollbar"
+                  @click="onChapterTocClick"
+                  @contextmenu.prevent.stop
+                  @mouseover="onChapterTocMouseover"
+                  v-html="chapterTreeHtml"
+                ></div>
               </div>
               <div v-if="underlines.length" class="wr-underlines">
                 <div class="wr-group-title"><span>章节热度</span><em>{{ underlines.length }}</em></div>
@@ -307,7 +304,7 @@ import { httpSourceManager } from '@/utils/HttpSources'
 import { exportBookLink, copyMark as copyMarkUtil } from '@/utils/copy'
 import MarkCard from '@/components/MarkCard.vue'
 import { callWereadAgentDirect, createWereadOnlineBookInfo, getWereadChapterReadUrl, getWereadReadUrl, testWereadAgentKey } from '@/weread/agent'
-import { createWereadReaderContext, getWereadChapterTitle, toWereadHighlightMark, toWereadReviewMark } from '@/weread/context'
+import { createWereadReaderContext, getWereadChapterTitle, getWereadChapterUid, toWereadHighlightMark, toWereadReviewMark } from '@/weread/context'
 
 defineProps<{ i18n: any }>()
 
@@ -326,8 +323,6 @@ const statModes = [{ id: 'weekly', label: '本周' }, { id: 'monthly', label: '�
 const activeTab = ref<(typeof tabs)[number]['id']>('shelf')
 const detailTab = ref<(typeof detailTabs)[number]['id']>('chapters')
 const apiKey = ref('')
-const keyHint = ref('')
-const keyHintOk = ref(false)
 const keyword = ref('')
 const statsMode = ref<(typeof statModes)[number]['id']>('monthly')
 const selectedBook = ref<any>(null)
@@ -353,6 +348,7 @@ const notebookSummary = ref<any>({})
 const introExpanded = ref(false)
 const shelfKeys = ref(new Set<string>())
 const expandedShelfGroups = ref(new Set<string>())
+const expandedChapters = ref(new Set<string>())
 const leftWidth = ref(Number(localStorage.getItem('sireader.weread.leftWidth') || 360))
 const raw = reactive<Record<string, any>>({})
 const loading = reactive({ all: false, search: false, shelf: false, recommend: false, detail: false, test: false, stats: false, extra: false })
@@ -409,6 +405,77 @@ const reviewMarks = computed(() => [
   ...mineReviews.value.map((item, index) => toWereadReviewMark(item, index, '我的想法', selectedBookId.value, chapters.value)),
   ...publicReviews.value.map((item, index) => toWereadReviewMark(item, index, '公开想法', selectedBookId.value, chapters.value)),
 ].filter(item => item.text || item.note))
+type ChapterNode = { id: string; level: number; chapter: any; children: ChapterNode[] }
+const chapterUidOf = (chapter: any, index = 0) => getWereadChapterUid(chapter) || Number(chapter?.chapterUid || chapter?.chapterId || chapter?.uid || index + 1)
+const chapterTree = computed(() => {
+  const roots: ChapterNode[] = []
+  const stack: ChapterNode[] = []
+  chapters.value.forEach((chapter, index) => {
+    const level = Math.max(1, Number(chapter?.level || 1))
+    const node = { id: String(chapterUidOf(chapter, index)), level, chapter, children: [] as ChapterNode[] }
+    while (stack.length && stack[stack.length - 1].level >= level) stack.pop()
+    ;(stack[stack.length - 1]?.children || roots).push(node)
+    stack.push(node)
+  })
+  return roots
+})
+const isChapterOpen = (node: ChapterNode) => expandedChapters.value.has(node.id)
+const toggleChapter = (node: ChapterNode) => {
+  const next = new Set(expandedChapters.value)
+  next.has(node.id) ? next.delete(node.id) : next.add(node.id)
+  expandedChapters.value = next
+}
+const esc = (value: unknown) => {
+  const div = document.createElement('div')
+  div.textContent = String(value ?? '')
+  return div.innerHTML
+}
+const chapterNodeById = computed(() => {
+  const map = new Map<string, ChapterNode>()
+  const walk = (nodes: ChapterNode[]) => nodes.forEach(node => {
+    map.set(node.id, node)
+    walk(node.children)
+  })
+  walk(chapterTree.value)
+  return map
+})
+const renderChapterNode = (node: ChapterNode) => {
+  const hasChild = !!node.children.length
+  const isOpen = isChapterOpen(node)
+  const title = esc(node.chapter?.title || '未命名章节')
+  const wordCount = Number(node.chapter?.wordCount || 0)
+  const row = `<li class="b3-list-item b3-list-item--hide-action" style="--file-toggle-width:${(node.level - 1) * 18 + 18}px" data-id="${esc(node.id)}" data-has-child="${hasChild}" data-type="${node.level > 1 ? 'navigation-file' : 'navigation-root'}" data-toc-item>
+    <span style="padding-left:${(node.level - 1) * 18}px" class="b3-list-item__toggle b3-list-item__toggle--hl${hasChild ? '' : ' fn__hidden'}" data-act="toggle">
+      ${hasChild ? `<svg class="b3-list-item__arrow${isOpen ? ' b3-list-item__arrow--open' : ''}"><use xlink:href="#iconRight"></use></svg>` : ''}
+    </span>
+    <span class="b3-list-item__text ariaLabel" aria-label="${title}" data-act="open" data-toc-item>${title}</span>
+    <span class="fn__space"></span>
+    <span class="wr-chapter-meta">${wordCount} 字</span>
+    <span class="b3-list-item__action b3-tooltips b3-tooltips__nw" aria-label="复制章节链接" data-act="copy"><svg><use xlink:href="#iconCopy"></use></svg></span>
+    <span class="b3-list-item__action b3-tooltips b3-tooltips__nw" aria-label="加载本章划线热度" data-act="heat"><svg><use xlink:href="#lucide-zap"></use></svg></span>
+  </li>`
+  const children = hasChild && isOpen ? `<ul class="b3-list b3-list--background bs-tree-children">${node.children.map(renderChapterNode).join('')}</ul>` : ''
+  return row + children
+}
+const chapterTreeHtml = computed(() => chapterTree.value.length
+  ? `<ul class="b3-list b3-list--background">${chapterTree.value.map(renderChapterNode).join('')}</ul>`
+  : '<ul class="b3-list b3-list--background"><li class="b3-list-item"><span class="b3-list-item__toggle fn__hidden"></span><span class="b3-list-item__text ft__secondary">暂无目录</span></li></ul>')
+const onChapterTocClick = (event: MouseEvent) => {
+  event.stopPropagation()
+  const target = event.target as HTMLElement
+  const item = target.closest<HTMLElement>('.b3-list-item[data-id]')
+  if (!item) return
+  const node = chapterNodeById.value.get(item.dataset.id || '')
+  if (!node) return
+  const act = target.closest<HTMLElement>('[data-act]')?.dataset.act || 'open'
+  if (act === 'toggle') return toggleChapter(node)
+  if (act === 'copy') return void exportChapter(node.chapter)
+  if (act === 'heat') return void loadUnderlines(chapterUidOf(node.chapter))
+  goChapter(node.chapter)
+}
+const onChapterTocMouseover = (event: MouseEvent) => {
+  if ((event.target as HTMLElement).hasAttribute('data-toc-item')) event.stopPropagation()
+}
 
 const infoOf = (book: any) => book?.bookInfo || book?.book || book?.albumInfo || book || {}
 const bookIdOf = (book: any) => String(infoOf(book)?.bookId || book?.bookId || infoOf(book)?.albumId || book?.albumId || '')
@@ -455,7 +522,7 @@ const callApi = async (apiName: string, params: Record<string, unknown> = {}, ra
 }
 const sourceBook = (book: any) => ({ ...infoOf(book), bookId: bookIdOf(book) })
 const readUrlOfBook = (book: any) => getWereadReadUrl(bookIdOf(book))
-const chapterUrlOf = (chapter: any) => getWereadChapterReadUrl(selectedBookId.value, chapter?.chapterUid || chapter?.uid || chapter?.chapterId || 0)
+const chapterUrlOf = (chapter: any) => getWereadChapterReadUrl(selectedBookId.value, chapterUidOf(chapter))
 const isInShelf = (book: any) => shelfKeys.value.has(readUrlOfBook(book))
 const exportCtx = (clipboard = true) => ({
   bookUrl: readUrlOfBook(selectedBook.value),
@@ -500,24 +567,17 @@ const validateKey = () => {
 }
 const testKey = async () => {
   const invalid = validateKey()
-  keyHintOk.value = false
   if (invalid) {
-    keyHint.value = invalid
     return showMessage(invalid, 3000, 'error')
   }
   loading.test = true
-  keyHint.value = '正在测试微信读书 API Key...'
   try {
     const result = await testWereadAgentKey(apiKey.value)
     await saveKey()
     raw.test = result
-    keyHintOk.value = true
-    keyHint.value = `测试通过，已保存：${result.title || '三体'}`
-    showMessage(keyHint.value, 2200, 'info')
+    showMessage('测试通过，API Key 已保存', 2200, 'info')
   } catch (error: any) {
-    keyHintOk.value = false
-    keyHint.value = `测试失败：${error.message || '未知错误'}${error.errcode ? `（${error.errcode}）` : ''}`
-    showMessage(keyHint.value, 4200, 'error')
+    showMessage(`测试失败：${error.message || '未知错误'}${error.errcode ? `（${error.errcode}）` : ''}`, 4200, 'error')
   } finally {
     loading.test = false
   }
@@ -602,6 +662,7 @@ const selectBook = async (book: any) => {
   selectedBook.value = sourceBook(book)
   detailTab.value = 'chapters'
   introExpanded.value = false
+  expandedChapters.value = new Set()
   readReviews.value = []
   underlines.value = []
   const bookId = bookIdOf(book)
@@ -721,7 +782,6 @@ onUnmounted(() => localStorage.setItem('sireader.weread.leftWidth', String(leftW
 .wr-mark{width:32px;height:32px;border-radius:7px;display:flex;align-items:center;justify-content:center;overflow:hidden;svg{width:100%;height:100%;display:block}}
 .wr-key{display:flex;align-items:center;gap:6px;min-width:220px;max-width:430px;flex:1;justify-content:flex-end;input{max-width:280px;background:var(--b3-theme-background)}}
 .wr-search{padding:0 1px;input{flex:1;min-width:0;background:var(--b3-theme-background);border-color:var(--wr-line)}}
-.wr-key-hint{flex:0 0 auto;padding:6px 9px;border:1px solid color-mix(in srgb,var(--b3-theme-error) 34%,transparent);border-radius:8px;background:color-mix(in srgb,var(--b3-theme-error) 9%,var(--b3-theme-background));color:var(--b3-theme-error);font-size:11px;line-height:1.35;&.ok{border-color:color-mix(in srgb,var(--wr-green) 42%,var(--wr-line));background:var(--wr-mint);color:var(--wr-green-dark)}}
 .wr-btn,.wr-icon,.wr-tabs button,.wr-subtabs button{border:1px solid var(--wr-line);background:var(--wr-panel);color:var(--b3-theme-on-surface);border-radius:7px;cursor:pointer;box-sizing:border-box;transition:background .15s,border-color .15s,color .15s,transform .15s}
 .wr-btn{height:30px;padding:0 10px;display:inline-flex;align-items:center;justify-content:center;gap:5px;font-size:12px;white-space:nowrap;svg{width:14px;height:14px}.primary,&.primary{background:var(--wr-green);border-color:var(--wr-green);color:var(--b3-theme-on-primary,#fff)}.done{opacity:.78}.active{border-color:color-mix(in srgb,var(--wr-green) 48%,var(--wr-line));color:var(--wr-green-dark);background:var(--wr-mint)}&:hover:not(:disabled){transform:translateY(-1px);border-color:color-mix(in srgb,var(--wr-green) 55%,var(--wr-line))}}
 .wr-btn:disabled{opacity:.55;cursor:not-allowed}
@@ -758,7 +818,10 @@ onUnmounted(() => localStorage.setItem('sireader.weread.leftWidth', String(leftW
 .wr-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;span{min-width:0;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--b3-theme-on-surface-variant);padding:6px 7px;border-radius:6px;background:var(--wr-soft);border:1px solid var(--wr-line);line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}em{flex:0 0 auto;font-style:normal;color:var(--wr-green-dark);font-weight:700}}
 .wr-subtabs{display:flex;gap:5px;padding:3px;border-radius:8px;background:var(--wr-soft);border:1px solid var(--wr-line);button{height:27px;flex:1;font-size:11px;min-width:0;border-color:transparent;background:transparent;em{font-style:normal;margin-left:3px;opacity:.66}&.active{background:var(--b3-theme-background);color:var(--wr-green-dark);border-color:color-mix(in srgb,var(--wr-green) 35%,var(--wr-line))}}}
 .wr-detail-body{min-height:260px;flex:1 1 320px;overflow:auto;display:flex;flex-direction:column;gap:7px}
-.wr-toc{display:flex;flex-direction:column;border:1px solid var(--wr-line);border-radius:8px;overflow:hidden;background:var(--b3-theme-background);.b3-list-item{min-height:29px;padding-right:4px;border-bottom:1px solid color-mix(in srgb,var(--wr-line) 72%,transparent);cursor:pointer}.b3-list-item:last-child{border-bottom:0}.b3-list-item__text{font-size:12px}.b3-list-item__action{border:0;background:transparent;cursor:pointer}.wr-chapter-meta{font-size:10px;color:var(--b3-theme-on-surface-variant);white-space:nowrap}}
+.wr-toc{min-height:0;height:100%;padding:0;box-sizing:border-box;.b3-list-item{cursor:pointer}.b3-list-item__action{border:0;background:transparent;cursor:pointer}.wr-chapter-meta{font-size:10px;color:var(--b3-theme-on-surface-variant);white-space:nowrap}}
+.wr-toc.bs-tree-view{padding-top:8px}
+.wr-toc :deep(.b3-list){padding:0;margin:0}
+.wr-toc :deep(.bs-tree-children){padding:0;margin:0}
 .wr-underlines{display:flex;flex-direction:column;gap:6px}.wr-heat{display:grid;grid-template-columns:70px minmax(0,1fr) 56px;gap:6px;align-items:center;font-size:11px;color:var(--b3-theme-on-surface-variant);i{height:7px;border-radius:999px;background:var(--wr-soft);overflow:hidden}b{display:block;height:100%;background:var(--wr-green)}}
 .sr-card{--sr-gap:4px;--sr-line:19px;display:flex;gap:var(--sr-gap);padding:6px;margin-bottom:6px;border:1px solid color-mix(in srgb,var(--b3-border-color) 92%,transparent);border-radius:8px;background:linear-gradient(180deg,color-mix(in srgb,var(--b3-theme-background) 96%,white),var(--b3-theme-background));color:var(--b3-theme-on-surface);position:relative;transform:none!important;box-shadow:none!important;transition:border-color .15s;&:hover{border-color:var(--b3-theme-primary)}&.is-hot{border-left:3px solid var(--b3-theme-primary)}}
 .sr-head-actions{display:flex;align-items:center;gap:4px;flex-shrink:0;button{display:flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;border:none;background:transparent;border-radius:4px;line-height:1;cursor:pointer;color:var(--b3-theme-on-surface-variant)}button:hover{background:var(--b3-list-hover);color:var(--b3-theme-primary)}svg{width:14px;height:14px}}

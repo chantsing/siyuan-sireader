@@ -240,8 +240,10 @@ class BookshelfManager {
     this.progressTimer=setTimeout(async()=>{
       try{
         if(pdfViewer){
-          const loc=pdfViewer.getLocation?.(),p=loc?.page||pdfViewer.getCurrentPage?.()||1
-          return this.updateProgress(url,Math.round((loc?.fraction||0)*100),p,`#page-${p}`)
+          const loc=pdfViewer.getLocation?.(),p=loc?.page||pdfViewer.getCurrentPage?.()||1,total=loc?.total||pdfViewer.getPageCount?.()||0
+          let progress=Math.round((loc?.fraction||0)*100)
+          if(total&&p<total&&progress>=100)progress=99
+          return this.updateProgress(url,progress,p,`#page-${p}`)
         }
         const loc=reader?.getLocation?.()??view?.lastLocation;if(!loc)return
         loc.fraction!==undefined&&this.updateProgress(url,Math.round(loc.fraction*100),loc.index,loc.cfi)

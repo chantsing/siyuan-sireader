@@ -1,9 +1,9 @@
-import { callWereadAgentDirect, getWereadChapterReadUrl, getWereadReadUrl } from './agent'
+import { callWereadAgentDirect, getWereadChapterReadUrl, getWereadReadUrl, wereadBookIdOf } from './agent'
 
 type CallApi = (apiName: string, params?: Record<string, unknown>, rawKey?: string) => Promise<any>
 
 const infoOf = (book: any) => book?.bookInfo || book?.book || book || {}
-const bookIdOf = (book: any) => String(infoOf(book)?.bookId || book?.bookId || '')
+const bookIdOf = (book: any) => String(infoOf(book)?.bookId || book?.bookId || book?.privateData?.bookId || book?.identifier || '')
 const titleOf = (book: any) => String(infoOf(book)?.title || infoOf(book)?.name || '微信读书')
 const authorOf = (book: any) => String(infoOf(book)?.author || infoOf(book)?.authorName || '')
 export const getWereadChapterUid = (item: any) => Number(item?.chapterUid || item?.chapterId || item?.uid || 0)
@@ -193,4 +193,9 @@ export const createWereadReaderContext = (options: { book: any; apiKey: string; 
       view.lastLocation = null
     },
   }
+}
+
+export const createWereadContextFromSource = (book: any, source?: { auth?: { password?: string; cookies?: string } } | null) => {
+  const apiKey = source?.auth?.password?.trim() || source?.auth?.cookies?.trim() || ''
+  return apiKey ? createWereadReaderContext({ book: { ...book, bookId: wereadBookIdOf(book) }, apiKey }) : undefined
 }

@@ -264,6 +264,7 @@ const openSelectionPanel = async (selection: MarkSelection, anchor: SelectionAnc
   const sameSelection = state.selection && getSelectionKey(state.selection) === getSelectionKey(selection)
   Object.assign(state, { selection, x: anchor.x, y: anchor.y, panelY: anchor.panelY || 0 })
   if (props.quickMarkMode) return await handleCopy(props.quickMarkColor, props.quickMarkStyle)
+  if ((window as any).__sireader_settings?.translation?.autoOnSelection && state.panel !== 'translate' && (!props.can || props.can('translate'))) return setPanelState('translate', { currentMark: null, isEditing: false, text: selection.text, note: '', tags: '' })
   if (sameSelection && state.showMenu && !state.showPanel && !state.showSendMenu) return
   closePanel()
   Object.assign(state, { currentMark: null, isEditing: false, text: selection.text, note: '', tags: '', showMenu: true, showSendMenu: false })
@@ -305,6 +306,7 @@ const openMarkAtRect = (mark: Mark, rect: DOMRect, doc: Document, center = true,
 }
 const checkSelection = (doc?: Document, e?: Event) => {
   if (props.quickMarkMode && e && !['mouseup', 'touchend'].includes(e.type)) return
+  if ((window as any).__sireader_settings?.translation?.autoOnSelection && e && !['mouseup', 'touchend'].includes(e.type)) return
   const process = (targetDoc: Document, index?: number) => {
     const selection = targetDoc.defaultView?.getSelection()
     if (!selection || selection.isCollapsed || !selection.toString().trim()) {

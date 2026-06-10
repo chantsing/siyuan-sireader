@@ -130,13 +130,17 @@
               <div class="sr-detail-main">
                 <h2>{{ detailBook.name }}</h2>
                 <p class="sr-meta">{{ detailBook.author }}</p>
-                <div v-if="detailTags.length || detailBook.extension || detailBook.fileSize || detailBook.language || detailBook.year" class="sr-tags">
+                <div v-if="detailTags.length || detailBook.extension || detailBook.fileSize || detailBook.language || detailBook.year || detailBook.publisher || detailBook.pages || detailBook.identifier" class="sr-tags">
                   <span v-for="tag in detailTags" :key="tag">{{ tag }}</span>
                   <span v-if="detailBook.extension">{{ detailBook.extension }}</span>
                   <span v-if="detailBook.fileSize">{{ detailBook.fileSize }}</span>
                   <span v-if="detailBook.language">{{ detailBook.language }}</span>
                   <span v-if="detailBook.year">{{ detailBook.year }}</span>
+                  <span v-if="detailBook.publisher">{{ detailBook.publisher }}</span>
+                  <span v-if="detailBook.pages">{{ detailBook.pages }}</span>
+                  <span v-if="detailBook.identifier">{{ detailBook.identifier }}</span>
                 </div>
+                <div v-if="detailStats.length" class="sr-tags"><span v-for="tag in detailStats" :key="tag">{{ tag }}</span></div>
               </div>
             </div>
             <label v-if="detailBook.intro" class="sr-form-item">
@@ -167,6 +171,8 @@ import { bookshelfManager } from '@/core/bookshelf'
 import { addOnlineBookToShelf, importRemoteBook } from '@/composables/useBookImport'
 import { useLicense } from '@/composables/useLicense'
 import { httpSourceManager, type HttpSourceConfig } from '@/utils/HttpSources'
+import { loadWereadHttpBookDetail, toWereadHttpBook } from '@/weread/agent'
+import { createWereadContextFromSource } from '@/weread/context'
 import { createPrivateSearchAccess } from '@private-sources'
 import DockShell from './ui/DockShell.vue'
 
@@ -185,12 +191,16 @@ const enabledSources = computed(() => allSources.value.filter(source => source.e
 const privateSearchAccess = createPrivateSearchAccess({ reload: () => loadHttpSources() })
 const visibleSources = computed(() => allSources.value.filter(source => privateSearchAccess.isSourceVisible(source)))
 const visibleEnabledSources = computed(() => enabledSources.value.filter(source => privateSearchAccess.isSourceVisible(source)))
-const detailTags = computed(() => detailBook.value?.kind?.split(',').filter(Boolean) || [])
+const detailTags = computed(() => detailBook.value?.kind?.split(/[，,\/]/).map((item: string) => item.trim()).filter(Boolean) || [])
 const formNeedsDomains = computed(() => form.type === 'anna' || !!editingSource.value?.domains?.length)
 const formNeedsAuth = computed(() => !!editingSource.value?.requiresAuth || !!editingSource.value?.auth)
 const selectedSourceName = computed(() => !selectedSource.value ? i18n.value.allSources || TEXT.allSources : allSources.value.find(source => source.id === selectedSource.value)?.name || '')
 const toolbarMenuAction = computed(() => ({ id: 'source', icon: '#lucide-sliders-horizontal', label: selectedSourceName.value }))
 const toolbarActions = computed(() => [{ id: 'manage', icon: '#lucide-settings-2', label: TEXT.manageTitle }])
+const detailStats = computed(() => {
+  const stats = detailBook.value?.privateData?.stats
+  return stats ? [stats.progress ? `进度 ${stats.progress}%` : '', stats.chapters ? `目录 ${stats.chapters}` : '', stats.marks ? `我的划线 ${stats.marks}` : '', stats.bestMarks ? `热门划线 ${stats.bestMarks}` : '', stats.reviews ? `想法 ${stats.reviews}` : ''].filter(Boolean) : []
+})
 
 const normalizeExtensions = (value: string) => Array.from(new Set(value.split(/[,，\s]+/).map(item => item.trim().toLowerCase()).filter(Boolean)))
 const sourceDesc = (source: HttpSourceConfig) => isWebSource(source) ? '网页书源' : source.type === 'custom' ? TEXT.sourceDescCustom : source.domains?.length ? TEXT.sourceDescAnna : TEXT.sourceDescBuiltin
@@ -260,14 +270,17 @@ const checkInShelf = async (book: any) => {
     ...downloadShelfKeys(book).map(key => bookshelfManager.hasBook(key).then(has => has && shelfBooks.value.add(key))),
   ])
 }
-const showBook = (book: any) => {
-  detailBook.value = book
+const normalizeDetailBook = (book: any) => book?.sourceId === 'weread-agent' ? toWereadHttpBook(book.privateData?.raw || book, { id: book.sourceId, name: book.sourceName, url: book.sourceUrl }) || book : book
+const showBook = async (book: any) => {
+  detailBook.value = normalizeDetailBook(book)
+  if (book?.sourceId === 'weread-agent') detailBook.value = await loadWereadHttpBookDetail(detailBook.value, httpSourceManager.getSource('weread-agent'))
 }
 
 const openLink = (url: string) => window.open(props.i18n.name === '思源阅读' ? url.replace('annas-archive.org', 'zh.annas-archive.org') : url, '_blank')
 const openReadOnline = (book: any) => {
   if (!book?.readUrl) return
-  window.dispatchEvent(new CustomEvent('sireader:open-online-reader', { detail: { title: book.name || TEXT.readOnline, url: book.readUrl } }))
+  const context = book.sourceId === 'weread-agent' ? createWereadContextFromSource(book, httpSourceManager.getSource('weread-agent')) : undefined
+  window.dispatchEvent(new CustomEvent('sireader:open-online-reader', { detail: { title: book.name || TEXT.readOnline, url: book.readUrl, context } }))
 }
 const loadHttpSources = async () => {
   await httpSourceManager.init()

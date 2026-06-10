@@ -32,7 +32,7 @@
       <div class="tr-select">
         <button @click.stop="showEng = !showEng">{{ engines[eng].name }}</button>
         <div v-if="showEng" class="tr-menu tr-menu-up" @click.stop>
-          <div v-for="(engine, key) in engines" :key="key" :class="['tr-item', { on: eng === key }]" @click="eng = key; showEng = false; translate()">{{ engine.name }}</div>
+          <div v-for="(engine, key) in engines" :key="key" :class="['tr-item', { on: eng === key }]" @click="setEngine(key)">{{ engine.name }}</div>
         </div>
       </div>
     </div>
@@ -49,7 +49,12 @@ const langs = [['zh-CN', '中文'], ['en', 'English'], ['ja', '日本語'], ['ko
 const engines = translators
 const src = ref('auto')
 const tgt = ref('zh-CN')
-const eng = ref<keyof typeof translators>('azure')
+type EngineKey = keyof typeof translators
+const getEngine = (): EngineKey => {
+  const key = (window as any).__sireader_settings?.translation?.engine as EngineKey
+  return key && engines[key] ? key : 'azure'
+}
+const eng = ref<EngineKey>(getEngine())
 const result = ref('')
 const loading = ref(false)
 const showSrc = ref(false)
@@ -65,8 +70,19 @@ const translate = async () => {
   catch { result.value = '' }
   finally { loading.value = false }
 }
+const setEngine = async (key: string | number) => {
+  eng.value = key as EngineKey
+  showEng.value = false
+  const settings = (window as any).__sireader_settings
+  if (settings) {
+    settings.translation = { ...(settings.translation || {}), engine: eng.value }
+    ;(await import('@/composables/useSetting')).settingsManager.save(settings).catch(() => {})
+  }
+  translate()
+}
 
 watch(() => props.text, () => {
+  eng.value = getEngine()
   showSrc.value = false
   showTgt.value = false
   showEng.value = false

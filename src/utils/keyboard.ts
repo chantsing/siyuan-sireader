@@ -19,9 +19,8 @@ export interface KeyboardHandlers {
   handlePdfShapeTool?: () => void
 }
 
-export const createKeyboardHandler = (handlers: KeyboardHandlers, isPdfMode: () => boolean, isActive?: () => boolean) => {
+export const createKeyboardHandler = (handlers: KeyboardHandlers, isPdfMode: () => boolean) => {
   return (e: KeyboardEvent) => {
-    if (isActive && !isActive()) return
     const t = e.target as HTMLElement
     if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return
 
