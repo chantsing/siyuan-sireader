@@ -197,7 +197,7 @@ export const searchDocs = async (k: string) => {
   const keyword = k.trim()
   return keyword ? await apiSearchDocs(keyword).catch(() => []) : []
 }
-export const createDocInfo = (d: any) => ({ id: d.id, name: d.hpath || d.hPath || d.name || d.content || '无标题', path: d.path || '', notebook: d.box || '' })
+export const createDocInfo = (d: any) => ({ id: d.id || d.blockID || d.rootID || d.path?.split('/').pop()?.replace('.sy', '') || '', name: d.hpath || d.hPath || d.name || d.content || '无标题', path: d.path || '', notebook: d.box || d.notebook || '' })
 export const useDocSearch = () => { const s = ref({ input: '', results: [] as any[], show: false }); return { state: s, search: async () => { const k = s.value.input.trim(); if (k) (s.value.results = await searchDocs(k), s.value.show = true) }, select: (d: any, f: (doc: DocInfo) => void) => (f(createDocInfo(d)), s.value = { input: '', results: [], show: false }), reset: () => s.value = { input: '', results: [], show: false } } }
 export const useNotebooks = () => { const n = ref<{ id: string; name: string; icon: string }[]>([]); return { notebooks: n, load: async () => !n.value.length && (n.value = await loadNotebooks()) } }
 export const useConfirm = (f: () => void) => { const c = ref(false); return { confirming: c, handleClick: () => c.value ? (f(), c.value = false) : (c.value = true) } }

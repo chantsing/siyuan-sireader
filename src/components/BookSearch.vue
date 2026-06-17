@@ -199,7 +199,7 @@ const toolbarMenuAction = computed(() => ({ id: 'source', icon: '#lucide-sliders
 const toolbarActions = computed(() => [{ id: 'manage', icon: '#lucide-settings-2', label: TEXT.manageTitle }])
 const detailStats = computed(() => {
   const stats = detailBook.value?.privateData?.stats
-  return stats ? [stats.progress ? `进度 ${stats.progress}%` : '', stats.chapters ? `目录 ${stats.chapters}` : '', stats.marks ? `我的划线 ${stats.marks}` : '', stats.bestMarks ? `热门划线 ${stats.bestMarks}` : '', stats.reviews ? `想法 ${stats.reviews}` : ''].filter(Boolean) : []
+  return stats ? [stats.progress ? `进度 ${stats.progress}%` : '', stats.chapters ? `目录 ${stats.chapters}` : '', stats.marks ? `我的划线 ${stats.marks}` : '', stats.bookmarks ? `书签 ${stats.bookmarks}` : '', stats.bestMarks ? `热门划线 ${stats.bestMarks}` : '', stats.reviews ? `想法 ${stats.reviews}` : ''].filter(Boolean) : []
 })
 
 const normalizeExtensions = (value: string) => Array.from(new Set(value.split(/[,，\s]+/).map(item => item.trim().toLowerCase()).filter(Boolean)))

@@ -1,5 +1,5 @@
 import initSqlJs from 'sql.js/dist/sql-asm.js'
-import { loadData, readBookRecord as loadBookRecord, removeBookRecord, saveData, type BookRecord, writeBookRecord as saveBookRecord } from './bookStore'
+import { loadDataState, readBookRecord as loadBookRecord, removeBookRecord, saveData, type BookRecord, writeBookRecord as saveBookRecord } from './bookStore'
 
 const BOOK_INDEX_KEY = 'bookshelf.json'
 const SETTINGS_KEY = 'settings.json'
@@ -115,18 +115,34 @@ export class ReaderDatabase {
   private settingsDirty = false
   private dailyDirty = false
 
+  private async readStorageState() {
+    const [booksRaw, settingsRaw, dailyRaw] = await Promise.all([
+      loadDataState<any>(BOOK_INDEX_KEY, { retries: 2 }),
+      loadDataState<any>(SETTINGS_KEY, { retries: 2 }),
+      loadDataState<any>(DAILY_READING_KEY, { retries: 2 }),
+    ])
+    return { booksRaw, settingsRaw, dailyRaw }
+  }
+
+  private async loadStorage() {
+    const { booksRaw, settingsRaw, dailyRaw } = await this.readStorageState()
+    this.books = parseJson(booksRaw.value, {})
+    this.settings = parseJson(settingsRaw.value, {})
+    this.dailyReading = parseJson(dailyRaw.value, {})
+  }
+
+  private async reloadStorage() {
+    const { booksRaw, settingsRaw, dailyRaw } = await this.readStorageState()
+    if (booksRaw.found) this.books = parseJson(booksRaw.value, {})
+    if (settingsRaw.found) this.settings = parseJson(settingsRaw.value, {})
+    if (dailyRaw.found) this.dailyReading = parseJson(dailyRaw.value, {})
+  }
+
   async init() {
     if (this.ready) return
     if (this.initPromise) return this.initPromise
     this.initPromise = (async () => {
-      const [booksRaw, settingsRaw, dailyRaw] = await Promise.all([
-        loadData<any>(BOOK_INDEX_KEY),
-        loadData<any>(SETTINGS_KEY),
-        loadData<any>(DAILY_READING_KEY),
-      ])
-      this.books = parseJson(booksRaw, {})
-      this.settings = parseJson(settingsRaw, {})
-      this.dailyReading = parseJson(dailyRaw, {})
+      await this.loadStorage()
       this.ready = true
     })()
     try {
@@ -135,6 +151,12 @@ export class ReaderDatabase {
       this.initPromise = null
       throw error
     }
+  }
+
+  async reload() {
+    await this.cleanup()
+    await this.reloadStorage()
+    this.ready = true
   }
 
   private async persist() {

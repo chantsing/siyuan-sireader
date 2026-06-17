@@ -3,7 +3,7 @@
     <ReaderSplash v-if="showOpeningSplash" ref="readerSplashRef" :book-info="props.bookInfo" :file-name="props.file?.name" status="opening" />
     <div v-if="loading" class="reader-loading"><div class="spinner"></div><div>{{ error || '加载中...' }}</div></div>
     <div v-if="showToc&&!loading" class="reader-overlay" @click="closePanels"/>
-    <PdfToolbar v-if="isPdfMode&&pdfViewer&&pdfSearcher" :viewer="pdfViewer" :searcher="pdfSearcher" :file-size="pdfSource?.byteLength" :fixed="pdfToolbarFixed" :settings="currentSettings?.pdfToolbar" @update-settings="handlePdfToolbarSettingsUpdate" @print="handlePrint" @download="handleDownload" @export-images="handleExportImages" @ink-toggle="handleInkToggle" @ink-color="handleInkColor" @ink-width="handleInkWidth" @ink-undo="handleInkUndo" @ink-clear="handleInkClear" @ink-eraser="handleInkEraser" @shape-toggle="handleShapeToggle" @shape-type="handleShapeType" @shape-color="handleShapeColor" @shape-width="handleShapeWidth" @shape-filled="handleShapeFilled" @shape-undo="handleShapeUndo" @shape-clear="handleShapeClear"/>
+    <PdfToolbar v-if="isPdfMode&&pdfViewer&&pdfSearcher" :viewer="pdfViewer" :searcher="pdfSearcher" :file-size="pdfSource?.byteLength" :fixed="pdfToolbarFixed" :settings="currentSettings?.pdfToolbar" @update-settings="handlePdfToolbarSettingsUpdate" @print="handlePrint" @download="handleDownload" @export-images="handleExportImages" @ocr-page="handleOcrPage" @ink-toggle="handleInkToggle" @ink-color="handleInkColor" @ink-width="handleInkWidth" @ink-undo="handleInkUndo" @ink-clear="handleInkClear" @ink-eraser="handleInkEraser" @shape-toggle="handleShapeToggle" @shape-type="handleShapeType" @shape-color="handleShapeColor" @shape-width="handleShapeWidth" @shape-filled="handleShapeFilled" @shape-undo="handleShapeUndo" @shape-clear="handleShapeClear"/>
     <div ref="viewerContainerRef" class="viewer-container" :class="{'has-pdf-toolbar':isPdfMode,'has-fixed-toolbar':isPdfMode&&pdfToolbarFixed}"></div>
     <Transition name="toc-popup">
       <div v-if="showToc&&!loading" class="reader-toc-popup" @click.stop>
@@ -386,6 +386,17 @@ const getPdfBlob=async()=>pdfBinarySource||(pdfSourceUrl?(pdfBinarySource=await 
 const handlePrint=async()=>{const blob=await getPdfBlob();blob&&(await import('@/core/pdf')).printPDF(blob)}
 const handleDownload=async()=>{const blob=await getPdfBlob();blob&&(await import('@/core/pdf')).downloadPDF(blob,props.file?.name||props.bookInfo?.title||'document.pdf')}
 const handleExportImages=async()=>pdfViewer.value&&(await import('@/core/pdf')).exportAsImages(pdfViewer.value.getPDF()!)
+const handleOcrPage=async()=>{
+  if(!pdfViewer.value)return
+  const page=pdfViewer.value.getCurrentPage()
+  try{
+    const { ocrPdfPage } = await import('@/core/pdf')
+    const result=await ocrPdfPage(pdfViewer.value.getPDF()!,{bookKey:getBookUrl(),page,rotation:pdfViewer.value.getRotation(),scale:2})
+    showMessage(`OCR 完成：第 ${page} 页，${result.text.trim().length} 字`,2000,'success')
+  }catch(e:any){
+    showMessage(e?.message||'OCR 失败',2500,'error')
+  }
+}
 const handleInkToggle=async(a:boolean)=>setPdfToolActive('ink',a)
 const handleInkColor=async(c:string)=>inkToolManager?.setConfig({color:c})
 const handleInkWidth=async(w:number)=>inkToolManager?.setConfig({width:w})
@@ -459,10 +470,8 @@ onUnmounted(async()=>{const{bookshelfManager}=await import('@/core/bookshelf');b
 .reader-loading{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:16px;color:var(--b3-theme-on-background);z-index:10;pointer-events:none}
 .spinner{width:48px;height:48px;border:4px solid var(--b3-theme-primary-lighter);border-top-color:var(--b3-theme-primary);border-radius:50%;animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
-.reader-toolbar-group{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:8px;z-index:1001;&:hover>*{opacity:1}}
+.reader-toolbar-group{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:8px;z-index:1001;opacity:var(--toolbar-opacity);transition:opacity .2s;&:hover{opacity:1}}
 .reader-toolbar,.reader-panel{display:flex;align-items:center;gap:2px;padding:3px 4px;background:var(--b3-theme-surface);border:1px solid var(--b3-border-color);border-radius:6px;box-shadow:0 2px 8px #0002;transition:opacity .2s}
-.reader-toolbar{opacity:var(--toolbar-opacity)}
-.reader-toolbar.is-visible,.reader-panel{opacity:1}
 .toolbar-btn{width:28px;height:28px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;border-radius:4px;cursor:pointer;transition:all .15s;svg{width:14px;height:14px}&:hover{background:var(--b3-list-hover)}&.active{background:var(--b3-theme-primary-lightest);color:var(--b3-theme-primary)}}
 .toolbar-mark-btn{position:relative;.mark-indicator{position:absolute;right:2px;bottom:2px;width:8px;height:8px;border-radius:50%;border:1.5px solid var(--b3-theme-surface);box-shadow:0 0 0 .5px var(--b3-border-color)}}
 .toolbar-page-nav{display:flex;align-items:center;gap:3px;padding:0 4px;font-size:11px;color:var(--b3-theme-on-surface)}

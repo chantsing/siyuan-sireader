@@ -10,6 +10,7 @@ import { PRESET_THEMES } from '@/composables/useSetting'
 let pdfjsLib: any = null
 const PDF_RUNTIME_PATH = '/stage/protyle/js/pdf/pdf.min.mjs'
 const PDF_WORKER_PATH = '/stage/protyle/js/pdf/pdf.worker.min.mjs'
+const requestIdle = (cb: () => void) => (window.requestIdleCallback || window.requestAnimationFrame)(cb)
 const loadPDFJS = async () => {
   if (pdfjsLib) return pdfjsLib
   pdfjsLib = await import(PDF_RUNTIME_PATH)
@@ -116,7 +117,7 @@ export class PDFViewer {
     for (let i = 1; i <= n; i++) {
       const d = document.createElement('div')
       d.className = 'pdf-page', d.dataset.page = String(i)
-      d.style.cssText = `position:relative;margin:20px auto;width:${vp.width}px;height:${vp.height}px;--scale-factor:${vp.scale};box-shadow:0 2px 8px #0003`
+      d.style.cssText = `position:relative;margin:20px auto;width:${vp.width}px;height:${vp.height}px;--scale-factor:${vp.scale};box-shadow:0 2px 8px #0003;user-select:text;-webkit-user-select:text`
       frag.appendChild(d)
     }
     this.container.appendChild(frag)
@@ -216,8 +217,8 @@ export class PDFViewer {
       c.style.cssText = `width:${vp.width}px;height:${vp.height}px${filters ? `;filter:${filters}` : ''}`, w.appendChild(c)
     } catch (e: any) { console.error(`[PDF] 渲染失败 ${n}:`, e); w.style.background = '#fee'; w.innerHTML = `<div style="padding:20px;color:#c00">渲染失败</div>`; return }
     
-    requestIdleCallback(() => this.renderTextLayer(w, p, vp, pdfjs, ver))
-    requestIdleCallback(async () => {
+    requestIdle(() => this.renderTextLayer(w, p, vp, pdfjs, ver))
+    requestIdle(async () => {
       if (ver !== this.renderVersion || !w.isConnected) return
       const ann = document.createElement('div')
       ann.className = 'pdf-annotation-layer', ann.style.cssText = 'position:absolute;inset:0;pointer-events:none', w.appendChild(ann)
@@ -231,7 +232,7 @@ export class PDFViewer {
     if (ver !== this.renderVersion || !w.isConnected) return
     const d = document.createElement('div')
     d.className = 'textLayer'
-    d.style.cssText = 'position:absolute;inset:0;line-height:1'
+    d.style.cssText = 'position:absolute;inset:0;line-height:1;user-select:text;-webkit-user-select:text'
     w.appendChild(d)
     const finish = () => requestAnimationFrame(() => { if (ver === this.renderVersion && d.isConnected) import('./annotation').then(({ initTextLayerOptimization }) => initTextLayerOptimization(d)) })
     try {

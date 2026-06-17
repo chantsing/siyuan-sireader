@@ -401,3 +401,12 @@ const READER_ICONS = `
 
 export const registerReaderIcons = (plugin: Plugin) => plugin.addIcons(READER_ICONS)
 
+export const mountReaderIconSprite = (root: HTMLElement) => {
+  const sprite = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  sprite.setAttribute('aria-hidden', 'true')
+  sprite.setAttribute('data-sireader-icons', 'true')
+  sprite.setAttribute('style', 'position:absolute;width:0;height:0;overflow:hidden')
+  sprite.innerHTML = `<defs>${READER_ICONS}</defs>`
+  root.prepend(sprite)
+}
+

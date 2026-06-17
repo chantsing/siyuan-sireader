@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, and AI translation. Flashcard features have moved to the standalone Sideck plugin.
 
-[![Version](https://img.shields.io/badge/version-1.3.8-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-1.3.9-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,40 @@ Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, and A
 ---
 
 ## 📝 Latest Updates
+
+### v1.3.9 (2026.6.17)
+
+### Added
+
+- Added Ctrl/Cmd + Enter shortcut to save annotation notes, reducing manual clicks after editing.
+- Added WeRead bookmark sync, statistics, and detail-page display; bookmarks can be clicked from book details to jump [#35](https://github.com/mm-o/siyuan-sireader/issues/35).
+- Added WeRead popular-highlight public-thought loading and display entry, allowing direct viewing of public thoughts related to a single popular highlight.
+
+### Improved
+
+- Added an experimental PDF OCR entry that directly calls SiYuan OCR to recognize the current page.
+- Improved reader bottom toolbar opacity logic so annotation mode, search panel, and quick annotation all consistently follow the opacity setting.
+- Improved annotation note editor by returning to SiYuan's native multiline text field and removing redundant fallback and extra interactions.
+- Improved membership authorization cache logic for server, mobile, and browser clients by using persistent authorization snapshots and low-frequency remote validation, reducing dependence on local crypto capability and remote verification frequency.
+- Improved WeRead bookshelf, notes, and book-detail data merging so the same book consistently shows highlights, thoughts, bookmarks, progress, and bookshelf status.
+- Improved overall WeRead layout with full-width responsive multi-column lists, entering the split detail view only after selecting a book.
+- Improved WeRead bookshelf list view to align with the local bookshelf list in cover ratio, information hierarchy, tag colors, hover buttons, and compact layout.
+- Improved WeRead book detail page with more complete cover, title, rating, category, publisher, publication information, and reading-data display.
+- Improved WeRead table-of-contents tree to align with the local bookshelf tree structure, restoring indent guides, separated rows, expand/collapse, and prevention of SiYuan document-tree recognition.
+- Improved scrolling for WeRead table of contents, bookmarks, highlights, and other detail content so the detail area can scroll as a whole, reducing content being constrained near the bottom.
+- Improved WeRead page tooltip direction so tooltips consistently expand left and avoid being blocked by the right edge.
+
+### Fixed
+
+- Fixed server web client opening PDFs unable to directly select text until switching to the hand tool and back to text selection.
+- Fixed web client icons and some UI occasionally disappearing until refresh.
+- Fixed bookshelf possibly being empty on first open after SiYuan sync, or becoming empty again after browser refresh.
+- Fixed search results being visible when binding bookshelf documents but possibly not selectable after clicking.
+- Fixed mobile client being unable to open EPUB.
+- Fixed annotation note box paste possibly closing the window.
+- Fixed WeRead reading progress not being remembered; opening WeRead web reading now prioritizes jumping to saved progress.
+- Fixed WeRead popular-highlight public thoughts showing as loaded but not visible on the page.
+- Fixed being unable to return to the table of contents after loading WeRead chapter highlight popularity.
 
 ### v1.3.8 (2026.6.10)
 

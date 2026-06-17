@@ -2,8 +2,8 @@
 import { createApp } from 'vue'
 import App from './App.vue'
 import { initDictModule } from '@/utils/dictionary'
-import { registerReaderIcons } from '@/utils/icon'
-import { initMobile, isMobile } from '@/utils/mobile'
+import { mountReaderIconSprite, registerReaderIcons } from '@/utils/icon'
+import { initMobile } from '@/utils/mobile'
 import { setPlugin } from '@/utils/copy'
 
 let plugin: Plugin | null = null
@@ -20,14 +20,15 @@ export const setOpenSettingHandler = (handler: (openLicense?: boolean) => void) 
 export function init(p: Plugin) {
   usePlugin(p)
   setPlugin(p)
-  registerReaderIcons(p)
   initDictModule(p)
   initMobile(p)
 
   const div = document.createElement('div')
   div.id = p.name
   div.className = 'plugin-sample-vite-vue-app'
+  mountReaderIconSprite(div)
   document.body.appendChild(div)
+  registerReaderIcons(p)
   app = createApp(App)
   app.mount(div)
 }

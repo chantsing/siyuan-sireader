@@ -117,7 +117,7 @@
           <template v-else-if="modalMode === 'edit'">
             <div v-if="panelCover" class="sr-panel-cover"><img :src="panelCover" /></div>
 
-            <label v-for="f in editFields" :key="f.key" class="sr-form-item">
+            <div v-for="f in editFields" :key="f.key" class="sr-form-item">
               <span class="ft__secondary">{{ f.label }}</span>
               <input v-if="f.type === 'text'" v-model="editForm[f.key]" class="b3-text-field sr-input" :placeholder="f.placeholder" />
               <select v-else-if="f.type === 'select'" v-model="editForm[f.key]" class="b3-select sr-select"><option v-for="opt in f.options" :key="opt.value" :value="opt.value">{{ opt.label }}</option></select>
@@ -131,10 +131,10 @@
               </template>
               <template v-else-if="f.key === 'bind'">
                 <input v-if="!editForm.bindDocId" v-model="bindSearch" class="b3-text-field sr-input" placeholder="搜索文档..." @input="searchBindDoc" />
-                <div v-if="bindResults.length" class="sr-chips"><button v-for="d in bindResults.slice(0, 8)" :key="d.id || d.path || d.blockID || d.rootID" class="sr-chip" type="button" @click.stop="selectBindDoc(d)">{{ d.hPath || d.content || d.name || '无标题' }}</button></div>
+                <div v-if="bindResults.length" class="sr-chips"><button v-for="d in bindResults.slice(0, 8)" :key="getDocId(d) || d.path" class="sr-chip" type="button" @click.stop="selectBindDoc(d)">{{ d.hPath || d.content || d.name || '无标题' }}</button></div>
                 <div v-else-if="editForm.bindDocId"><div class="sr-chips sr-chips-stack"><span class="sr-chip is-active">{{ editForm.bindDocName }}</span><button class="sr-chip is-danger" type="button" @click="unbindDoc">解绑</button></div></div>
               </template>
-            </label>
+            </div>
 
             <div class="sr-row sr-actions-end sr-section-line"><button class="b3-button b3-button--outline" type="button" @click="closePopups">取消</button><button class="b3-button b3-button--outline" type="button" @click="saveEdit">保存</button></div>
           </template>
@@ -188,6 +188,8 @@ const cloudInput = ref(''), cloudKeyword = ref(''), cloudLoading = ref(false), c
 const { items: importItems, draft: importDraft, parsing: importParsing, importing, progress: importProgress, hasItems: importHasItems, selectedCount: importSelectedCount, allSelected: importAllSelected, reset: resetImport, pickAndParseFiles, parseDraftUrls, importSelected } = useBookImport()
 
 let settingsLoaded = false
+let reloading = false
+let lastReloadAt = 0
 const settingTimers = new Map<string, number>()
 const saveUiSetting = (key: string, value: any, delay = 180) => {
   const prev = settingTimers.get(key)
@@ -313,6 +315,20 @@ const loadBooks = async (group = currentGroup.value) => {
   syncSelection()
 }
 const refresh = () => Promise.all([loadBooks(), refreshGroups()])
+const reloadStorage = async (force = false) => {
+  const now = Date.now()
+  if (reloading || (!force && now - lastReloadAt < 3000)) return
+  reloading = true
+  try {
+    await bookshelfManager.reload()
+    lastReloadAt = now
+    await Promise.all([loadBooks(), refreshGroups()])
+    allTags.value = await bookshelfManager.getAllTags()
+  }
+  finally {
+    reloading = false
+  }
+}
 const showResult = (success: number, failed: number, ok: string, fail = `成功${success}本，失败${failed}本`, time = 2000) => showMessage(failed ? fail : ok, time, failed ? 'error' : 'info')
 const ratingItems = (handler: (rating: number) => void | Promise<void>, clearLabel = '清除') => [1, 2, 3, 4, 5].map(value => ({ icon: 'iconStar', label: `${'★'.repeat(value)} ${value}星`, click: () => handler(value) })).concat([{ type: 'separator' }, { icon: 'iconClose', label: clearLabel, click: () => handler(0) }])
 const statusItems = (handler: (status: BookStatus) => void | Promise<void>) => STATUS_OPTIONS.map(([k, v]) => ({ icon: MENU_ICONS.status[k], label: v, click: () => handler(k) }))
@@ -486,14 +502,18 @@ const saveEdit = async () => {
 }
 const toggleTag = (tag: string) => { const tags = parseList(editForm.value.tags); toggleArrayItem(tags, tag); editForm.value.tags = tags.join(', ') }
 const toggleGroup = (gid: string) => toggleArrayItem(editForm.value.groups, gid)
-const searchBindDoc = async () => { const q = bindSearch.value.trim(); if (!q) return bindResults.value = []; try { bindResults.value = await searchDocs(q) } catch { bindResults.value = [] } }
-const selectBindDoc = (d: any) => { const id = d.id || d.blockID || d.rootID || d.path?.split('/').pop()?.replace('.sy', ''); if (!id) return showMessage('文档 ID 无效', 2000, 'error'); Object.assign(editForm.value, { bindDocId: id, bindDocName: d.hPath || d.content || d.name || '无标题' }); bindSearch.value = ''; bindResults.value = [] }
+const getDocId = (d: any) => d.id || d.blockID || d.rootID || d.path?.split('/').pop()?.replace('.sy', '') || ''
+const searchBindDoc = async () => { const q = bindSearch.value.trim(); bindResults.value = q ? await searchDocs(q).catch(() => []) : [] }
+const selectBindDoc = (d: any) => { const id = getDocId(d); if (!id) return showMessage('文档 ID 无效', 2000, 'error'); Object.assign(editForm.value, { bindDocId: id, bindDocName: d.hPath || d.content || d.name || '无标题' }); bindSearch.value = ''; bindResults.value = [] }
 const unbindDoc = () => { editForm.value.bindDocId = ''; editForm.value.bindDocName = '' }
 const detailFields = computed(() => !panelBook.value || modalMode.value !== 'detail' ? [] : buildDetailFields(panelBook.value, groups.value))
 
-const handleBookshelfUpdated = () => { void Promise.all([loadBooks(), refreshGroups()]) }
+const handleBookshelfUpdated = () => { void reloadStorage() }
+const handleStorageChanged = () => { void reloadStorage(true) }
+const handleVisibilityChange = () => { if (!document.hidden) void reloadStorage() }
 onMounted(async () => {
-  await bookshelfManager.init()
+  await bookshelfManager.reload()
+  lastReloadAt = Date.now()
   const [, allTagsData] = await Promise.all([refreshGroups(), bookshelfManager.getAllTags()])
   allTags.value = allTagsData
   sortType.value = await bookshelfManager.getSetting('bookshelf_sortType', 'time')
@@ -502,8 +522,10 @@ onMounted(async () => {
   settingsLoaded = true
   await loadBooks()
   window.addEventListener('sireader:bookshelf-updated', handleBookshelfUpdated)
+  window.addEventListener('sireader:storage-changed', handleStorageChanged)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
 })
-onUnmounted(() => { window.removeEventListener('sireader:bookshelf-updated', handleBookshelfUpdated); settingTimers.forEach(timer => clearTimeout(timer)); settingTimers.clear() })
+onUnmounted(() => { window.removeEventListener('sireader:bookshelf-updated', handleBookshelfUpdated); window.removeEventListener('sireader:storage-changed', handleStorageChanged); document.removeEventListener('visibilitychange', handleVisibilityChange); settingTimers.forEach(timer => clearTimeout(timer)); settingTimers.clear() })
 watch([filterStatus, filterRating, filterFormats, filterTags, sortType, sortReverse], loadBooks, { deep: true })
 watch(sortType, v => settingsLoaded && saveUiSetting('bookshelf_sortType', v))
 watch(sortReverse, v => settingsLoaded && saveUiSetting('bookshelf_sortReverse', v))

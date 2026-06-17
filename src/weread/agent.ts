@@ -261,11 +261,12 @@ export const loadWereadHttpBookDetail = async (book: HttpBook, source?: Pick<Htt
   const apiKey = source ? apiKeyOf(source as HttpSourceConfig) : ''
   const bookId = wereadBookIdOf(book)
   if (!apiKey || !bookId) return book
-  const [infoRes, chapterRes, progressRes, markRes, mineRes, bestRes, publicRes] = await Promise.allSettled([
+  const [infoRes, chapterRes, progressRes, markRes, bookmarkRes, mineRes, bestRes, publicRes] = await Promise.allSettled([
     callWereadAgentDirect(apiKey, '/book/info', { bookId }),
     callWereadAgentDirect(apiKey, '/book/chapterinfo', { bookId }),
     callWereadAgentDirect(apiKey, '/book/getprogress', { bookId }),
     callWereadAgentDirect(apiKey, '/book/bookmarklist', { bookId }),
+    callWereadAgentDirect(apiKey, '/book/bookmarklist', { bookId, type: 0 }),
     callWereadAgentDirect(apiKey, '/review/list/mine', { bookid: bookId, count: 20 }),
     callWereadAgentDirect(apiKey, '/book/bestbookmarks', { bookId, chapterUid: 0 }),
     callWereadAgentDirect(apiKey, '/review/list', { bookId, count: 10 }),
@@ -274,6 +275,7 @@ export const loadWereadHttpBookDetail = async (book: HttpBook, source?: Pick<Htt
   const chapters = chapterRes.status === 'fulfilled' ? chapterRes.value?.chapters || [] : []
   const progress = progressRes.status === 'fulfilled' ? progressRes.value : {}
   const marks = markRes.status === 'fulfilled' ? markRes.value?.updated || [] : []
+  const bookmarks = bookmarkRes.status === 'fulfilled' ? bookmarkRes.value?.updated || [] : []
   const mineReviews = mineRes.status === 'fulfilled' ? mineRes.value?.reviews || [] : []
   const best = bestRes.status === 'fulfilled' ? bestRes.value : {}
   const publicReviews = publicRes.status === 'fulfilled' ? publicRes.value?.reviews || [] : []
@@ -291,6 +293,7 @@ export const loadWereadHttpBookDetail = async (book: HttpBook, source?: Pick<Htt
         progress: Number(progress?.book?.progress || progress?.progress || 0),
         chapters: chapters.length,
         marks: marks.length,
+        bookmarks: bookmarks.length,
         reviews: mineReviews.length + publicReviews.length,
         bestMarks: Number(best?.totalCount || best?.total || best?.items?.length || 0),
         readingTime: Number(progress?.book?.readingTime || 0),

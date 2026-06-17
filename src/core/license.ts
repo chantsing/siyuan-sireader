@@ -1,5 +1,8 @@
 /**
- * 思阅授权管理 - 极简版
+ * SiReader license manager.
+ *
+ * The client keeps a persistent license snapshot and only talks to the
+ * license service on activation, recovery, or low-frequency verification.
  */
 
 import { loadData, removeData, saveData } from './bookStore'
@@ -13,59 +16,60 @@ export interface LicenseInfo {
   features: string[]
   daysRemaining?: number
   lastVerified?: number
+  nextVerifyAt?: number
+  serverTime?: number
+  signature?: string
+  signatureAlg?: string
+  licenseVersion?: number
 }
 
-// 功能权限定义（未定义=免费）
+type StoredLicense = {
+  version?: number
+  license?: LicenseInfo
+  encrypted?: string
+  lastReport?: string
+}
+
+// Undefined features are free.
 const PAID_FEATURES: Record<string, string> = {
-  // 阅读功能
-  'reader-theme': 'trial',      // 主题配色
-  'reader-stats': 'trial',      // 阅读统计
-  
-  // 标注功能
-  'quick-mark': 'annual',       // 快速标注
-  'quick-send': 'annual',       // 快捷发送
-  
-  // 书架功能
-  'folder-group': 'trial',      // 文件夹分组
-  'smart-group': 'monthly',     // 智能分组
-  'book-edit': 'trial',         // 书籍编辑
-  'batch-operation': 'trial',   // 批量操作
-  'doc-assets': 'monthly',      // 文档assets同步
-  
-  // 搜书功能
-  'book-search': 'monthly',     // 在线搜书
-  
-  // TTS功能
-  'tts': 'trial',               // TTS基础功能
-  'tts-online': 'monthly',      // 在线语音
-  
-  // 翻译功能
-  'translate': 'trial',         // 翻译功能
-  
-  // 词典功能
-  'dict-offline': 'trial',      // 离线词典
-  'dict-advanced': 'trial',     // 高级词典（剑桥/海词/汉字/词语/汉典）
-  // 同步功能
-  'siyuan-sync': 'monthly',     // 思源同步
+  'reader-theme': 'trial',
+  'reader-stats': 'trial',
+  'quick-mark': 'annual',
+  'quick-send': 'annual',
+  'folder-group': 'trial',
+  'smart-group': 'monthly',
+  'book-edit': 'trial',
+  'batch-operation': 'trial',
+  'doc-assets': 'monthly',
+  'book-search': 'monthly',
+  'tts': 'trial',
+  'tts-online': 'monthly',
+  'translate': 'trial',
+  'dict-offline': 'trial',
+  'dict-advanced': 'trial',
+  'siyuan-sync': 'monthly',
 }
 
-// 会员等级
 const LEVELS: Record<string, number> = { free: 0, trial: 1, monthly: 2, annual: 3, lifetime: 4 }
 
 export class LicenseManager {
   private static readonly API = 'https://api.745201.xyz'
   private static readonly KEY = 'sireader_license'
-  private static readonly REFRESH_DAYS = 7
+  private static readonly STORAGE_VERSION = 2
+  private static readonly VERIFY_INTERVAL_DAYS = 30
+  private static readonly EXPIRING_REFRESH_DAYS = 3
+  private static readonly FAILED_RETRY_HOURS = 12
+  private static verifyPromise: Promise<boolean> | null = null
+  private static legacyRecoveryPromise: Promise<{ license: LicenseInfo, lastReport: string } | null> | null = null
+  private static lastLegacyRecoveryAt = 0
 
-  // 检查权限
   static can(feature: string, license: LicenseInfo | null): boolean {
     const required = PAID_FEATURES[feature]
     if (!required) return true
-    if (!license || (license.expiresAt > 0 && license.expiresAt < Date.now())) return false
-    return LEVELS[license.type] >= LEVELS[required]
+    if (!license || !this.isUsable(license)) return false
+    return (LEVELS[license.type] || 0) >= (LEVELS[required] || 0)
   }
 
-  // 激活
   static async activate(code: string) {
     const user = await this.getUser()
     if (!user) return { success: false, error: '请先登录思源账号' }
@@ -80,7 +84,7 @@ export class LicenseManager {
       const data = await res.json()
       if (!res.ok) return { success: false, error: data.error || '激活失败' }
 
-      const license: LicenseInfo = { userId: user.userId, userName: user.userName, ...data, lastVerified: Date.now() }
+      const license = this.normalizeLicense({ userId: user.userId, userName: user.userName, ...data }, Date.now())
       await this.save(license, new Date().toDateString())
 
       return { success: true, message: '激活成功', license: this.enrich(license) }
@@ -90,7 +94,6 @@ export class LicenseManager {
     }
   }
 
-  // 恢复授权（复用refresh逻辑）
   static async recover() {
     const user = await this.getUser()
     if (!user) return { success: false, error: '请先登录思源账号' }
@@ -105,7 +108,7 @@ export class LicenseManager {
       const data = await res.json()
       if (!res.ok) return { success: false, error: data.error || '未找到授权信息' }
 
-      const license: LicenseInfo = { userId: user.userId, userName: user.userName, ...data, lastVerified: Date.now() }
+      const license = this.normalizeLicense({ userId: user.userId, userName: user.userName, ...data }, Date.now())
       await this.save(license, new Date().toDateString())
 
       return { success: true, message: '恢复成功', license: this.enrich(license) }
@@ -115,8 +118,54 @@ export class LicenseManager {
     }
   }
 
-  // 刷新
+  static async verify(): Promise<boolean> {
+    const data = await this.load()
+    if (!data) return false
+
+    const { license, lastReport } = data
+    if (!this.needRefresh(license)) return this.isUsable(license)
+    if (await this.refresh(license)) return true
+
+    if (this.isUsable(license)) {
+      license.nextVerifyAt = Date.now() + this.FAILED_RETRY_HOURS * 3600000
+      await this.save(license, lastReport)
+      return true
+    }
+    return false
+  }
+
+  static async getUserAvatar(): Promise<string | null> {
+    const cachedUser = (globalThis as any)?.window?.siyuan?.user
+    if (cachedUser?.userAvatarURL) return cachedUser.userAvatarURL
+    try {
+      const res = await fetch('/api/setting/getCloudUser', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      })
+
+      if (res.ok) {
+        const { code, data } = await res.json()
+        return (code === 0 && data?.userAvatarURL) ? data.userAvatarURL : null
+      }
+      return null
+    }
+    catch { return null }
+  }
+
+  static async clear() {
+    await removeData(this.KEY)
+  }
+
+  static async getLicense(): Promise<LicenseInfo | null> {
+    const data = await this.load()
+    if (!data) return null
+    this.queueVerifyIfNeeded(data.license)
+    return this.enrich(data.license)
+  }
+
   private static async refresh(license: LicenseInfo): Promise<boolean> {
+    const now = Date.now()
     try {
       const res = await fetch(`${this.API}/verify`, {
         method: 'POST',
@@ -127,81 +176,110 @@ export class LicenseManager {
       const data = await res.json()
       if (!res.ok) return false
 
-      Object.assign(license, data, { lastVerified: Date.now() })
+      Object.assign(license, this.normalizeLicense({ ...license, ...data }, now))
       await this.save(license, new Date().toDateString())
       return true
     }
     catch { return false }
   }
 
-  // 验证
-  static async verify(): Promise<boolean> {
-    const data = await this.load()
-    if (!data) return false
-
-    const { license, lastReport } = data
-    if (this.needRefresh(license)) return await this.refresh(license)
-
-    this.reportDaily(license, lastReport).catch(() => {})
-    return true
-  }
-
-  // 每日上报
-  private static async reportDaily(license: LicenseInfo, lastReport: string) {
-    if (lastReport !== new Date().toDateString()) await this.refresh(license)
-  }
-
-  // 需要刷新
   private static needRefresh(license: LicenseInfo): boolean {
-    return (license.expiresAt > 0 && license.expiresAt < Date.now()) || 
-           (license.lastVerified && Date.now() - license.lastVerified > this.REFRESH_DAYS * 86400000)
+    const now = Date.now()
+    if (!license.lastVerified) return true
+    if (license.nextVerifyAt && now >= license.nextVerifyAt) return true
+    if (license.expiresAt > 0 && license.expiresAt <= now + this.EXPIRING_REFRESH_DAYS * 86400000) return true
+    return now - license.lastVerified > this.VERIFY_INTERVAL_DAYS * 86400000
   }
 
-  // 保存（加密）
   private static async save(license: LicenseInfo, lastReport: string) {
-    const key = await this.deriveKey(license.userId)
-    const iv = crypto.getRandomValues(new Uint8Array(12))
-    const encrypted = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
-      key,
-      new TextEncoder().encode(JSON.stringify(license))
-    )
-
-    const combined = new Uint8Array(iv.length + encrypted.byteLength)
-    combined.set(iv)
-    combined.set(new Uint8Array(encrypted), iv.length)
-
     await saveData(this.KEY, {
-      encrypted: btoa(String.fromCharCode(...combined)),
+      version: this.STORAGE_VERSION,
+      license: this.normalizeLicense(license),
       lastReport
     })
   }
 
-  // 读取（解密）
   private static async load(): Promise<{ license: LicenseInfo, lastReport: string } | null> {
     try {
-      const data = await loadData<{ encrypted?: string, lastReport?: string }>(this.KEY)
-      if (!data?.encrypted) return null
+      const data = await loadData<StoredLicense>(this.KEY)
+      if (!data) return null
+      if (data.version === this.STORAGE_VERSION && data.license) {
+        return { license: this.normalizeLicense(data.license), lastReport: data.lastReport || '' }
+      }
 
-      const user = await this.getUser()
-      if (!user) return null
-
-      const key = await this.deriveKey(user.userId)
-      const combined = Uint8Array.from(atob(data.encrypted), c => c.charCodeAt(0))
-      const decrypted = await crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv: combined.slice(0, 12) },
-        key,
-        combined.slice(12)
-      )
-
-      return { license: JSON.parse(new TextDecoder().decode(decrypted)), lastReport: data.lastReport || '' }
+      let legacy: { license: LicenseInfo, lastReport: string } | null = null
+      try {
+        legacy = await this.loadLegacy(data)
+      }
+      catch {}
+      if (legacy) await this.save(legacy.license, legacy.lastReport)
+      if (legacy) return legacy
+      if (data.encrypted) return await this.recoverLegacy(data.lastReport || '')
+      return null
     }
     catch { return null }
   }
 
-  // 派生密钥
+  private static async loadLegacy(data: StoredLicense): Promise<{ license: LicenseInfo, lastReport: string } | null> {
+    if (!data.encrypted) return null
+    const user = await this.getUser()
+    if (!user) return null
+
+    const key = await this.deriveKey(user.userId)
+    const combined = this.base64ToBytes(data.encrypted)
+    const decrypted = await this.getCrypto().subtle.decrypt(
+      { name: 'AES-GCM', iv: combined.slice(0, 12) },
+      key,
+      combined.slice(12)
+    )
+
+    return { license: this.normalizeLicense(JSON.parse(new TextDecoder().decode(decrypted))), lastReport: data.lastReport || '' }
+  }
+
+  private static async recoverLegacy(lastReport: string): Promise<{ license: LicenseInfo, lastReport: string } | null> {
+    if (this.legacyRecoveryPromise) return await this.legacyRecoveryPromise
+    if (Date.now() - this.lastLegacyRecoveryAt < this.FAILED_RETRY_HOURS * 3600000) return null
+    this.lastLegacyRecoveryAt = Date.now()
+    this.legacyRecoveryPromise = this.doRecoverLegacy(lastReport).finally(() => {
+      this.legacyRecoveryPromise = null
+    })
+    return await this.legacyRecoveryPromise
+  }
+
+  private static async doRecoverLegacy(lastReport: string): Promise<{ license: LicenseInfo, lastReport: string } | null> {
+    const user = await this.getUser()
+    if (!user) return null
+
+    try {
+      const res = await fetch(`${this.API}/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.userId })
+      })
+
+      const data = await res.json()
+      if (!res.ok) return null
+
+      const license = this.normalizeLicense({ userId: user.userId, userName: user.userName, ...data }, Date.now())
+      await this.save(license, lastReport)
+      return { license, lastReport }
+    }
+    catch {
+      return null
+    }
+  }
+
+  private static queueVerifyIfNeeded(license: LicenseInfo) {
+    if (!this.needRefresh(license) || this.verifyPromise) return
+    this.verifyPromise = this.verify().finally(() => {
+      this.verifyPromise = null
+    })
+  }
+
   private static async deriveKey(userId: string) {
-    const keyMaterial = await crypto.subtle.importKey(
+    const subtle = this.getCrypto().subtle
+    if (!subtle) throw new Error('WebCrypto is unavailable')
+    const keyMaterial = await subtle.importKey(
       'raw',
       new TextEncoder().encode(userId.slice(0, 32).padEnd(32, '0')),
       'PBKDF2',
@@ -209,7 +287,7 @@ export class LicenseManager {
       ['deriveKey']
     )
 
-    return crypto.subtle.deriveKey(
+    return subtle.deriveKey(
       { name: 'PBKDF2', salt: new TextEncoder().encode('sireader-license'), iterations: 100000, hash: 'SHA-256' },
       keyMaterial,
       { name: 'AES-GCM', length: 256 },
@@ -218,8 +296,9 @@ export class LicenseManager {
     )
   }
 
-  // 获取用户
   private static async getUser(): Promise<{ userId: string, userName: string } | null> {
+    const cached = this.getCachedUser()
+    if (cached) return cached
     try {
       const res = await fetch('/api/setting/getCloudUser', {
         method: 'POST',
@@ -238,25 +317,6 @@ export class LicenseManager {
     catch { return null }
   }
 
-  // 获取头像
-  static async getUserAvatar(): Promise<string | null> {
-    try {
-      const res = await fetch('/api/setting/getCloudUser', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({})
-      })
-
-      if (res.ok) {
-        const { code, data } = await res.json()
-        return (code === 0 && data?.userAvatarURL) ? data.userAvatarURL : null
-      }
-      return null
-    }
-    catch { return null }
-  }
-
-  // 丰富信息
   private static enrich(license: LicenseInfo): LicenseInfo {
     if (license.expiresAt > 0) {
       license.daysRemaining = Math.max(0, Math.floor((license.expiresAt - Date.now()) / 86400000))
@@ -264,15 +324,28 @@ export class LicenseManager {
     return license
   }
 
-  // 清除
-  static async clear() {
-    await removeData(this.KEY)
+  private static normalizeLicense(license: LicenseInfo, verifiedAt?: number): LicenseInfo {
+    const lastVerified = verifiedAt || license.lastVerified || Date.now()
+    const nextVerifyAt = license.nextVerifyAt || lastVerified + this.VERIFY_INTERVAL_DAYS * 86400000
+    return { ...license, lastVerified, nextVerifyAt }
   }
 
-  // 获取许可证
-  static async getLicense(): Promise<LicenseInfo | null> {
-    await this.verify()
-    const data = await this.load()
-    return data ? this.enrich(data.license) : null
+  private static isUsable(license: LicenseInfo): boolean {
+    return license.expiresAt <= 0 || license.expiresAt > Date.now()
+  }
+
+  private static getCrypto(): Crypto {
+    const c = (globalThis as any).crypto
+    if (!c?.getRandomValues) throw new Error('Crypto is unavailable')
+    return c as Crypto
+  }
+
+  private static base64ToBytes(value: string) {
+    return Uint8Array.from(atob(value), c => c.charCodeAt(0))
+  }
+
+  private static getCachedUser(): { userId: string, userName: string } | null {
+    const user = (globalThis as any)?.window?.siyuan?.user
+    return user?.userId ? { userId: user.userId, userName: user.userName || user.userNickname || user.userId } : null
   }
 }

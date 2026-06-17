@@ -13,6 +13,7 @@ export default class PluginSample extends Plugin {
   public isInWindow: boolean
   public platform: SyFrontendTypes
   public readonly version = version
+  private readonly handleStorageChanged = () => window.dispatchEvent(new CustomEvent('sireader:storage-changed'))
 
   async onload() {
     const frontEnd = getFrontend()
@@ -33,7 +34,14 @@ export default class PluginSample extends Plugin {
 
     usePlugin(this)
     init(this)
+    this.eventBus.on('sync-end', this.handleStorageChanged)
+    this.eventBus.on('ws-main', this.handleWsMain)
     this.addHotkeys()
+  }
+
+  private handleWsMain = (event: CustomEvent) => {
+    const cmd = event.detail?.cmd
+    if (cmd === 'syncMergeResult' || cmd === 'reloadPlugin') this.handleStorageChanged()
   }
 
   private addHotkeys() {
@@ -64,6 +72,8 @@ export default class PluginSample extends Plugin {
   }
 
   async onunload() {
+    this.eventBus.off('sync-end', this.handleStorageChanged)
+    this.eventBus.off('ws-main', this.handleWsMain)
     destroy()
   }
 

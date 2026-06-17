@@ -103,6 +103,7 @@
             <button class="toolbar-menu-item" aria-label="打印 PDF" @click.stop="print"><svg><use xlink:href="#iconFile" /></svg><span>打印</span></button>
             <button class="toolbar-menu-item" aria-label="下载 PDF" @click.stop="download"><svg><use xlink:href="#iconDownload" /></svg><span>下载</span></button>
             <button class="toolbar-menu-item" aria-label="导出图片" @click.stop="exportImages"><svg><use xlink:href="#iconImage" /></svg><span>导图</span></button>
+            <button class="toolbar-menu-item" aria-label="OCR 当前页" @click.stop="ocrPage"><svg><use xlink:href="#iconSearch" /></svg><span>OCR</span></button>
             <button class="toolbar-menu-item" aria-label="查看 PDF 信息" @click.stop="openMetadata"><svg><use xlink:href="#iconInfo" /></svg><span>信息</span></button>
           </div>
         </Transition>
@@ -156,7 +157,7 @@ type LegacyZoomMode = ZoomMode | 'fit-page'
 
 const props = defineProps<{ viewer: PDFViewer; searcher: PDFSearch; fileSize?: number; fixed?: boolean; settings?: PdfToolbarSettings }>()
 const emit = defineEmits([
-  'print', 'download', 'export-images',
+  'print', 'download', 'export-images', 'ocr-page',
   'ink-toggle', 'ink-color', 'ink-width', 'ink-undo', 'ink-clear', 'ink-save', 'ink-eraser',
   'shape-toggle', 'shape-type', 'shape-color', 'shape-width', 'shape-filled', 'shape-undo', 'shape-clear',
   'update-settings'
@@ -288,8 +289,8 @@ const applyContainerMode = (mode: ToolMode) => {
   Object.assign(container.style, { cursor: mode === 'text' ? 'text' : 'default', userSelect: mode === 'text' ? 'text' : 'none' })
 }
 
-const applyMode = (mode: ToolMode, syncPopup = true) => {
-  if (toolMode.value === mode) return
+const applyMode = (mode: ToolMode, syncPopup = true, force = false) => {
+  if (!force && toolMode.value === mode) return
   toolMode.value = mode
   applyContainerMode(mode)
   emitMode(mode)
@@ -330,7 +331,7 @@ const applyToolbarSettings = async (settings?: PdfToolbarSettings) => {
   shapeFilled.value = settings.shapeFilled
   pos.value = { ...settings.position }
   if (shapeType.value === 'textbox') shapeFilled.value = false
-  applyMode(settings.toolMode)
+  applyMode(settings.toolMode, true, true)
   const zoomChanged = prevZoomMode !== zoomMode.value || (zoomMode.value === 'custom' && prevScale !== settings.scale)
   if (zoomChanged) {
     if (zoomMode.value === 'fit-width') await props.viewer.fitWidth()
@@ -405,6 +406,7 @@ const shapeClear = () => emit('shape-clear')
 const print = () => { closePopup(); emit('print') }
 const download = () => { closePopup(); emit('download') }
 const exportImages = () => { closePopup(); emit('export-images') }
+const ocrPage = () => { closePopup(); emit('ocr-page') }
 const openMetadata = () => { closePopup(); showMetadata.value = true }
 
 const startDrag = (e: MouseEvent) => {

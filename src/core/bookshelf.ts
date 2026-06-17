@@ -172,6 +172,7 @@ class BookshelfManager {
   }
   
   async init() { if (this.ready) return; await getDatabase(); this.ready = true; }
+  async reload() { await (await getDatabase()).reload(); this.ready = true; }
   async getBooks() { return this.useDb(db => db.getBooks()); }
   async getBook(url: string) { return this.useDb(db => db.getBook(url)); }
   async getSetting<T = any>(key: string, fallback?: T) { const value = await this.useDb(db => db.getSetting<T>(key)); return (value ?? fallback) as T; }

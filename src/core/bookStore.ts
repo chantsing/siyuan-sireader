@@ -3,6 +3,7 @@ import { usePlugin } from '@/main'
 
 export const PUBLIC_ROOT = '/public/siyuan-sireader'
 export const SIYUAN_CLOUD_BASE = '/plugin/private/siyuan-cloud'
+const PLUGIN_STORAGE_ROOT = '/data/storage/petal'
 
 const BOOKS_DIR = 'books'
 const COVERS_DIR = 'covers'
@@ -16,6 +17,8 @@ export interface BookRecord {
   annotations: any[]
   updatedAt: number
 }
+
+const MISSING_DATA = Symbol('sireader.missingData')
 
 export interface StoredBookRef {
   url: string
@@ -34,6 +37,17 @@ const isRemotePath = (path = '') => /^(https?:\/\/|file:\/\/)|^\/plugin\/private
 const isPublicPath = (path = '') => path.startsWith('/public/') || path.startsWith('/data/public/')
 const getRecordKey = (url: string) => `${RECORDS_DIR}/${hash(url)}.json`
 const req = (id: string) => { try { return (window as any).require?.(id) } catch { return null } }
+const normalizeStoragePath = (storageName = '') => {
+  const resolved: string[] = []
+  for (const part of storageName.replace(/\\/g, '/').split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') resolved.pop()
+    else resolved.push(part)
+  }
+  return resolved.length ? resolved.join('/') : storageName.replace(/[\/\\]+/g, '')
+}
+const getPluginStoragePath = (key: string) => `${PLUGIN_STORAGE_ROOT}/${getPlugin().name}/${normalizeStoragePath(key)}`
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 const isApiErrorPayload = (bytes?: Uint8Array | null) => {
   if (!bytes?.byteLength || bytes.byteLength > 512) return false
@@ -41,14 +55,14 @@ const isApiErrorPayload = (bytes?: Uint8Array | null) => {
   if (!text.startsWith('{') || !text.includes('"code"')) return false
   try {
     const payload = JSON.parse(text)
-    return typeof payload?.code === 'number' && payload.code !== 0
+    return typeof payload?.code === 'number' && payload.code !== 0 && 'msg' in payload && 'data' in payload
   } catch {
     return false
   }
 }
 
-const parseStoredValue = <T = any>(value: any): T | null => {
-  if (value == null || value === '') return null
+const parseStoredValue = <T = any>(value: any): T | null | typeof MISSING_DATA => {
+  if (value == null || value === '') return MISSING_DATA
   if (typeof value === 'string') {
     try { return JSON.parse(value) as T } catch { return value as T }
   }
@@ -63,6 +77,24 @@ const readFileResponse = async (path: string) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path: target }),
   }).catch(() => null)
+}
+
+const readPluginStorageRawOnce = async (key: string): Promise<string | typeof MISSING_DATA> => {
+  const res = await readFileResponse(getPluginStoragePath(key))
+  if (!res?.ok) return MISSING_DATA
+  const text = await res.text().catch(() => '')
+  if (!text) return MISSING_DATA
+  if (isApiErrorPayload(new TextEncoder().encode(text))) return MISSING_DATA
+  return text
+}
+
+const readPluginStorageRaw = async (key: string, retries = 0): Promise<string | typeof MISSING_DATA> => {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const raw = await readPluginStorageRawOnce(key)
+    if (raw !== MISSING_DATA || attempt === retries) return raw
+    await sleep(80 + attempt * 160)
+  }
+  return MISSING_DATA
 }
 
 const putPublicFile = async (blob: Blob, publicPath: string, name?: string) => {
@@ -157,20 +189,32 @@ export const normalizeBookTitle = (title = '') => {
   return withoutExt.replace(/_[a-z0-9]{4,12}$/i, '') || withoutExt || trimmed
 }
 
-export const loadData = async <T = any>(key: string): Promise<T | null> => {
+export const loadDataState = async <T = any>(key: string, options: { retries?: number } = {}): Promise<{ found: boolean; value: T | null }> => {
   try {
-    return parseStoredValue<T>(await getPlugin().loadData(key))
+    // Critical reader state bypasses Plugin.data so SiYuan sync changes are visible immediately.
+    const raw = await readPluginStorageRaw(key, Math.max(0, Number(options.retries || 0)))
+    const value = parseStoredValue<T>(raw)
+    return value === MISSING_DATA ? { found: false, value: null } : { found: true, value: value as T }
   } catch {
-    return null
+    return { found: false, value: null }
   }
 }
 
+export const loadData = async <T = any>(key: string): Promise<T | null> => {
+  const state = await loadDataState<T>(key)
+  return state.found ? state.value : null
+}
+
 export const saveData = async (key: string, data: any) => {
-  await getPlugin().saveData(key, data)
+  const plugin = getPlugin()
+  await plugin.saveData(key, data)
+  if ((plugin as any).data) (plugin as any).data[key] = data
 }
 
 export const removeData = async (key: string) => {
-  await getPlugin().removeData(key)
+  const plugin = getPlugin()
+  await plugin.removeData(key)
+  if ((plugin as any).data) delete (plugin as any).data[key]
 }
 
 export const saveManagedFile = async (blob: Blob, path: string, name?: string) => putPublicFile(blob, path, name)

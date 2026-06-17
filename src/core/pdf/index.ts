@@ -14,6 +14,7 @@ export type { PDFMetadata } from './metadata'
 export { printPDF } from './print'
 export { downloadPDF } from './download'
 export { exportAsImages } from './download'
+export { ocrPdfPage, ocrPdfPages, ocrPdfAll, getCachedPdfOcrPage, clearPdfOcrCache } from './ocr'
 
 // 墨迹和形状工具
 export { createInkToolManager } from './ink'

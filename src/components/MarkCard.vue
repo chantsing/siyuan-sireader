@@ -69,8 +69,8 @@
       placeholder="添加笔记…"
       rows="4"
       @input="emit('update:note', ($event.target as HTMLTextAreaElement).value)"
-      @keydown.stop
-      @keyup.stop
+      @keydown.ctrl.enter.prevent="emit('save')"
+      @keydown.meta.enter.prevent="emit('save')"
     />
     <div v-else-if="note" class="sr-note" :title="note">{{ note }}</div>
 

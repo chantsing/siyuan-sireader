@@ -56,6 +56,23 @@ export const toWereadReviewMark = (item: any, index: number, source: string, boo
   }
 }
 
+export const toWereadBookmarkMark = (item: any, index: number, bookId: string, chapters: any[]) => {
+  const uid = getWereadChapterUid(item)
+  const chapter = getWereadChapterTitle(chapters, uid)
+  return {
+    ...item,
+    id: `bookmark-${String(item?.bookmarkId || `${uid}-${item?.range || index}`)}`,
+    type: 'bookmark',
+    cfi: `${chapterUrlOf(bookId, uid)}#bookmark-${encodeURIComponent(String(item?.range || index))}`,
+    title: chapter,
+    text: String(item?.markText || ''),
+    timestamp: timestampOf(item?.createTime || item?.updateTime),
+    chapter,
+    chapterUid: uid,
+    tags: ['书签'],
+  }
+}
+
 const toTocTree = (chapters: any[], bookId: string) => {
   const roots: any[] = []
   const stack: Array<{ level: number; item: any }> = []
@@ -89,6 +106,7 @@ export const createWereadReaderContext = (options: { book: any; apiKey: string; 
   const callApi: CallApi = options.callApi || ((apiName, params = {}) => callWereadAgentDirect(options.apiKey, apiName, params))
   let chapters: any[] = []
   let highlights: any[] = []
+  let bookmarks: any[] = []
   let bestBookmarks: any[] = []
   let reviews: any[] = []
   let publicReviews: any[] = []
@@ -100,6 +118,13 @@ export const createWereadReaderContext = (options: { book: any; apiKey: string; 
   const notify = () => window.dispatchEvent(new Event('sireader:marks-updated'))
   const events = new EventTarget()
   const flattenToc = (items: any[]): any[] => items.flatMap(item => [item, ...flattenToc(item.subitems || [])])
+  const getBookmarkMarks = () => bookmarks.map((item, index) => toWereadBookmarkMark(item, index, bookId, chapters))
+  const getAnnotationMarks = () => [
+    ...highlights.map((item, index) => toWereadHighlightMark(item, index, '我的划线', bookId, chapters)),
+    ...bestBookmarks.map((item, index) => toWereadHighlightMark(item, index, '热门划线', bookId, chapters)),
+    ...reviews.map((item, index) => toWereadReviewMark(item, index, '我的想法', bookId, chapters)).filter(item => item.text || item.note),
+    ...publicReviews.map((item, index) => toWereadReviewMark(item, index, '公开想法', bookId, chapters)).filter(item => item.text || item.note),
+  ]
   const view = {
     book: {
       toc: [] as any[],
@@ -126,16 +151,11 @@ export const createWereadReaderContext = (options: { book: any; apiKey: string; 
   } as any
 
   const marks = {
-    getAnnotations: () => [
-      ...highlights.map((item, index) => toWereadHighlightMark(item, index, '我的划线', bookId, chapters)),
-      ...bestBookmarks.map((item, index) => toWereadHighlightMark(item, index, '热门划线', bookId, chapters)),
-      ...reviews.map((item, index) => toWereadReviewMark(item, index, '我的想法', bookId, chapters)).filter(item => item.text || item.note),
-      ...publicReviews.map((item, index) => toWereadReviewMark(item, index, '公开想法', bookId, chapters)).filter(item => item.text || item.note),
-    ],
-    getBookmarks: () => [],
+    getAnnotations: getAnnotationMarks,
+    getBookmarks: getBookmarkMarks,
     getInkAnnotations: () => [],
     getShapeAnnotations: () => [],
-    getAll: () => marks.getAnnotations(),
+    getAll: () => [...getBookmarkMarks(), ...getAnnotationMarks()],
     updateMark: async (mark: any, updates: any) => {
       Object.assign(mark, updates)
       notify()
@@ -144,6 +164,7 @@ export const createWereadReaderContext = (options: { book: any; apiKey: string; 
     deleteMark: async (mark: any) => {
       const id = typeof mark === 'string' ? mark : mark?.id
       highlights = highlights.filter((item, index) => toWereadHighlightMark(item, index, '我的划线', bookId, chapters).id !== id)
+      bookmarks = bookmarks.filter((item, index) => toWereadBookmarkMark(item, index, bookId, chapters).id !== id)
       bestBookmarks = bestBookmarks.filter((item, index) => toWereadHighlightMark(item, index, '热门划线', bookId, chapters).id !== id)
       reviews = reviews.filter((item, index) => toWereadReviewMark(item, index, '我的想法', bookId, chapters).id !== id)
       publicReviews = publicReviews.filter((item, index) => toWereadReviewMark(item, index, '公开想法', bookId, chapters).id !== id)
@@ -154,24 +175,31 @@ export const createWereadReaderContext = (options: { book: any; apiKey: string; 
 
   const load = async () => {
     if (!bookId || destroyed) return
-    const [chapterRes, markRes, bestRes, reviewRes, publicRes] = await Promise.allSettled([
+    const [chapterRes, progressRes, markRes, bookmarkRes, bestRes, reviewRes, publicRes] = await Promise.allSettled([
       callApi('/book/chapterinfo', { bookId }, 'chapterInfo'),
+      callApi('/book/getprogress', { bookId }, 'progress'),
       callApi('/book/bookmarklist', { bookId }, 'bookmarkList'),
+      callApi('/book/bookmarklist', { bookId, type: 0 }, 'bookmarks'),
       callApi('/book/bestbookmarks', { bookId, chapterUid: 0 }, 'bestBookmarks'),
       callApi('/review/list/mine', { bookid: bookId, count: 50 }, 'mineReviews'),
       callApi('/review/list', { bookId, count: 50 }, 'publicReviews'),
     ])
     if (destroyed) return
     chapters = chapterRes.status === 'fulfilled' ? chapterRes.value?.chapters || [] : []
+    const progress = progressRes.status === 'fulfilled' ? progressRes.value?.book || progressRes.value : null
     highlights = markRes.status === 'fulfilled' ? markRes.value?.updated || [] : []
+    bookmarks = bookmarkRes.status === 'fulfilled' ? bookmarkRes.value?.updated || [] : []
     bestBookmarks = bestRes.status === 'fulfilled' ? bestRes.value?.items || [] : []
     reviews = reviewRes.status === 'fulfilled' ? reviewRes.value?.reviews || [] : []
     publicReviews = publicRes.status === 'fulfilled' ? publicRes.value?.reviews || [] : []
     view.book.toc = toTocTree(chapters, bookId)
-    currentHref = view.book.toc[0]?.href || ''
-    view.lastLocation = currentHref ? { cfi: currentHref, href: currentHref, tocItem: view.book.toc[0] } : null
+    const progressUid = Number(progress?.chapterUid || 0)
+    currentHref = (progressUid ? chapterUrlOf(bookId, progressUid) : '') || view.book.toc[0]?.href || ''
+    const tocItem = flattenToc(view.book.toc).find((item: any) => item.href === currentHref) || view.book.toc[0]
+    view.lastLocation = currentHref ? { cfi: currentHref, href: currentHref, tocItem, progress: Number(progress?.progress || 0), chapterOffset: Number(progress?.chapterOffset || 0) } : null
     notify()
     window.dispatchEvent(new Event('sireader:tab-switched'))
+    if (progressUid) await navigate?.({ chapterUid: progressUid, title: tocItem?.label || getWereadChapterTitle(chapters, progressUid), url: currentHref })
   }
 
   return {
@@ -186,6 +214,7 @@ export const createWereadReaderContext = (options: { book: any; apiKey: string; 
       navigate = null
       chapters = []
       highlights = []
+      bookmarks = []
       bestBookmarks = []
       reviews = []
       publicReviews = []
