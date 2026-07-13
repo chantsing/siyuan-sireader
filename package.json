@@ -1,8 +1,8 @@
 {
   "name": "siyuan-sireader",
-  "version": "1.3.9",
+  "version": "2.0.0",
   "type": "module",
-  "description": "思源笔记电子书阅读增强插件 - 思阅 SiReader",
+  "description": "专业电子书阅读器，支持 EPUB/PDF/MOBI/TXT/在线小说；PDF 支持标注、表单、印章、签名、截图、搜索、打印、导出和回链，并提供词典、翻译、主题与书架管理 - 思阅 SiReader",
   "author": "mm-o",
   "license": "MIT",
   "homepage": "https://github.com/mm-o/siyuan-sireader",
@@ -21,17 +21,18 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@embedpdf/default-stamps": "0.0.1",
+    "@embedpdf/pdfium": "2.14.4",
+    "@embedpdf/vue-pdf-viewer": "2.14.4",
     "@vueuse/motion": "^3.0.3",
     "fflate": "^0.8.2",
     "foliate-js": "^1.0.1",
     "jszip": "^3.10.1",
-    "sql.js": "^1.13.0",
     "vue": "^3.3.8"
   },
   "devDependencies": {
     "@antfu/eslint-config": "^4.8.1",
     "@types/node": "^20.2.0",
-    "@types/sql.js": "^1.4.9",
     "@vitejs/plugin-vue": "^5.2.1",
     "@vitest/coverage-v8": "^2.1.8",
     "@vitest/ui": "^2.1.8",
@@ -51,10 +52,5 @@
     "vite-plugin-static-copy": "^3.1.4",
     "vite-plugin-zip-pack": "^1.0.5",
     "vitest": "^2.1.8"
-  },
-  "pnpm": {
-    "patchedDependencies": {
-      "foliate-js@1.0.1": "patches/foliate-js@1.0.1.patch"
-    }
   }
 }

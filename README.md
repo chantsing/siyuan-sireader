@@ -5,9 +5,9 @@
 **Professional eBook Reader · Smart Annotation**
 
 Transform SiYuan Notes into a professional eBook reader  
-Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, and AI translation. Flashcard features have moved to the standalone Sideck plugin.
+Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support highlights, ink, shapes, forms, stamps, signatures, images, screenshots, search, printing, export, and backlinks, with annotation notes, dictionary, translation, themes, and bookshelf management.
 
-[![Version](https://img.shields.io/badge/version-1.3.9-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,77 @@ Support EPUB/PDF/TXT/Online novels with smart annotation, TTS, dictionary, and A
 ---
 
 ## 📝 Latest Updates
+
+### v2.0.0 (2026.7.13)
+
+### Added
+
+- PDF reader fully switched to EmbedPDF, using `@embedpdf/vue-pdf-viewer` and PDFium rendering as the only in-plugin PDF reading path.
+- Supports opening local PDFs, bookshelf PDFs, document-link PDFs, and assets PDFs inside the plugin; the "Use Plugin PDF Reader" setting can switch between the plugin reader and SiYuan's native PDF tab.
+- Supports continuous PDF reading, vertical/horizontal scrolling, single page, odd/even two-page layouts, previous/next page, and page-number jumping.
+- Supports PDF zoom, marquee zoom, fit page, fit width, and fixed zoom levels including 25%, 50%, 100%, 125%, 150%, 200%, 400%, 800%, and 1600%.
+- Supports PDF clockwise/counter-clockwise rotation, hand pan, pointer selection, fullscreen reading, and other EmbedPDF native reading tools.
+- Supports PDF native outline/bookmarks and page thumbnails, shown in the SiReader sidebar with hierarchy preserved.
+- Supports the PDF search sidebar with case-sensitive and whole-word search, page-grouped results, previous/next result navigation, and hit positioning.
+- Supports PDF printing, download/export, and other EmbedPDF native document actions while respecting PDF document permissions.
+- Supports PDF screenshots/area capture, including current PDF annotations, and copies the result to the clipboard as PNG.
+- Supports PDF comment sidebar, annotation style sidebar, stamp sidebar, signature sidebar, permission view/protection dialogs, and other EmbedPDF native panels.
+- Bundles `pdfium.wasm` and EmbedPDF default stamp assets with the plugin, so the PDF reader no longer depends on the old built-in PDF.js toolchain.
+- Supports PDF text highlight, underline, strikeout, squiggly, insert text, replace text, comments, note pins, and callout annotations.
+- Supports PDF note annotations with quote text, note content, tags, and bound document blocks.
+- Supports PDF annotation colors compatible with SiReader colors: red, orange, yellow, green, cyan, blue, purple, brown, black, white, and transparent.
+- Supports PDF annotation styling including color, opacity, blend mode, stroke width, stroke color, fill color, border style, font size, font, text color, background color, horizontal/vertical alignment, and line endings.
+- Supports 16 PDF blend modes: Normal, Multiply, Screen, Overlay, Darken, Lighten, Color Dodge, Color Burn, Hard Light, Soft Light, Difference, Exclusion, Hue, Saturation, Color, and Luminosity.
+- Supports PDF ink and ink highlighter annotations with color, stroke width, opacity, and blend-mode adjustment.
+- Supports PDF shape annotations including rectangle, circle, line, arrow, polygon, and polyline, with stroke, fill, width, border style, and opacity settings.
+- Supports PDF text box/free text and callout annotations for inserting text notes directly onto PDF pages.
+- Supports PDF stamp annotations, with EmbedPDF default stamp assets bundled in the plugin.
+- Supports PDF signatures and initials, created by drawing, typing, or uploading, then placing them on PDF pages.
+- Supports PDF image insertion through EmbedPDF image annotation capability.
+- Supports PDF form filling and editing, including text fields, checkboxes, radio buttons, dropdowns, and list boxes, with readonly, required, multiline, comb, and multi-select properties.
+- Compatible with PDF form-model controls including buttons, signature fields, and XFA text field/checkbox/dropdown/list box/button/signature/image field types.
+- Supports PDF undo/redo, annotation selection, moving, resizing, rotation, grouping/ungrouping, and deletion.
+- Supports PDF redaction tools for creating and applying redaction areas.
+- Supports copying PDF annotation backlinks using `sireader://open?url=<bookUrl>&cfi=%23page-<page>&id=<annotationId>`.
+- Supports opening the corresponding PDF and jumping to the annotation page from PDF backlinks.
+- Supports dictionary lookup, translation, copy, and quick-send actions after selecting PDF text.
+- Supports copying backlinks, dictionary lookup, translation, and quick-send from PDF annotation menus.
+- Supports sending PDF selections or annotations to configured quick-send documents, with up to five valid quick-send documents shown in the PDF menu.
+- Supports PDF screenshot copy to the clipboard while still keeping EmbedPDF's native download/export entry available.
+- Added dedicated EmbedPDF storage at `records/embedpdf/<bookHash>.bin` for PDF annotations and reading progress.
+- Added `docs/embedpdf.md` to document EmbedPDF integration, storage format, legacy migration, PDF backlinks, hover preview, menu actions, theme strategy, and maintenance constraints.
+
+### Improved
+
+- PDF annotations now save and restore directly through EmbedPDF `exportAnnotations()` / `importAnnotations()`, reducing offset and data-loss risk from intermediate format conversion.
+- PDF annotation saving filters PDF-native link annotations and only stores user-created annotations, avoiding duplicate plugin records.
+- On first old-PDF open, when the EmbedPDF record is empty, legacy `records/<bookHash>.json` highlights, ink, shape annotations, and reading progress are automatically migrated.
+- Legacy PDF annotation migration keeps `id`, page, quote, note, tags, color, created/modified time, bound block, chapter, annotation geometry, and reading progress where possible, and reports the migrated count.
+- PDF reading progress now saves EmbedPDF scroll state and restores the last reading position on reopen.
+- PDF annotations are integrated into the unified SiReader annotation sidebar for viewing, editing, and deletion.
+- PDF annotations are integrated into the unified annotation card, showing page, chapter, color, style, note, tags, and bound block.
+- PDF annotation hover preview now follows EmbedPDF's actual rendered hit area and only shows quote/note content for annotations with notes or replies.
+- PDF backlink hover preview in SiYuan documents supports opened PDFs, saved EmbedPDF annotations, and lazy page-scoped context extraction when the PDF is not open.
+- PDF backlink hover preview now extracts and caches context by page, falls back by page when an old annotation id is stale, and no longer pre-parses the whole PDF.
+- PDF quick-send now reuses EmbedPDF native menus and SiReader's shared send logic instead of maintaining a custom floating menu.
+- PDF screenshot copy now reuses EmbedPDF capture state, closes SiReader side panels during capture, and adds a copy button to the capture result footer.
+- PDF sidebar table of contents preserves the native EmbedPDF bookmark/outline hierarchy instead of flattening it.
+- PDF dark-theme support is simplified to EmbedPDF UI theme mapping plus dark page inversion, reducing theme-filter impact on pages and annotations.
+- PDF opening now reads an `ArrayBuffer` and passes it to EmbedPDF `documentManager.initialDocuments`, using local wasm/assets and `worker:false` in the SiYuan plugin runtime.
+- Removed the old built-in PDF.js reader, PDF toolbar, and `src/core/pdf` compatibility layer; PDF behavior now belongs to EmbedPDF and SiReader's shared annotation components.
+
+### Fixed
+
+- Fixed old PDF reader cases where some PDFs could show blank pages, unstable rendering, or stuck loading.
+- Fixed EmbedPDF possibly staying in loading forever when worker mode is enabled in the SiYuan plugin runtime.
+- Fixed the old PDF theme approach possibly covering text with backgrounds, blurring pages, or making annotations inherit page filters.
+- Fixed PDF annotations possibly having coordinate offsets, style loss, or incomplete content in the old storage conversion path.
+- Fixed PDF-native link annotations being repeatedly saved into plugin annotation records.
+- Fixed PDF backlink jumps incorrectly going through EPUB CFI navigation; `#page-N` now routes to EmbedPDF page navigation.
+- Fixed plain highlights also showing the PDF note hover card; only annotations with notes or replies show hover preview now.
+- Fixed PDF annotation hover preview possibly showing the wrong annotation because of distance guessing or selected-annotation fallback.
+- Fixed the custom PDF quick-send floating menu having unstable hierarchy and state inside EmbedPDF selection menus.
+- Fixed PDF screenshot copy being download-only and unable to write directly to the clipboard.
 
 ### v1.3.9 (2026.6.17)
 

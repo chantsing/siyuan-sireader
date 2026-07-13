@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <DockShell
     class="sr-marks"
     body-class="sr-body-pad-8"
@@ -10,7 +10,7 @@
     @click="showOrganize = false"
     @toolbar-action="handleToolbarAction"
   >
-    <div class="sr-list">
+    <div class="sr-list" :class="{ 'is-empty': !list.length }">
       <div v-if="!list.length" class="sr-empty">{{ emptyText }}</div>
       <template v-else v-for="(item, i) in list" :key="item.key || item.groupId || item.id || item.page || i">
         <div v-if="item.isGroup" class="sr-card sr-group" @click="toggleGroup(item.key)">
@@ -35,6 +35,7 @@
           >
             <MarkCard
               :time="formatDateTime(mark.timestamp || Date.now())"
+              :i18n="props.i18n"
               :tags="getMarkTags(mark)"
               :tag-options="markTagOptions"
               :selected-tags="editTagList"
@@ -46,7 +47,7 @@
               :note="isEditing(mark) ? editNote : mark.note"
               :mark-color="getBarColor(mark)"
               :color-value="editColor"
-              :color-options="isEditing(mark) && showEditOptions(mark) ? getEditColorOptions(mark.type === 'shape' || mark.type === 'ink') : []"
+              :color-options="isEditing(mark) && showEditOptions(mark) ? getEditColorOptions() : []"
               :style-value="editStyle"
               :style-options="isEditing(mark) ? getMarkStyleOptions(mark) : []"
               :bookmark="isBookmark(mark)"
@@ -65,13 +66,11 @@
                   <button class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.copy || '复制'" @click.stop="copyMark(mark)"><svg><use xlink:href="#iconCopy" /></svg></button>
                   <button v-if="mark.blockId && !isBookmark(mark)" class="b3-tooltips b3-tooltips__nw" aria-label="打开块" @click.stop="openBlock(mark.blockId)" @mouseenter="onBlockEnter($event, mark.blockId)" @mouseleave="hideFloat"><svg><use xlink:href="#iconRef" /></svg></button>
                   <button v-else-if="canImport(mark)" class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.import || '导入'" @click.stop="importMark(mark)"><svg><use xlink:href="#iconDownload" /></svg></button>
-                  <button class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.delete || '删除'" @click.stop="deleteMark(mark)"><svg><use xlink:href="#iconTrashcan" /></svg></button>
+                  <button v-if="canDelete(mark)" class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.delete || '删除'" @click.stop="deleteMark(mark)"><svg><use xlink:href="#iconTrashcan" /></svg></button>
                 </div>
               </template>
               <template #extra>
-                <canvas v-if="mark.type === 'ink'" :data-ink-id="mark.id" class="sr-preview" width="240" height="48" @click.stop="goTo(mark)"></canvas>
-                <canvas v-else-if="mark.type === 'shape' && mark.shapeType !== 'textbox'" :data-shape-id="mark.id" class="sr-preview" width="240" height="48" @click.stop="goTo(mark)"></canvas>
-                <img v-else-if="mark.image" class="sr-image-preview" :src="mark.image" :alt="mainText(mark)" @click.stop="goTo(mark)">
+                <img v-if="mark.image" class="sr-image-preview" :src="mark.image" :alt="mainText(mark)" @click.stop="goTo(mark)">
               </template>
             </MarkCard>
           </div>
@@ -163,7 +162,6 @@ const {
   showEditOptions,
   getEditColorOptions,
   getEditStyleOptions,
-  getEditShapeOptions,
   editColor,
   editStyle,
   markTagOptions,
@@ -171,6 +169,7 @@ const {
   saveEdit,
   mainText,
   copyMark,
+  canDelete,
   canEdit,
   isBookmark,
   openBlock,
@@ -179,6 +178,7 @@ const {
   onMarkEnter,
   onMarkLeave,
   canImport,
+  readOnly,
   importMark,
   deleteMark,
   markFilter,
@@ -191,13 +191,14 @@ const {
   goTo,
 } = useReaderMarks(props.i18n, () => props.context)
 const formatDateTime = (ts: number) => new Date(ts).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-const getMarkChapter = (mark: any) => isEditing(mark) ? '' : [mark?.chapter || (mark?.page ? `第${mark.page}页` : ''), mark?.type === 'ink' ? '墨迹标注' : mark?.type === 'shape' ? (mark.shapeType === 'textbox' ? '文本标注' : '形状标注') : ''].filter(Boolean).join(' ')
-const getMarkStyleOptions = (mark: any) => mark?.type === 'shape' ? getEditShapeOptions() : (mark?.type === 'highlight' || mark?.type === 'note' || !mark?.type) ? getEditStyleOptions() : []
+const getMarkChapter = (mark: any) => isEditing(mark) ? '' : [mark?.chapter || (mark?.page ? `第${mark.page}页` : '')].filter(Boolean).join(' ')
+const getMarkStyleOptions = (mark: any) => (mark?.type === 'highlight' || mark?.type === 'note' || !mark?.type) ? getEditStyleOptions() : []
 </script>
 
 <style scoped lang="scss">
 .sr-marks{display:flex;flex-direction:column;height:100%;overflow:hidden;background:var(--b3-theme-background)}
 .sr-list{height:100%;overflow:auto}
+.sr-list.is-empty{overflow:hidden}
 .sr-empty{display:flex;align-items:center;justify-content:center;height:100%;font-size:14px;opacity:.5}
 .sr-manage-panel{position:absolute;top:44px;left:8px;right:8px;z-index:20;max-height:calc(100% - 56px);overflow:auto;padding:12px;background:var(--b3-theme-surface);border:1px solid var(--b3-border-color);border-radius:10px;box-shadow:0 8px 24px #0002;box-sizing:border-box}
 .sr-modal__head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--b3-border-color);font-size:13px;font-weight:600}

@@ -236,16 +236,10 @@ class BookshelfManager {
   }
   
   // 自动更新进度（防抖）
-  async updateProgressAuto(url:string,reader?:any,pdfViewer?:any,view?:any){
+  async updateProgressAuto(url:string,reader?:any,view?:any){
     clearTimeout(this.progressTimer)
     this.progressTimer=setTimeout(async()=>{
       try{
-        if(pdfViewer){
-          const loc=pdfViewer.getLocation?.(),p=loc?.page||pdfViewer.getCurrentPage?.()||1,total=loc?.total||pdfViewer.getPageCount?.()||0
-          let progress=Math.round((loc?.fraction||0)*100)
-          if(total&&p<total&&progress>=100)progress=99
-          return this.updateProgress(url,progress,p,`#page-${p}`)
-        }
         const loc=reader?.getLocation?.()??view?.lastLocation;if(!loc)return
         loc.fraction!==undefined&&this.updateProgress(url,Math.round(loc.fraction*100),loc.index,loc.cfi)
       }catch{}
@@ -253,15 +247,10 @@ class BookshelfManager {
   }
   
   // 恢复阅读进度
-  async restoreProgress(url:string,reader?:any,pdfViewer?:any,view?:any){
+  async restoreProgress(url:string,reader?:any,view?:any){
     try{
       const b=await this.getBook(url),cfi=b?.pos?.cfi,chapter=Number.isInteger(b?.chapter)?b.chapter:undefined
       if(!b)return
-      if(pdfViewer){
-        const t=pdfViewer.getPageCount(),page=chapter>=1&&chapter<=t?chapter:cfi?.startsWith('#page-')?parseInt(cfi.slice(6)):0
-        if(page>=1&&page<=t)pdfViewer.goToPage(page)
-        return
-      }
       const tgt=reader||view,loc=chapter??cfi
       if(!tgt)return
       if(!loc)return void ((b.progress||0)<=0&&await reader?.goToTextStart?.())

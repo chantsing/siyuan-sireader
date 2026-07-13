@@ -54,6 +54,7 @@ import DockShell from './ui/DockShell.vue'
 import { useReaderState } from '@/core/epub/state'
 import { getTocChapterText } from '@/core/epub/chapterText'
 import { exportBookLink } from '@/utils/copy'
+import { bookmarkToc } from '@/utils/embedPdfActions'
 import { bookshelfManager } from '@/core/bookshelf'
 import { jump } from '@/utils/jump'
 import type { TOCItem } from '@/core/epub/types'
@@ -73,16 +74,21 @@ const thumbContainer = ref<HTMLElement>()
 const showThumbnail = ref(false)
 const reverse = ref(false)
 const loadedThumbs = ref<Record<number, string>>({})
+const pdfBookmarks = ref<TOCItem[]>([])
 const expandedKeys = ref<Record<string, boolean>>({})
 const currentHref = ref('')
 
-const isPdfMode = computed(() => (activeView.value as any)?.isPdf || false)
+const isEmbedPdfMode = computed(() => (activeView.value as any)?.engine === 'embedpdf')
+const isPdfMode = computed(() => !!(activeView.value as any)?.isPdf)
 const pageCount = computed(() => (activeView.value as any)?.pageCount || 0)
 const searchPlaceholder = computed(() => '搜索目录...')
 
 const tocLabel = (item: TOCItem) => item.label || (item as any).title || ''
 const tocKey = (item: TOCItem, parentKey = 'root') => item.href || `${parentKey}/${tocLabel(item)}`
-const goToLocation = async (location: string | number) => activeView.value?.goTo(location)
+const goToLocation = async (location: string | number) => {
+  const page = typeof location === 'string' ? location.match(/^#page-(\d+)$/)?.[1] : ''
+  return activeView.value?.goTo(page ? Number(page) : location)
+}
 const getUrl = () => props.context?.bookUrl || (window as any).__currentBookUrl
 const showMsg = (msg: string, type = 'info') => showMessage(msg, type === 'error' ? 3000 : 1500, type as any)
 const esc = (value: string) => {
@@ -124,7 +130,7 @@ const walkToc = (
 }
 
 const tocSource = computed<TOCItem[]>(() => {
-  const toc = (activeView.value?.book?.toc || []) as TOCItem[]
+  const toc = (isEmbedPdfMode.value ? pdfBookmarks.value : activeView.value?.book?.toc || []) as TOCItem[]
   return reverse.value ? reverseToc(toc) : toc
 })
 const visibleToc = computed(() => filterToc(tocSource.value, keyword.value.trim().toLowerCase()))
@@ -169,7 +175,7 @@ const renderTocItem = (item: TOCItem, level: number, parentKey: string, bookmark
   const exportAction = item.href
     ? `<span class="b3-list-item__action b3-tooltips b3-tooltips__nw" data-act="export" aria-label="${esc(props.i18n?.export || '导出')}"><svg><use xlink:href="#lucide-send"></use></svg></span>`
     : ''
-  const bookmarkAction = item.href
+  const bookmarkAction = item.href && !isEmbedPdfMode.value
     ? `<span class="b3-list-item__action b3-tooltips b3-tooltips__nw" data-act="bookmark" aria-label="${hasBookmark ? '移除书签' : '添加书签'}"><svg><use xlink:href="#iconBookmark"></use></svg></span>`
     : ''
   const hideActionClass = hasBookmark ? '' : ' b3-list-item--hide-action'
@@ -220,6 +226,7 @@ const initToc = () => {
   if (props.mode !== 'toc') return
   cleanupToc()
   const view = activeView.value
+  if (isEmbedPdfMode.value) return renderToc()
   if (!view?.book?.toc?.length) {
     if (isPdfMode.value) showThumbnail.value = true
     return
@@ -349,6 +356,16 @@ const handleToolbarAction = (id: string) => {
 const goToPage = (page: number) =>
   jump(page, activeView.value, activeReader.value, activeReader.value?.marks || (activeView.value as any)?.marks)
 
+const loadPdfBookmarks = async () => {
+  if (!isEmbedPdfMode.value) {
+    pdfBookmarks.value = []
+    return
+  }
+  const bookmarks = await (activeView.value as any)?.getBookmarks?.().catch(() => [])
+  pdfBookmarks.value = bookmarkToc(bookmarks) as TOCItem[]
+  scheduleInit()
+}
+
 const initThumbs = () => nextTick(() => {
   thumbObs?.disconnect()
   const getThumbnail = (activeView.value as any)?.getThumbnail
@@ -366,8 +383,9 @@ const initThumbs = () => nextTick(() => {
 })
 
 watch([showThumbnail, () => pageCount.value], () => showThumbnail.value && initThumbs())
+watch(() => activeView.value, () => { props.mode === 'toc' && (isEmbedPdfMode.value ? void loadPdfBookmarks() : scheduleInit()) }, { immediate: true })
 watch(() => activeView.value?.book, book => (
-  book?.toc && props.mode === 'toc' ? scheduleInit() : cleanupToc()
+  !isEmbedPdfMode.value && book?.toc && props.mode === 'toc' ? scheduleInit() : cleanupToc()
 ), { immediate: true })
 watch(() => props.mode, () => props.mode === 'toc' && scheduleInit())
 watch(reverse, () => {
@@ -378,7 +396,7 @@ watch(reverse, () => {
 watch(keyword, () => props.mode === 'toc' && scheduleRender())
 
 const onMarks = () => props.mode === 'toc' && scheduleRender()
-const onSwitch = () => props.mode === 'toc' && scheduleInit()
+const onSwitch = () => props.mode === 'toc' && (isEmbedPdfMode.value ? void loadPdfBookmarks() : scheduleInit())
 
 onMounted(() => {
   window.addEventListener('sireader:marks-updated', onMarks)

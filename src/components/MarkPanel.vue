@@ -1,11 +1,11 @@
-<template>
+﻿<template>
   <Teleport to="body">
     <div v-if="state.showMenu || state.showPanel || state.showSendMenu" class="mark-overlay" @click="closeAll" />
 
     <div v-if="state.showMenu" class="mark-menu" :style="menuPosition" @click.stop>
-      <button @click="openSelectionEditor" class="b3-tooltips b3-tooltips__s" :aria-label="i18n?.note || '笔记'"><svg><use xlink:href="#lucide-square-pen" /></svg></button>
-      <button @click="() => handleCopy()" class="b3-tooltips b3-tooltips__s" :aria-label="i18n?.mark || '标注'"><svg><use xlink:href="#iconMark" /></svg></button>
-      <button @click="toggleSendMenu" class="b3-tooltips b3-tooltips__s" :aria-label="i18n?.sendTo || '发送到'"><svg><use xlink:href="#lucide-send" /></svg></button>
+      <button v-if="!readOnly" @click="openSelectionEditor" class="b3-tooltips b3-tooltips__s" :aria-label="i18n?.note || '笔记'"><svg><use xlink:href="#lucide-square-pen" /></svg></button>
+      <button v-if="!readOnly" @click="() => handleCopy()" class="b3-tooltips b3-tooltips__s" :aria-label="i18n?.mark || '标注'"><svg><use xlink:href="#iconMark" /></svg></button>
+      <button v-if="!readOnly" @click="toggleSendMenu" class="b3-tooltips b3-tooltips__s" :aria-label="i18n?.sendTo || '发送到'"><svg><use xlink:href="#lucide-send" /></svg></button>
       <button @click="handleCopyText" class="b3-tooltips b3-tooltips__s" :aria-label="i18n?.copy || '复制'"><svg><use xlink:href="#iconCopy" /></svg></button>
       <button v-if="props.ttsConfig?.enabled" @click="handleSpeak" class="b3-tooltips b3-tooltips__s" :aria-label="i18n?.ttsPlay || '朗读'"><svg><use xlink:href="#iconPlay" /></svg></button>
       <button @click="handleDict" class="b3-tooltips b3-tooltips__s" :aria-label="i18n?.dict || '词典'"><svg><use xlink:href="#iconLanguage" /></svg></button>
@@ -31,17 +31,17 @@
           :selected-tags="displayTags"
           :tag-input="state.tags"
           :editing="state.isEditing"
-          editable
+          :editable="!readOnly"
           :text="state.text || '无内容'"
           :chapter="state.isEditing ? '' : (state.currentMark?.chapter || (state.currentMark?.page ? `第${state.currentMark.page}页` : ''))"
-          :note="state.isEditing && isTextboxMark ? state.text : state.note"
+          :note="state.note"
           :mark-color="currentMarkColor"
           :color-value="state.color"
           :color-options="state.isEditing ? colorOptions : []"
-          :style-value="isShapeMark ? state.shapeType : state.style"
+          :style-value="state.style"
           :style-options="state.isEditing ? markStyleOptions : []"
           @update:tag-input="state.tags = $event"
-          @update:note="isTextboxMark ? state.text = $event : state.note = $event"
+          @update:note="state.note = $event"
           @update:color-value="state.color = $event"
           @update:style-value="setMarkStyle"
           @toggle-tag="togglePanelTag"
@@ -54,8 +54,8 @@
             <div class="sr-icon-actions">
               <button @click.stop="handleCopyMark" class="b3-tooltips b3-tooltips__w" :aria-label="i18n?.copy || '复制'"><svg><use xlink:href="#iconCopy" /></svg></button>
               <button v-if="state.currentMark?.blockId" @click.stop="handleOpenBlock" @mouseenter="handleShowFloat" @mouseleave="hideFloat" class="b3-tooltips b3-tooltips__w" aria-label="打开块"><svg><use xlink:href="#iconRef" /></svg></button>
-              <button v-else @click.stop="handleImport" class="b3-tooltips b3-tooltips__w" :aria-label="i18n?.import || '导入'"><svg><use xlink:href="#iconDownload" /></svg></button>
-              <button @click.stop="handleDelete" class="b3-tooltips b3-tooltips__w" :aria-label="i18n?.delete || '删除'"><svg><use xlink:href="#iconTrashcan" /></svg></button>
+              <button v-else-if="!readOnly" @click.stop="handleImport" class="b3-tooltips b3-tooltips__w" :aria-label="i18n?.import || '导入'"><svg><use xlink:href="#iconDownload" /></svg></button>
+              <button v-if="!readOnly" @click.stop="handleDelete" class="b3-tooltips b3-tooltips__w" :aria-label="i18n?.delete || '删除'"><svg><use xlink:href="#iconTrashcan" /></svg></button>
             </div>
           </template>
         </MarkCard>
@@ -69,7 +69,6 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { showMessage } from 'siyuan'
 import type { HighlightColor, Mark, MarkManager } from '@/core/MarkManager'
 import { COLORS, STYLES } from '@/core/MarkManager'
-import { PDF_SHAPE_COLORS, PDF_SHAPE_OPTIONS } from '@/core/pdf/shape'
 import { hideFloat, openBlock, showFloat } from '@/utils/copy'
 import { jump } from '@/utils/jump'
 import { isMobile } from '@/utils/mobile'
@@ -92,9 +91,9 @@ const props = defineProps<{
   bookUrl?: string
   manager: MarkManager | null
   i18n?: Record<string, string>
-  pdfViewer?: any
   reader?: any
   currentView?: any
+  readOnly?: boolean
   ttsController?: any
   ttsConfig?: any
   quickMarkMode?: boolean
@@ -110,7 +109,6 @@ const emit = defineEmits<{
   copyMarkOnly: [mark: Mark]
 }>()
 
-const shapeColors = PDF_SHAPE_COLORS
 const sendSearch = ref('')
 const sendDocs = ref<any[]>([])
 let quickMarkCooldown = false
@@ -132,24 +130,18 @@ const state = reactive({
   tags: '',
   color: 'yellow' as HighlightColor,
   style: 'highlight' as MarkStyle,
-  shapeType: 'rect' as 'rect' | 'circle' | 'triangle' | 'textbox',
-  shapeFilled: false,
 })
 const queryRoot = () => props.root || document
 const getBookUrl = () => props.bookUrl || (window as any).__currentBookUrl || ''
 
+const readOnly = computed(() => !!props.readOnly)
 const isPdf = computed(() => (state.selection?.location.format || state.currentMark?.format) === 'pdf')
-const isShapeMark = computed(() => state.currentMark?.type === 'shape')
-const isTextboxMark = computed(() => isShapeMark.value && state.shapeType === 'textbox')
 const quickDocs = computed(() => (window as any).__sireader_settings?.quickSendDocs || [])
-const colorOptions = computed(() => (state.currentMark?.type === 'shape' || state.currentMark?.type === 'ink')
-  ? shapeColors.map(color => ({ key: color, value: color, bg: color }))
-  : COLORS.map(color => ({ key: color.color, value: color.color, bg: color.bg })))
+const colorOptions = computed(() => COLORS.map(color => ({ key: color.color, value: color.color, bg: color.bg })))
 const textStyleOptions = computed(() => STYLES
-  .filter(item => (!item.pdfOnly || isPdf.value) && (!item.epubOnly || !isPdf.value))
+  .filter(item => !item.epubOnly)
   .map(item => ({ value: item.type, label: item.name })))
-const shapeTypeOptions = PDF_SHAPE_OPTIONS.map(item => ({ value: item.type, label: item.label, icon: item.icon }))
-const markStyleOptions = computed(() => isShapeMark.value ? shapeTypeOptions : state.currentMark?.type !== 'ink' ? textStyleOptions.value : [])
+const markStyleOptions = computed(() => textStyleOptions.value)
 const colorMap = Object.fromEntries(COLORS.map(color => [color.color, color.bg]))
 const currentMarkColor = computed(() => colorMap[state.color] || state.color || '#e0e0e0')
 const displayTags = computed(() => state.isEditing ? parseMarkTags(state.tags) : getMarkTags(state.currentMark))
@@ -159,8 +151,7 @@ const togglePanelTag = (tag: string) => {
   state.tags = formatMarkTags(tags.includes(tag) ? tags.filter(item => item !== tag) : [...tags, tag])
 }
 const setMarkStyle = (style: string) => {
-  if (isShapeMark.value) state.shapeType = style as typeof state.shapeType
-  else state.style = style as MarkStyle
+  state.style = style as MarkStyle
 }
 const formatDateTime = (ts?: number) => ts ? new Date(ts).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''
 
@@ -207,13 +198,11 @@ const sendMenuPosition = computed(() => {
 
 const markData = (mark: any, extra: Record<string, any> = {}) => ({
   currentMark: mark,
-  text: mark.text || (mark.type === 'shape' ? (mark.shapeType === 'textbox' ? '' : '形状标注') : mark.type === 'ink' ? '墨迹标注' : ''),
+  text: mark.text || '',
   note: mark.note || '',
   tags: formatMarkTags(mark.tags),
-  color: mark.color || (mark.type === 'ink' ? '#ff0000' : 'yellow'),
+  color: mark.color || 'yellow',
   style: mark.style || 'highlight',
-  shapeType: mark.shapeType || 'rect',
-  shapeFilled: mark.shapeType === 'textbox' ? false : !!mark.filled,
   ...extra,
 })
 const selectionArgs = () => {
@@ -247,6 +236,7 @@ const setPanelState = (panel: '' | 'card' | 'translate', extra: Record<string, a
   Object.assign(state, { showPanel: !!panel, panel, ...extra })
 }
 const openSelectionEditor = async () => {
+  if (readOnly.value) return
   if (!state.selection) return
   const mark = await addSelectionMark(state.selection.text, state.color, state.style)
   if (!mark) return
@@ -273,18 +263,6 @@ const openMarkPanel = (mark: Mark, x: number, y: number, edit = false) => {
   setPanelState('card', markData(mark, { x, y, panelY: y, isEditing: edit }))
 }
 
-const showShapeCard = (shape: any, pdfViewer: any) => {
-  if (quickMarkCooldown) return
-  const layer = queryRoot().querySelector(`.pdf-shape-layer[data-page="${shape.page}"]`) as HTMLElement | null
-  const page = pdfViewer?.getPages?.().get(shape.page)
-  if (!layer || !page) return
-  const viewport = page.getViewport({ scale: pdfViewer.getScale(), rotation: pdfViewer.getRotation() })
-  const [x1, y1, x2, y2] = shape.rect
-  const p1 = viewport.convertToViewportRectangle([x1, y1, x1, y1])
-  const p2 = viewport.convertToViewportRectangle([x2, y2, x2, y2])
-  const rect = layer.getBoundingClientRect()
-  openMarkPanel(shape, rect.left + (p1[0] + p2[0]) / 2, rect.top + Math.max(p1[1], p2[1]) + 10)
-}
 const showAnnotationCard = (mark: any) => {
   if (quickMarkCooldown) return
   const el = queryRoot().querySelector(`[data-id="${mark.id}"]`) as HTMLElement | null
@@ -322,7 +300,7 @@ const checkSelection = (doc?: Document, e?: Event) => {
       const rect = range.getBoundingClientRect()
       const cfi = index !== undefined ? props.reader?.getView().getCFI(index, range) : undefined
       selectionDoc = targetDoc
-      openSelectionPanel({ text: selection.toString().trim(), location: { format: props.pdfViewer ? 'pdf' : 'epub', cfi } }, getSelectionAnchor(rect, targetDoc, index === undefined))
+      openSelectionPanel({ text: selection.toString().trim(), location: { format: 'epub', cfi } }, getSelectionAnchor(rect, targetDoc, index === undefined))
       return true
     } catch {
       return false
@@ -369,7 +347,6 @@ defineExpose({
   openSelectionPanel,
   openMarkPanel,
   closeAll,
-  showShapeCard,
   showAnnotationCard,
   checkSelection,
   setupAnnotationListeners,
@@ -379,6 +356,7 @@ defineExpose({
 })
 
 const handleCopy = async (color?: HighlightColor, style?: typeof state.style) => {
+  if (readOnly.value) return
   if (!state.selection) return
   await addSelectionMark(state.selection.text, color || 'blue', style || 'highlight')
   if (!props.quickMarkMode) return closeAll()
@@ -390,6 +368,7 @@ const handleCopy = async (color?: HighlightColor, style?: typeof state.style) =>
   selectionDoc = null
 }
 const toggleSendMenu = () => {
+  if (readOnly.value) return
   state.showSendMenu = !state.showSendMenu
   if (state.showSendMenu) resetSendState()
 }
@@ -399,6 +378,7 @@ const searchSendDocs = async () => {
   try { sendDocs.value = await (await import('@/composables/useSetting')).searchDocs(keyword) } catch { sendDocs.value = [] }
 }
 const handleSendToDoc = async (docId: string) => {
+  if (readOnly.value) return
   if (props.can && !props.can('quick-send')) return props.showUpgrade?.('快捷发送')
   if (!docId) return
   const mark = state.selection ? await addSelectionMark(state.selection.text, props.quickMarkColor || 'blue', props.quickMarkStyle || 'highlight') : null
@@ -427,6 +407,7 @@ const handleTranslate = () => {
   setPanelState('translate')
 }
 const handleEdit = () => {
+  if (readOnly.value) return
   state.tags = formatMarkTags((state.currentMark as any)?.tags)
   state.isEditing = true
 }
@@ -439,15 +420,14 @@ const goToMark = () => {
   closeAll()
 }
 const handleSave = async () => {
+  if (readOnly.value) return
   if (!props.manager) return
   try {
     if (state.currentMark) {
       const updates: any = { note: state.note.trim() || undefined, color: state.color, tags: parseMarkTags(state.tags) }
-      if (state.currentMark.type === 'shape') Object.assign(updates, { shapeType: state.shapeType, filled: isTextboxMark.value ? false : state.shapeFilled, text: isTextboxMark.value ? (state.text.trim() || '文本框') : undefined })
-      else if (state.currentMark.type === 'ink') Object.assign(updates, { text: state.text.trim() || state.currentMark.text })
-      else Object.assign(updates, { text: state.text.trim(), style: state.style })
+      Object.assign(updates, { text: state.text.trim(), style: state.style })
       const { saveMarkEdit } = await import('@/utils/copy')
-      await saveMarkEdit(state.currentMark, updates, { marks: props.manager, bookUrl: getBookUrl(), isPdf: isPdf.value, reader: props.reader, pdfViewer: props.pdfViewer, shapeCache: new Map() })
+      await saveMarkEdit(state.currentMark, updates, { marks: props.manager, bookUrl: getBookUrl(), isPdf: isPdf.value, reader: props.reader })
       Object.assign(state.currentMark, updates)
       showMessage(props.i18n?.saved || '已保存', 1000)
       state.isEditing = false
@@ -464,6 +444,7 @@ const handleSave = async () => {
   }
 }
 const handleDelete = async () => {
+  if (readOnly.value) return
   if (!props.manager || !state.currentMark) return
   try {
     if (await props.manager.deleteMark(state.currentMark)) {
@@ -476,6 +457,7 @@ const handleDelete = async () => {
 }
 const handleCancel = () => state.currentMark ? setPanelState('card', { ...markData(state.currentMark, { isEditing: false }) }) : closeAll()
 const handleImport = async () => {
+  if (readOnly.value) return
   if (!state.currentMark) return
   const { importMark } = await import('@/utils/copy')
   await importMark(state.currentMark, { bookUrl: getBookUrl(), isPdf: isPdf.value, showMsg: (msg: string, type?: string) => showMessage(msg, type === 'error' ? 2000 : 1500, type as any), i18n: props.i18n, marks: props.manager })

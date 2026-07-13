@@ -2,7 +2,7 @@
   "name": "siyuan-sireader",
   "author": "mm-o",
   "url": "https://github.com/mm-o/siyuan-sireader",
-  "version": "1.3.9",
+  "version": "2.0.0",
   "minAppVersion": "2.10.14",
   "disabledInPublish": true,
   "backends": [
@@ -17,9 +17,9 @@
     "zh_CN": "思阅"
   },
   "description": {
-    "default": "专业电子书阅读器，支持 PDF/EPUB/MOBI/TXT/在线小说等格式，智能标注笔记、书签管理、多书源搜索、多主题切换",
-    "en_US": "Professional eBook reader supporting PDF/EPUB/MOBI/TXT/online novels and more formats with smart annotations, bookmarks, book sources, and themes",
-    "zh_CN": "专业电子书阅读器，支持 PDF/EPUB/MOBI/TXT/在线小说等格式，智能标注笔记、书签管理、多书源搜索、多主题切换"
+    "default": "专业电子书阅读器，支持 EPUB/PDF/MOBI/TXT/在线小说；PDF 支持高亮、墨迹、形状、表单、印章、签名、图片、截图、搜索、打印、导出和回链，并提供标注笔记、词典、翻译、主题与书架管理",
+    "en_US": "Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support highlights, ink, shapes, forms, stamps, signatures, images, screenshots, search, printing, export, and backlinks, with annotation notes, dictionary, translation, themes, and bookshelf management.",
+    "zh_CN": "专业电子书阅读器，支持 EPUB/PDF/MOBI/TXT/在线小说；PDF 支持高亮、墨迹、形状、表单、印章、签名、图片、截图、搜索、打印、导出和回链，并提供标注笔记、词典、翻译、主题与书架管理"
   },
   "readme": {
     "default": "README.md",

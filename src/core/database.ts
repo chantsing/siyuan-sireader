@@ -1,4 +1,3 @@
-import initSqlJs from 'sql.js/dist/sql-asm.js'
 import { loadDataState, readBookRecord as loadBookRecord, removeBookRecord, saveData, type BookRecord, writeBookRecord as saveBookRecord } from './bookStore'
 
 const BOOK_INDEX_KEY = 'bookshelf.json'
@@ -15,9 +14,6 @@ const parseJson = <T>(value: any, fallback: T): T => {
   }
 }
 const same = (a: any, b: any) => JSON.stringify(a) === JSON.stringify(b)
-let sqlJs: any
-export const getSqlJs = async () => sqlJs || (sqlJs = await initSqlJs())
-
 export interface Book {
   url: string
   title: string

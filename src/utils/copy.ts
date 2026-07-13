@@ -1,6 +1,4 @@
-// ===== 标注复制与同步 =====
-
-import { getPdfPageCanvas, getPdfViewport, pdfRectToScreenRect } from '@/core/pdf/annotation'
+﻿// ===== 标注复制与同步 =====
 
 type ExportCtx = {
   bookUrl: string
@@ -20,9 +18,8 @@ type ExportItem = {
 }
 
 const DEFAULT_LINK_FORMAT = '> [!NOTE] 📑 {{title}}\n> [{{chapter}}]({{url}}) {{text}}\n> {{image}}\n> {{note}}'
+export const inlineLinkText = (text = '') => text.replace(/\s+/g, ' ').trim()
 
-const getShapeText = (shape: any) => shape.text?.trim() || 'text'
-const getTextboxFontSize = (shape: any) => Math.max(14, Math.min(48, Math.round((shape.width || 2) * 4 + 8)))
 const getShelfBook = async (bookUrl: string) => bookUrl ? (await import('@/core/bookshelf')).bookshelfManager.getBook(bookUrl) : null
 const getGlobalSettings = async () => (window as any).__sireader_settings || await (await import('@/composables/useSetting')).settingsManager.get().catch(() => null)
 const shouldSyncOnAdd = async () => !!(await getGlobalSettings())?.annotationSyncOnAdd
@@ -56,27 +53,6 @@ const resolveExportMeta = async (ctx: ExportCtx | any) => {
   }
 }
 
-const getTextboxMetrics = (ctx: CanvasRenderingContext2D, shape: any) => {
-  const size = getTextboxFontSize(shape)
-  const lineHeight = Math.round(size * 1.45)
-  const lines = getShapeText(shape).split(/\n/).map((line: string) => line || ' ')
-  ctx.save()
-  ctx.font = `${size}px sans-serif`
-  const width = Math.max(...lines.map((line: string) => ctx.measureText(line).width), size)
-  ctx.restore()
-  return { size, lineHeight, lines, width: Math.ceil(width), height: lineHeight * lines.length }
-}
-
-const drawTextboxLabel = (ctx: CanvasRenderingContext2D, shape: any, x: number, y: number) => {
-  const { size, lineHeight, lines } = getTextboxMetrics(ctx, shape)
-  ctx.save()
-  ctx.font = `${size}px sans-serif`
-  ctx.fillStyle = shape.color || '#ff0000'
-  ctx.textBaseline = 'top'
-  lines.forEach((line: string, i: number) => ctx.fillText(line, x, y + i * lineHeight))
-  ctx.restore()
-}
-
 const writeClipboard = async (text: string, showMsg: ExportCtx['showMsg'], message = '已复制') => {
   await navigator.clipboard.writeText(text)
   showMsg(message)
@@ -104,39 +80,27 @@ export const exportBookLink = async (item: ExportItem, ctx: ExportCtx) => {
   const { formatAuthor } = await import('@/core/MarkManager')
   const author = formatAuthor(meta.author)
   await writeExport(
-    formatBookLink(ctx.bookUrl, meta.title, author, chapter, item.cfi, item.text || '', meta.settings?.linkFormat || DEFAULT_LINK_FORMAT, item.note || '', item.image || '', item.id || ''),
+    formatBookLink(ctx.bookUrl, meta.title, author, chapter, item.cfi, inlineLinkText(item.text || ''), meta.settings?.linkFormat || DEFAULT_LINK_FORMAT, item.note || '', item.image || '', item.id || ''),
     ctx,
     meta
   )
 }
 
-export const copyMark = async (item: any, ctx: { bookUrl: string; bookInfo?: any; settings?: any; reader?: any; pdfViewer?: any; shapeCache?: Map<string, string>; showMsg: (msg: string, type?: string) => void }) => {
-  const { bookUrl, reader, pdfViewer, shapeCache } = ctx
+export const copyMark = async (item: any, ctx: { bookUrl: string; bookInfo?: any; settings?: any; reader?: any; isPdf?: boolean; showMsg: (msg: string, type?: string) => void }) => {
+  const { bookUrl, reader } = ctx
   const fallback = item.text || item.note || ''
   if (!bookUrl) return writeExport(fallback, ctx, await resolveExportMeta(ctx), '仅复制文本')
-  const isPdf = !!pdfViewer
-  const page = item.page || (isPdf ? pdfViewer?.getCurrentPage() : null)
+  const isPdf = !!ctx.isPdf || item.format === 'pdf' || !!item.page
+  const page = item.page || null
   const cfi = item.cfi || (isPdf && page ? `#page-${page}` : '')
   if (!cfi) return writeExport(fallback, ctx, await resolveExportMeta(ctx), '仅复制文本')
   const { getChapterName } = await import('@/core/MarkManager')
   const book = isPdf ? null : reader?.getBook?.()
-  const toc = isPdf ? pdfViewer?.getPDF?.()?.toc : book?.toc
+  const toc = isPdf ? null : book?.toc
   const chapter = item.chapter || getChapterName({ cfi, page, isPdf, toc, location: reader?.getLocation?.() }) || '📍'
   let img = ''
   if (item.image || item.src) {
     img = await imageSrcToMarkdown(item.image || item.src || '', `epub_image_${item.id || Date.now()}`)
-  } else if (isPdf && item.type === 'ink') {
-    img = await generateInkScreenshot(item)
-  } else if (item.shapeType && isPdf) {
-    const hdKey = `${item.id}_${item.shapeType}_hd`
-    if (shapeCache?.has(hdKey)) {
-      const blob = await fetch(shapeCache.get(hdKey)!).then(r => r.blob())
-      const file = new File([blob], `shape_${item.id}.png`, { type: 'image/png' })
-      const res = await (await import('@/api')).upload('/assets/', [file])
-      img = res.succMap?.[file.name] ? `![](${res.succMap[file.name]})` : ''
-    } else {
-      img = await generateShapeScreenshot(item, page, pdfViewer)
-    }
   }
   await exportBookLink({ chapter, cfi, text: item.text || '', note: item.note || '', image: img, id: item.id || '' }, ctx)
 }
@@ -154,9 +118,7 @@ const genMarkdown = async (item: any, ctx: any): Promise<string> => {
 }
 
 const updateMarkBlockId = async (item: any, blockId: string, ctx: any) => {
-  if (item.type === 'shape' && ctx.shapeManager) await ctx.shapeManager.updateShape(item.id, { blockId })
-  else if (item.type === 'ink' && ctx.inkManager) await ctx.inkManager.updateInk(item.id, { blockId })
-  else if (ctx.marks) await ctx.marks.updateMark(item, { blockId })
+  if (ctx.marks) await ctx.marks.updateMark(item, { blockId })
 }
 
 const appendMarkToDoc = async (item: any, docId: string, ctx: any, markdown?: string) => {
@@ -253,86 +215,4 @@ export const openNoteTargetFloat = async (bookUrl: string, settings: any, el: HT
   if (!docId) throw new Error(target === 'clipboard' ? '请先绑定文档或将插入位置设为文档/打开文档' : '未找到目标文档')
   hideFloat()
   _plugin?.addFloatLayer?.({ refDefs: [{ refID: docId }], targetElement: el, isBacklink: false })
-}
-
-export const generateShapeScreenshot = async (shape: any, page: number, pdfViewer: any): Promise<string> => {
-  const pdfCanvas = getPdfPageCanvas(page)
-  if (!pdfCanvas) return ''
-  const vp = getPdfViewport(pdfViewer, page)
-  if (!vp) return ''
-
-  const [vx1, vy1, vx2, vy2] = pdfRectToScreenRect(vp, shape.rect)
-  const dpr = pdfCanvas.width / (parseFloat(pdfCanvas.style.width) || pdfCanvas.width)
-  const canvas = document.createElement('canvas')
-  const ctx = canvas.getContext('2d')!
-
-  if (shape.shapeType === 'textbox') {
-    const metrics = getTextboxMetrics(ctx, shape)
-    const pad = 8
-    canvas.width = Math.max(24, metrics.width + pad * 2)
-    canvas.height = Math.max(24, metrics.height + pad * 2)
-    ctx.globalAlpha = shape.opacity || 0.8
-    drawTextboxLabel(ctx, shape, pad, pad)
-  } else {
-    const w = Math.abs(vx2 - vx1)
-    const h = Math.abs(vy2 - vy1)
-    if (w < 10 || h < 10) return ''
-    const scale = Math.min(3, Math.max(2, 1440 / Math.max(w, 1)))
-    canvas.width = Math.min(2160, Math.max(24, Math.ceil(w * scale)))
-    canvas.height = Math.max(24, Math.round(h * canvas.width / w))
-    ctx.drawImage(pdfCanvas, Math.min(vx1, vx2) * dpr, Math.min(vy1, vy2) * dpr, w * dpr, h * dpr, 0, 0, canvas.width, canvas.height)
-    ctx.globalAlpha = shape.opacity || 0.8
-    if (shape.filled) {
-      ctx.fillStyle = shape.color || '#ff0000'
-      ctx.beginPath()
-      if (shape.shapeType === 'circle') ctx.arc(canvas.width / 2, canvas.height / 2, Math.min(canvas.width, canvas.height) / 2, 0, Math.PI * 2)
-      else if (shape.shapeType === 'triangle') {
-        ctx.moveTo(canvas.width / 2, 0)
-        ctx.lineTo(canvas.width, canvas.height)
-        ctx.lineTo(0, canvas.height)
-        ctx.closePath()
-      } else ctx.rect(0, 0, canvas.width, canvas.height)
-      ctx.fill()
-    } else {
-      ctx.strokeStyle = shape.color || '#ff0000'
-      ctx.lineWidth = Math.max(4, (shape.width || 2) * scale)
-      ctx.beginPath()
-      if (shape.shapeType === 'circle') ctx.arc(canvas.width / 2, canvas.height / 2, Math.min(canvas.width, canvas.height) / 2, 0, Math.PI * 2)
-      else if (shape.shapeType === 'triangle') {
-        ctx.moveTo(canvas.width / 2, 0)
-        ctx.lineTo(canvas.width, canvas.height)
-        ctx.lineTo(0, canvas.height)
-        ctx.closePath()
-      } else ctx.rect(0, 0, canvas.width, canvas.height)
-      ctx.stroke()
-    }
-  }
-
-  return uploadCanvas(canvas, `shape_${shape.id}.png`)
-}
-
-export const generateInkScreenshot = async (ink: any): Promise<string> => {
-  if (!ink?.paths?.length || !Array.isArray(ink.rect)) return ''
-  const [x1, y1, x2, y2] = ink.rect
-  const w = Math.max(1, x2 - x1)
-  const h = Math.max(1, y2 - y1)
-  const pad = 8
-  const canvas = document.createElement('canvas')
-  const ctx = canvas.getContext('2d')!
-  const scale = Math.min(3, 720 / Math.max(w, 1))
-  canvas.width = Math.ceil(w * scale + pad * 2)
-  canvas.height = Math.ceil(h * scale + pad * 2)
-  ctx.lineCap = ctx.lineJoin = 'round'
-  ink.paths.forEach((path: any) => {
-    const points = path.points || []
-    if (points.length < 2) return
-    ctx.strokeStyle = path.color || ink.color || '#000'
-    ctx.globalAlpha = path.opacity ?? 1
-    ctx.lineWidth = Math.max(1, (path.width || 2) * scale)
-    ctx.beginPath()
-    ctx.moveTo((points[0].x - x1) * scale + pad, (y2 - points[0].y) * scale + pad)
-    points.forEach((point: any) => ctx.lineTo((point.x - x1) * scale + pad, (y2 - point.y) * scale + pad))
-    ctx.stroke()
-  })
-  return uploadCanvas(canvas, `ink_${ink.id}.png`)
 }

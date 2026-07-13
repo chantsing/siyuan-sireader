@@ -18,6 +18,19 @@ export interface BookRecord {
   updatedAt: number
 }
 
+export interface EmbedPdfProgress {
+  pageNumber: number
+  totalPages: number
+  pageCoordinates?: { x: number; y: number }
+  updatedAt: number
+}
+
+export interface EmbedPdfRecord {
+  version: 1
+  annotations: any[]
+  progress?: EmbedPdfProgress
+}
+
 const MISSING_DATA = Symbol('sireader.missingData')
 
 export interface StoredBookRef {
@@ -36,6 +49,7 @@ const publicToDataPath = (path = '') => path.startsWith('/public/') ? path.repla
 const isRemotePath = (path = '') => /^(https?:\/\/|file:\/\/)|^\/plugin\/private\//i.test(path)
 const isPublicPath = (path = '') => path.startsWith('/public/') || path.startsWith('/data/public/')
 const getRecordKey = (url: string) => `${RECORDS_DIR}/${hash(url)}.json`
+const getEmbedPdfRecordKey = (url: string) => `${RECORDS_DIR}/embedpdf/${hash(url)}.bin`
 const req = (id: string) => { try { return (window as any).require?.(id) } catch { return null } }
 const normalizeStoragePath = (storageName = '') => {
   const resolved: string[] = []
@@ -106,6 +120,35 @@ const putPublicFile = async (blob: Blob, publicPath: string, name?: string) => {
   await putFile(dataPath, false, file)
   return publicPath
 }
+
+const getV8 = () => req('v8')
+const getBuffer = () => req('buffer')?.Buffer || (window as any).Buffer
+const rectFromArray = (rect: number[] = []) => {
+  const [x1 = 0, y1 = 0, x2 = x1, y2 = y1] = rect
+  return { origin: { x: Math.min(x1, x2), y: Math.min(y1, y2) }, size: { width: Math.abs(x2 - x1), height: Math.abs(y2 - y1) } }
+}
+const rectFromBox = (box: any = {}) => ({
+  origin: { x: Number(box.x || 0), y: Number(box.y || 0) },
+  size: { width: Number(box.w || box.width || 0), height: Number(box.h || box.height || 0) },
+})
+const legacyColorToHex = (color = '', fallback = '#FFCD45') => ({ yellow: '#ffeb3b', red: '#ef5350', green: '#66bb6a', blue: '#42a5f5', purple: '#ab47bc', orange: '#ff9800', pink: '#ec407a' } as Record<string, string>)[color] || color || fallback
+const isUserEmbedPdfAnnotation = (item: any) => {
+  const a = item?.annotation || item
+  if (!a || (a.type === 4 && !a.linePoints) || ([7, 8].includes(a.type) && !Array.isArray(a.vertices))) return false
+  return a.type !== 2 || !!(a.created || a.modified || a.author || a.custom || String(a.contents || '').trim())
+}
+const plainValue = (value: any): any => {
+  if (value == null || ['string', 'number', 'boolean'].includes(typeof value)) return value
+  if (value instanceof Date || value instanceof ArrayBuffer) return value
+  if (ArrayBuffer.isView(value)) return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength)
+  if (Array.isArray(value)) return value.map(plainValue)
+  if (typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([, v]) => typeof v !== 'function' && typeof v !== 'symbol').map(([k, v]) => [k, plainValue(v)]))
+  return undefined
+}
+const normalizeEmbedPdfAnnotations = (annotations: any[] = []) => annotations.filter(isUserEmbedPdfAnnotation).map(item => ({
+  annotation: plainValue(item.annotation || item),
+  ...(item.ctx ? { ctx: plainValue(item.ctx) } : {}),
+}))
 
 export const isSupportedBookFile = (name = '') => new RegExp(`\\.(${SUPPORTED_BOOK_EXTS.join('|')})$`, 'i').test(name)
 export const filterSupportedBookFiles = (files: File[]) => files.filter(file => isSupportedBookFile(file.name))
@@ -222,6 +265,67 @@ export const saveManagedFile = async (blob: Blob, path: string, name?: string) =
 export const readBookRecord = async (url: string): Promise<BookRecord | null> => loadData<BookRecord>(getRecordKey(url))
 export const writeBookRecord = async (url: string, record: BookRecord) => saveData(getRecordKey(url), record)
 export const removeBookRecord = async (url: string) => removeData(getRecordKey(url))
+const readEmbedPdfRecord = async (url: string): Promise<EmbedPdfRecord | null> => {
+  const v8 = getV8()
+  const Buffer = getBuffer()
+  const blob = v8 && Buffer ? await readFileBlob(getPluginStoragePath(getEmbedPdfRecordKey(url))) : null
+  if (blob) {
+    const record = v8.deserialize(Buffer.from(await blob.arrayBuffer()))
+    if (record?.version === 1) return { version: 1, annotations: Array.isArray(record.annotations) ? record.annotations : [], progress: record.progress }
+  }
+  return null
+}
+const writeEmbedPdfRecord = async (url: string, record: EmbedPdfRecord) => {
+  const v8 = getV8()
+  if (!v8) return
+  const key = getEmbedPdfRecordKey(url)
+  const path = getPluginStoragePath(key)
+  const dir = path.split('/').slice(0, -1).join('/')
+  await putFile(dir, true, new File([], ''))
+  await putFile(path, false, new File([v8.serialize(record)], key.split('/').pop() || 'embedpdf.bin', { type: 'application/octet-stream' }))
+}
+export const readEmbedPdfAnnotations = async (url: string): Promise<any[] | null> => {
+  const record = await readEmbedPdfRecord(url)
+  return record?.annotations || null
+}
+export const writeEmbedPdfAnnotations = async (url: string, annotations: any[]) => {
+  const record = await readEmbedPdfRecord(url)
+  await writeEmbedPdfRecord(url, { version: 1, annotations: normalizeEmbedPdfAnnotations(annotations), progress: record?.progress })
+}
+export const readEmbedPdfProgress = async (url: string): Promise<EmbedPdfProgress | null> => {
+  const record = await readEmbedPdfRecord(url)
+  return record?.progress || null
+}
+export const writeEmbedPdfProgress = async (url: string, progress: EmbedPdfProgress) => {
+  const record = await readEmbedPdfRecord(url)
+  await writeEmbedPdfRecord(url, { version: 1, annotations: record?.annotations || [], progress })
+}
+export const removeEmbedPdfAnnotations = async (url: string) => {
+  await removeFile(getPluginStoragePath(getEmbedPdfRecordKey(url))).catch(() => {})
+}
+const legacyAnnotationToEmbedPdf = (item: any) => {
+  const data = item?.data || {}
+  const pageIndex = Math.max(0, Number(data.page || item.page || item.loc || 1) - 1)
+  const color = legacyColorToHex(item.color, item.type === 'highlight' ? '#FFCD45' : '#E44234')
+  const custom = Object.fromEntries(Object.entries({ text: item.text || data.text, note: item.note || data.note, tags: item.tags || data.tags, blockId: item.blockId || item.block, chapter: item.chapter, style: item.style || data.style, textOffset: item.textOffset || data.textOffset, customOrder: item.customOrder }).filter(([, v]) => Array.isArray(v) ? v.length : v))
+  const base = { id: item.id, pageIndex, flags: ['print'], created: new Date(item.created || Date.now()).toISOString(), modified: new Date(item.updated || item.created || Date.now()).toISOString(), author: 'SiReader', ...(Object.keys(custom).length ? { custom } : {}) }
+  if (item.type === 'highlight') {
+    const rects = (data.rects || item.rects || []).map(rectFromBox)
+    return rects[0] && { annotation: { ...base, type: 9, strokeColor: color, opacity: 1, rect: rects[0], segmentRects: rects, contents: item.note || data.note || '' } }
+  }
+  if (item.type === 'ink') return { annotation: { ...base, type: 15, strokeColor: color, color, opacity: data.opacity ?? 1, strokeWidth: data.paths?.[0]?.width || 2, rect: rectFromArray(data.rect), inkList: (data.paths || []).map((path: any) => ({ points: path.points || [] })), contents: item.note || data.note || item.text || data.text || '' } }
+  if (item.type === 'shape' && data.shapeType === 'textbox') return { annotation: { ...base, type: 3, contents: item.text || data.text || item.note || data.note || '', fontSize: 14, fontColor: color, fontFamily: 4, textAlign: 0, verticalAlign: 0, color: 'transparent', backgroundColor: 'transparent', opacity: 1, rect: rectFromArray(data.rect), unrotatedRect: rectFromArray(data.rect), rotation: 0 } }
+  if (item.type === 'shape') return { annotation: { ...base, type: data.shapeType === 'circle' ? 6 : 5, color: 'transparent', strokeColor: color, strokeWidth: data.strokeWidth || 2, strokeStyle: 0, opacity: 1, rect: rectFromArray(data.rect), contents: item.note || data.note || item.text || data.text || '' } }
+  return null
+}
+export const migrateLegacyPdfAnnotationsToEmbedPdf = async (url: string) => {
+  if ((await readEmbedPdfAnnotations(url))?.length) return null
+  const legacy = await readBookRecord(url)
+  const annotations = normalizeEmbedPdfAnnotations((legacy?.annotations || []).map(legacyAnnotationToEmbedPdf).filter(Boolean))
+  if (!annotations.length) return null
+  await writeEmbedPdfRecord(url, { version: 1, annotations, progress: legacy?.book?.chapter ? { pageNumber: legacy.book.chapter, totalPages: legacy.book.total || 0, updatedAt: legacy.book.read || Date.now() } : undefined })
+  return annotations
+}
 
 export const removeManagedFile = async (path = '') => {
   if (!path || path.startsWith('asset://') || isRemotePath(path)) return
@@ -288,7 +392,7 @@ export const loadBookFile = async (path: string): Promise<File> => {
 
 export const clearStoredPluginData = async (books: StoredBookRef[] = []) => {
   for (const book of books) {
-    await Promise.all([removeManagedFile(book.path), removeManagedFile(book.cover), removeBookRecord(book.url)])
+    await Promise.all([removeManagedFile(book.path), removeManagedFile(book.cover), removeBookRecord(book.url), removeEmbedPdfAnnotations(book.url)])
   }
   for (const key of ['bookshelf.json', 'settings.json', 'daily.json']) await removeData(key)
 }

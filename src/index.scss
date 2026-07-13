@@ -1,4 +1,4 @@
-@use 'sass:math';
+﻿@use 'sass:math';
 
 // ==================== Mixins ====================
 @mixin flex-center { display: flex; align-items: center; justify-content: center; }
@@ -304,144 +304,6 @@
 }
 
 
-// ==================== PDF 样式 ====================
-.pdf-page {
-  position: relative;
-  margin: 20px auto;
-  box-shadow: 0 2px 8px #0001;
-  canvas { 
-    display: block;
-    image-rendering: auto;
-  }
-}
-
-.annotationLayer {
-  position: absolute;
-  inset: 0;
-  
-  a {
-    display: block;
-    transition: background 0.15s;
-    &:hover {
-      background: rgba(255, 255, 0, 0.2);
-    }
-  }
-}
-
-.pdf-highlight {
-  mix-blend-mode: multiply;
-  border-radius: 2px;
-  transition: opacity .2s;
-}
-
-// ==================== PDF 工具栏 ====================
-.pdf-toolbar-toggle {
-  position: fixed;
-  top: 16px;
-  right: 16px;
-  @include btn-base;
-  background: var(--b3-theme-surface);
-  border: 1px solid var(--b3-border-color);
-  box-shadow: 0 2px 8px #0001;
-  z-index: 100;
-}
-
-.pdf-toolbar {
-  position: fixed;
-  top: 16px;
-  right: 16px;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px;
-  background: var(--b3-theme-surface);
-  border: 1px solid var(--b3-border-color);
-  border-radius: 6px;
-  box-shadow: 0 2px 8px #0002;
-  z-index: 100;
-  
-  .toolbar-btn {
-    @include btn-base;
-    &.active { background: var(--b3-theme-primary-lighter); color: var(--b3-theme-primary); }
-  }
-  
-  .toolbar-divider { width: 1px; height: 20px; background: var(--b3-border-color); margin: 0 2px; }
-  
-  select {
-    height: 28px;
-    padding: 0 8px;
-    border: 1px solid var(--b3-border-color);
-    border-radius: 4px;
-    background: var(--b3-theme-background);
-    color: var(--b3-theme-on-surface);
-    font-size: 12px;
-    cursor: pointer;
-    &:focus { outline: none; border-color: var(--b3-theme-primary); }
-  }
-  
-  .ink-color {
-    width: 20px;
-    height: 20px;
-    border: 2px solid transparent;
-    border-radius: 50%;
-    cursor: pointer;
-    transition: transform 0.15s;
-    &:hover { transform: scale(1.1); }
-  }
-  
-  .ink-slider {
-    width: 60px;
-    height: 4px;
-    -webkit-appearance: none;
-    background: var(--b3-border-color);
-    border-radius: 2px;
-    outline: none;
-    &::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      width: 12px;
-      height: 12px;
-      border-radius: 50%;
-      background: var(--b3-theme-primary);
-      cursor: pointer;
-    }
-  }
-}
-
-.pdf-menu {
-  position: absolute;
-  top: 56px;
-  right: 16px;
-  background: var(--b3-theme-surface);
-  border: 1px solid var(--b3-border-color);
-  border-radius: 6px;
-  box-shadow: 0 2px 8px #0002;
-  min-width: 160px;
-  z-index: 100;
-  
-  button {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    border: none;
-    background: transparent;
-    color: var(--b3-theme-on-surface);
-    font-size: 13px;
-    cursor: pointer;
-    border-radius: 4px;
-    transition: background 0.15s;
-    &:hover { background: var(--b3-list-hover); }
-    svg { width: 14px; height: 14px; }
-  }
-}
-
-// ==================== PDF 缩略图 ====================
-.sr-thumbnails{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:12px;padding:12px}
-.sr-thumb{position:relative;cursor:pointer;border-radius:4px;overflow:hidden;border:2px solid var(--b3-border-color);transition:all .2s;&:hover{border-color:var(--b3-theme-primary);transform:translateY(-2px);box-shadow:0 4px 12px #0003}img{width:100%;display:block}}
-.sr-thumb-placeholder{aspect-ratio:3/4;display:flex;align-items:center;justify-content:center;background:var(--b3-theme-surface);font-size:24px;font-weight:600;color:var(--b3-theme-on-surface-variant)}
-.sr-thumb-label{position:absolute;bottom:0;left:0;right:0;padding:4px;background:linear-gradient(to top,#000c,transparent);color:#fff;font-size:11px;text-align:center}
-
 // ==================== 操作按钮（统一样式）====================
 .toc-actions {
   position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; opacity: 0;
@@ -495,5 +357,3 @@
 .sr-empty { padding: 60px 20px; text-align: center; color: var(--b3-theme-on-surface-variant); opacity: .5; font-size: 14px; line-height: 1.8; }
 .sr-empty-small { padding: 12px; text-align: center; font-size: 12px; color: var(--b3-theme-on-surface-variant); }
 
-// PDF 链接样式
-.pdf-link{background:transparent;transition:background .15s;&:hover{background:#0af3}}

@@ -50,20 +50,6 @@ export default class PluginSample extends Plugin {
       nextPage: { text: '下一页', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:nextPage')) },
       toggleBookmark: { text: '切换书签', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:toggleBookmark')) },
       quickNote: { text: '快速笔记', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:quickNote')) },
-      pdfZoomIn: { text: 'PDF放大', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfZoomIn')) },
-      pdfZoomOut: { text: 'PDF缩小', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfZoomOut')) },
-      pdfZoomReset: { text: 'PDF重置缩放', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfZoomReset')) },
-      pdfRotate: { text: 'PDF旋转', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfRotate')) },
-      pdfSearch: { text: 'PDF搜索', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfSearch')) },
-      pdfPrint: { text: 'PDF打印', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfPrint')) },
-      pdfFirstPage: { text: 'PDF首页', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfFirstPage')) },
-      pdfLastPage: { text: 'PDF末页', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfLastPage')) },
-      pdfPageUp: { text: 'PDF上一页', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfPageUp')) },
-      pdfPageDown: { text: 'PDF下一页', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfPageDown')) },
-      pdfTextTool: { text: 'PDF文本选择工具', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfTextTool')) },
-      pdfHandTool: { text: 'PDF手形工具', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfHandTool')) },
-      pdfInkTool: { text: 'PDF墨迹标注工具', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfInkTool')) },
-      pdfShapeTool: { text: 'PDF形状标注工具', hotkey: '', callback: () => window.dispatchEvent(new CustomEvent('sireader:pdfShapeTool')) },
     }
 
     Object.entries(cmds).forEach(([k, { text, hotkey, callback }]) =>

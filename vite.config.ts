@@ -44,6 +44,7 @@ export default defineConfig(({
 
   const args = minimist(process.argv.slice(2))
   const isWatch = args.watch || args.w || false
+  const useLiveReload = isWatch && env.VITE_ENABLE_LIVERELOAD === 'true'
   const distDir = isWatch ? devDistDir : "./dist"
   const privateSources = resolve(__dirname, "private-sources/src/privateSources.ts")
 
@@ -52,10 +53,6 @@ export default defineConfig(({
       alias: {
         "@": resolve(__dirname, "src"),
       },
-    },
-
-    optimizeDeps: {
-      exclude: ['sql.js', 'sql.js/dist/sql-asm.js'],
     },
 
     plugins: [
@@ -92,6 +89,14 @@ export default defineConfig(({
           {
             src: "./src/i18n/*.json",
             dest: "./i18n/",
+          },
+          {
+            src: "./node_modules/@embedpdf/pdfium/dist/pdfium.wasm",
+            dest: "./assets/",
+          },
+          {
+            src: "./node_modules/@embedpdf/default-stamps/*",
+            dest: "./assets/default-stamps/",
           },
         ],
       }),
@@ -131,7 +136,7 @@ export default defineConfig(({
         plugins: [
           ...(isWatch
             ? [
-                livereload(devDistDir),
+                ...(useLiveReload ? [livereload(devDistDir)] : []),
                 {
                   // 监听静态资源文件
                   name: "watch-external",
@@ -139,6 +144,7 @@ export default defineConfig(({
                     const files = await fg([
                       "src/i18n/*.json",
                       "./README*.md",
+                      
                       "./plugin.json",
                     ])
                     for (const file of files) {

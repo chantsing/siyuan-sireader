@@ -1,29 +1,28 @@
 ﻿import { createTooltip, hideTooltip, showTooltip } from '@/core/MarkManager'
 
+import { pdfPageFromCfi } from '@/utils/jump'
+
 type PreviewContext = {
   isPdf?: boolean
   reader?: any
   view?: any
-  pdfViewer?: any
   bookUrl?: string
   book?: any
 }
 
 const CONTEXT_SIZE = 520
 const HOVER_DELAY = 180
-const PDF_RUNTIME_PATH = '/stage/protyle/js/pdf/pdf.min.mjs'
-const PDF_WORKER_PATH = '/stage/protyle/js/pdf/pdf.worker.min.mjs'
-const textCache = new Map<string, Promise<string>>()
-const pdfTextCache = new WeakMap<object, Map<number, Promise<string>>>()
-const bookSourceCache = new Map<string, Promise<File>>()
-const offlinePdfCache = new Map<string, Promise<any>>()
-const offlineViewCache = new Map<string, Promise<any>>()
-let pdfjsLib: any = null
 
 let tooltip: HTMLElement | null = null
 let showTimer: number | undefined
 let hideTimer: number | undefined
 let activeKey = ''
+const bookSourceCache = new Map<string, Promise<File | Blob | string>>()
+const offlineViewCache = new Map<string, Promise<any>>()
+const textCache = new Map<string, Promise<string>>()
+const pdfTextCache = new Map<string, Promise<string>>()
+let offlinePdfKey = ''
+let offlinePdfSession: Promise<any> | null = null
 
 const esc = (value = '') => String(value)
   .replace(/&/g, '&amp;')
@@ -39,16 +38,9 @@ const sourcePathOf = (book: any, bookUrl = '') => book?.url?.startsWith?.('asset
 const keyOf = (mark: any, ctx: PreviewContext) => [
   ctx.bookUrl || mark?.book || '',
   ctx.isPdf ? 'pdf' : 'epub',
-  ctx.reader || ctx.view || ctx.pdfViewer ? 'live' : 'stored',
+  ctx.reader || ctx.view ? 'live' : 'stored',
   mark?.id || mark?.cfi || mark?.page || mark?.timestamp || '',
 ].join(':')
-
-const loadPDFJS = async () => {
-  if (pdfjsLib) return pdfjsLib
-  pdfjsLib = await import(PDF_RUNTIME_PATH)
-  pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_PATH
-  return pdfjsLib
-}
 
 const getBookSource = async (ctx: PreviewContext) => {
   const bookUrl = ctx.bookUrl || ctx.book?.url || ''
@@ -61,23 +53,6 @@ const getBookSource = async (ctx: PreviewContext) => {
     })())
   }
   return bookSourceCache.get(bookUrl)!
-}
-
-const getOfflinePdf = async (ctx: PreviewContext) => {
-  const bookUrl = ctx.bookUrl || ctx.book?.url || ''
-  if (!bookUrl) return null
-  if (!offlinePdfCache.has(bookUrl)) {
-    offlinePdfCache.set(bookUrl, (async () => {
-      const [pdfjs, file] = await Promise.all([loadPDFJS(), getBookSource(ctx)])
-      return pdfjs.getDocument({
-        data: new Uint8Array(await file.arrayBuffer()),
-        cMapUrl: '/stage/protyle/js/pdf/cmaps/',
-        cMapPacked: true,
-        standardFontDataUrl: '/stage/protyle/js/pdf/standard_fonts/',
-      }).promise
-    })())
-  }
-  return offlinePdfCache.get(bookUrl)!
 }
 
 const getOfflineView = async (ctx: PreviewContext) => {
@@ -97,6 +72,100 @@ const getOfflineView = async (ctx: PreviewContext) => {
     })())
   }
   return offlineViewCache.get(bookUrl)!
+}
+
+const waitPdfDocument = (registry: any, documentId: string) => new Promise<any>((resolve, reject) => {
+  const documents = registry.getPlugin('document-manager')?.provides?.()
+  const done = () => {
+    const doc = documents?.getDocument?.(documentId)
+    if (doc) {
+      offOpen?.()
+      offError?.()
+      clearTimeout(timer)
+      resolve(doc)
+      return true
+    }
+    return false
+  }
+  let offOpen: any
+  let offError: any
+  const timer = setTimeout(() => {
+    offOpen?.()
+    offError?.()
+    reject(new Error('PDF preview load timeout'))
+  }, 10000)
+  if (done()) return
+  offOpen = documents?.onDocumentOpened?.((state: any) => (state.id === documentId || state.documentId === documentId) && done())
+  offError = documents?.onDocumentError?.((event: any) => {
+    if (event.documentId !== documentId) return
+    offOpen?.()
+    offError?.()
+    clearTimeout(timer)
+    reject(new Error(event.message || 'PDF preview load failed'))
+  })
+})
+
+const disposeOfflinePdfSession = () => {
+  offlinePdfSession?.then(({ app, host, registry }) => {
+    registry?.destroy?.()
+    app?.unmount?.()
+    host?.remove?.()
+  }).catch(() => {})
+}
+
+const getOfflinePdfSession = async (ctx: PreviewContext) => {
+  const bookUrl = ctx.bookUrl || ctx.book?.url || ''
+  if (offlinePdfSession && offlinePdfKey === bookUrl) return offlinePdfSession
+  disposeOfflinePdfSession()
+  offlinePdfKey = bookUrl
+  offlinePdfSession = (async () => {
+    const [{ createApp, h }, { PDFViewer }] = await Promise.all([import('vue'), import('@embedpdf/vue-pdf-viewer')])
+    const source = await getBookSource(ctx)
+    const buffer = typeof source === 'string' ? await (await fetch(source)).arrayBuffer() : await source.arrayBuffer()
+    const documentId = 'sireader-preview-document'
+    const host = document.createElement('div')
+    host.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;visibility:hidden;pointer-events:none'
+    document.body.appendChild(host)
+    return new Promise((resolve, reject) => {
+      const app = createApp({
+        render: () => h(PDFViewer, {
+          config: {
+            tabBar: 'never',
+            worker: false,
+            wasmUrl: '/plugins/siyuan-sireader/assets/pdfium.wasm',
+            documentManager: { initialDocuments: [{ documentId, buffer, name: `${bookUrl || 'document'}.pdf`, autoActivate: true }] },
+            fontFallback: null,
+            fonts: { ui: null, signature: null },
+          },
+          onReady: (registry: any) => waitPdfDocument(registry, documentId)
+            .then((doc: any) => resolve({ registry, documentId, doc, app, host }))
+            .catch(reject),
+        }),
+      })
+      app.mount(host)
+    })
+  })()
+  return offlinePdfSession
+}
+
+const getPdfPageText = (mark: any, ctx: PreviewContext) => {
+  const page = Number(mark?.page) || 1
+  const live = ctx.view?.getPageText?.(page)
+  if (live) return live
+  const bookUrl = ctx.bookUrl || ctx.book?.url || ''
+  if (!bookUrl) return Promise.resolve('')
+  const key = `${bookUrl}:${page}`
+  if (!pdfTextCache.has(key)) {
+    const promise = (async () => {
+      const { registry, doc } = await getOfflinePdfSession(ctx)
+      return await registry.getEngine().extractText(doc, [page - 1]).toPromise()
+    })().catch(error => {
+      pdfTextCache.delete(key)
+      throw error
+    })
+    pdfTextCache.set(key, promise)
+  }
+  return pdfTextCache.get(key)!
 }
 
 const getTooltip = () => {
@@ -134,7 +203,7 @@ const firstAfter = (text: string, from: number) => {
   return cn < 0 ? en : en < 0 ? cn : Math.min(cn, en)
 }
 
-const getAround = (text: string, needle = '') => {
+export const getPreviewAround = (text: string, needle = '') => {
   const source = compact(text)
   const target = normalize(needle)
   if (!source) return { before: '', hit: target, after: '' }
@@ -152,7 +221,7 @@ const getAround = (text: string, needle = '') => {
   const left = last < 0 ? -1 : prevStop(source, last - 1)
   const right = firstAfter(source, end)
   const from = Math.max(0, left + 1, start - CONTEXT_SIZE)
-  const to = Math.min(source.length, right < 0 ? source.length : right + 1, end + CONTEXT_SIZE)
+  const to = Math.min(source.length, Math.max(right < 0 ? end : right + 1, end + CONTEXT_SIZE))
   return {
     before: source.slice(from, start).trim(),
     hit: source.slice(start, end) || target,
@@ -160,7 +229,7 @@ const getAround = (text: string, needle = '') => {
   }
 }
 const renderContext = (mark: any, text: string, title: string) => {
-  const { before, hit, after } = getAround(text, mark?.text || mark?.title || '')
+  const { before, hit, after } = getPreviewAround(text, mark?.text || mark?.title || '')
   const note = mark?.note ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--b3-border-color);color:var(--b3-theme-on-surface);line-height:1.6">${esc(mark.note)}</div>` : ''
   const meta = [mark?.bookTitle, mark?.chapter, mark?.page ? `Page ${mark.page}` : ''].filter(Boolean).join(' - ')
   const body = `
@@ -176,29 +245,10 @@ const renderContext = (mark: any, text: string, title: string) => {
   return createTooltip({ icon: '#iconMark', iconColor: 'var(--b3-theme-primary)', title, content: body })
 }
 
-const getPdfPageText = async (pdf: any, pageNum: number) => {
-  if (!pdf || !pageNum) return ''
-  let cache = pdfTextCache.get(pdf)
-  if (!cache) {
-    cache = new Map()
-    pdfTextCache.set(pdf, cache)
-  }
-  if (!cache.has(pageNum)) {
-    cache.set(pageNum, (async () => {
-      const page = await pdf.getPage(pageNum)
-      const textContent = await page.getTextContent()
-      return normalize(textContent.items.map((item: any) => item.str || '').join(' '))
-    })())
-  }
-  return cache.get(pageNum)!
-}
+export const pdfPreviewText = async (mark: any, ctx: PreviewContext) =>
+  await getPdfPageText(mark, ctx).catch(() => '') || mark?.text || mark?.note || ''
 
-const getPdfContext = async (mark: any, ctx: PreviewContext) => {
-  const page = mark?.page || mark?.rects?.find?.((rect: any) => rect?.page)?.page
-  const pdf = ctx.pdfViewer?.getPDF?.() || await getOfflinePdf(ctx)
-  const pageText = await getPdfPageText(pdf, page)
-  return renderContext({ ...mark, page }, pageText || mark?.text || mark?.note || '', 'Mark Context')
-}
+const getPdfContext = async (mark: any, ctx: PreviewContext) => renderContext(mark, await pdfPreviewText(mark, ctx), 'Mark Context')
 
 const textFromRange = (range: Range) => {
   const clone = range.cloneContents()
@@ -234,9 +284,10 @@ const getEpubContext = async (mark: any, ctx: PreviewContext) => {
 }
 
 const buildPreview = (mark: any, ctx: PreviewContext) => {
+  if (ctx.isPdf) return getPdfContext(mark, ctx)
   const key = keyOf(mark, ctx)
   if (!textCache.has(key)) {
-    textCache.set(key, ctx.isPdf ? getPdfContext(mark, ctx) : getEpubContext(mark, ctx))
+    textCache.set(key, getEpubContext(mark, ctx))
   }
   return textCache.get(key)!
 }
@@ -246,7 +297,7 @@ const getActiveContext = (bookUrl: string): PreviewContext => {
   const reader = (window as any).__sireader_active_reader
   const currentBook = (window as any).__currentBookUrl
   if (!view || currentBook !== bookUrl) return { bookUrl }
-  return { bookUrl, isPdf: !!view?.isPdf, reader, view, pdfViewer: view?.viewer }
+  return { bookUrl, isPdf: !!view?.isPdf, reader, view }
 }
 
 const fromAnnotation = (annotation: any, book?: any) => {
@@ -273,8 +324,28 @@ const fromAnnotation = (annotation: any, book?: any) => {
     image: data.image,
     progress: data.progress,
     textOffset: data.textOffset,
-    shapeType: data.shapeType,
     paths: data.paths,
+  }
+}
+
+export const embedPdfTransferMark = (items: any[] = [], parsed: { cfi: string; id?: string }, book?: any) => {
+  const annotations = items.map(item => item?.annotation || item).filter(Boolean)
+  const pageFromCfi = pdfPageFromCfi(parsed.cfi)
+  const annotation = annotations.find((item: any) => parsed.id && item.id === parsed.id) || annotations.find((item: any) => Number(item.pageIndex || 0) + 1 === pageFromCfi)
+  if (!annotation) return null
+  const replies = annotations.filter((item: any) => item.inReplyToId === annotation.id && item.contents)
+  const page = Number(annotation.pageIndex || 0) + 1
+  return {
+    id: annotation.id,
+    bookTitle: book?.title || '',
+    format: 'pdf',
+    cfi: `#page-${page}`,
+    page,
+    text: annotation.custom?.text || '',
+    note: [annotation.custom?.note || annotation.contents, ...replies.map((item: any) => item.contents)].filter(Boolean).join('\n\n'),
+    color: annotation.strokeColor || annotation.color || annotation.fontColor || annotation.backgroundColor || '',
+    timestamp: new Date(annotation.created || annotation.modified || Date.now()).getTime(),
+    chapter: annotation.custom?.chapter || `Page ${page}`,
   }
 }
 
@@ -282,12 +353,9 @@ const findLiveMark = (parsed: { bookUrl: string; cfi: string; id?: string }) => 
   const ctx = getActiveContext(parsed.bookUrl)
   const marks = ctx.view?.marks || ctx.reader?.marks
   if (!marks) return { mark: null, ctx }
-  const items = [
-    ...(marks.getAll?.() || []),
-    ...(marks.getInkAnnotations?.() || []),
-    ...(marks.getShapeAnnotations?.() || []),
-  ]
-  const mark = items.find((item: any) => parsed.id ? item.id === parsed.id : item.cfi === parsed.cfi || item.page === Number(String(parsed.cfi).replace('#page-', '')))
+  const items = marks.getAll?.() || marks.getAnnotations?.() || []
+  const page = pdfPageFromCfi(parsed.cfi)
+  const mark = items.find((item: any) => parsed.id && item.id === parsed.id) || items.find((item: any) => item.cfi === parsed.cfi || item.page === page)
   return { mark, ctx }
 }
 
@@ -308,14 +376,20 @@ export const showLinkedMarkPreview = (parsed: { bookUrl: string; cfi: string; id
     })
     showTooltip(tip, rect.right + 8, rect.top)
     try {
-      const { getDatabase } = await import('@/core/database')
       const { bookshelfManager } = await import('@/core/bookshelf')
-      const [db, book] = await Promise.all([getDatabase(), bookshelfManager.getBook(parsed.bookUrl).catch(() => null)])
-      const annotations = await db.getAnnotations(parsed.bookUrl)
-      const annotation = annotations.find((item: any) => parsed.id ? item.id === parsed.id : item.loc === parsed.cfi || item.data?.cfi === parsed.cfi)
-      if (!annotation || activeKey !== `link:${parsed.bookUrl}:${parsed.id || parsed.cfi}`) return scheduleHide()
-      const mark = fromAnnotation(annotation, book)
-      const ctx = { bookUrl: parsed.bookUrl, book, isPdf: mark.format === 'pdf' || !!mark.page }
+      const book = await bookshelfManager.getBook(parsed.bookUrl).catch(() => null)
+      let mark: any = null
+      if (pdfPageFromCfi(parsed.cfi)) {
+        const stored = await (await import('@/core/bookStore')).readEmbedPdfAnnotations(parsed.bookUrl).catch(() => []) || []
+        mark = embedPdfTransferMark(stored, parsed, book)
+      } else {
+        const annotations = await (await (await import('@/core/database')).getDatabase()).getAnnotations(parsed.bookUrl)
+        const annotation = annotations.find((item: any) => parsed.id ? item.id === parsed.id : item.loc === parsed.cfi || item.data?.cfi === parsed.cfi)
+        mark = annotation && fromAnnotation(annotation, book)
+      }
+      if (!mark || activeKey !== `link:${parsed.bookUrl}:${parsed.id || parsed.cfi}`) return scheduleHide()
+      const activeCtx = getActiveContext(parsed.bookUrl)
+      const ctx = { ...activeCtx, bookUrl: parsed.bookUrl, book, isPdf: activeCtx.isPdf || mark.format === 'pdf' || !!mark.page }
       tip.innerHTML = await buildPreview(mark, ctx)
       showTooltip(tip, rect.right + 8, rect.top)
     } catch {
@@ -369,4 +443,5 @@ export const hideMarkPreview = () => {
   activeKey = ''
   scheduleHide()
 }
+
 

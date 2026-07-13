@@ -139,13 +139,18 @@ const removeDict = async (id:string) => {
 }
 const refreshDicts = () => (offlineDicts.value = offlineDictManager.getDicts(), onlineDicts.value = onlineDictManager.getDicts())
 const toggleDict = async (manager:any, id:string) => { await manager.toggleDict(id); refreshDicts() }
+const setQuickDocs = (docs:any[]) => (settings.value = { ...settings.value, quickSendDocs: docs }, save())
 const addQuickDoc = (doc:any) => {
-  if (!settings.value.quickSendDocs) settings.value.quickSendDocs = []
-  if (settings.value.quickSendDocs.some(d => d.id === doc.id)) return showMessage(props.i18n.alreadyExists || '已存在', 2000, 'error')
-  settings.value.quickSendDocs.push(doc)
-  save()
+  const docs = settings.value.quickSendDocs || []
+  if (!doc?.id) return showMessage(props.i18n.invalidDoc || '无效文档', 2000, 'error')
+  if (docs.some(d => d.id === doc.id)) return showMessage(props.i18n.alreadyExists || '已存在', 2000, 'error')
+  setQuickDocs([...docs, doc])
 }
-const removeQuickDoc = (i:number) => { settings.value.quickSendDocs.splice(i, 1); save() }
+const removeQuickDoc = (i:number) => {
+  const docs = [...(settings.value.quickSendDocs || [])]
+  docs.splice(i, 1)
+  setQuickDocs(docs)
+}
 const selectInsertDoc = (doc:any) => { settings.value.parentDoc = doc; settings.value.notebookId = doc.notebook; save() }
 const clearInsertDoc = () => { settings.value.parentDoc = undefined; insertDoc.reset(); save() }
 const uploadBgImage = async (e:Event) => {
@@ -179,7 +184,7 @@ const dragDrop = async (e:DragEvent, to:number, type:'nav'|'dict'|'quickDoc', re
   e.preventDefault()
   if (dragFrom === -1 || dragFrom === to) return
   if (type === 'nav') { const arr = [...navItems.value]; arr.splice(to, 0, ...arr.splice(dragFrom, 1)); arr.forEach((v, i) => v.order = i); settings.value.navItems = arr; save() }
-  else if (type === 'quickDoc') { const arr = [...settings.value.quickSendDocs]; arr.splice(to, 0, ...arr.splice(dragFrom, 1)); settings.value.quickSendDocs = arr; save() }
+  else if (type === 'quickDoc') { const arr = [...(settings.value.quickSendDocs || [])]; arr.splice(to, 0, ...arr.splice(dragFrom, 1)); setQuickDocs(arr) }
   else { const arr = [...ref.value]; arr.splice(to, 0, ...arr.splice(dragFrom, 1)); await mgr.sortDicts(arr.map((d:any) => d.id)); ref.value = arr }
 }
 const ttsI18nKey = (key:string, suffix='') => `tts${key.charAt(0).toUpperCase()}${key.slice(1)}${suffix}`

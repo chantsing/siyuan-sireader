@@ -1,10 +1,10 @@
 ﻿<template>
   <div ref="containerRef" class="reader-container" tabindex="0" :style="{'--toolbar-opacity':(1-((currentSettings?.toolbarOpacity??70)/100))*.55}">
     <ReaderSplash v-if="showOpeningSplash" ref="readerSplashRef" :book-info="props.bookInfo" :file-name="props.file?.name" status="opening" />
-    <div v-if="loading" class="reader-loading"><div class="spinner"></div><div>{{ error || '加载中...' }}</div></div>
+    <div v-if="loading" class="reader-loading"><div class="spinner"></div><div>{{ error || 'Loading...' }}</div></div>
     <div v-if="showToc&&!loading" class="reader-overlay" @click="closePanels"/>
-    <PdfToolbar v-if="isPdfMode&&pdfViewer&&pdfSearcher" :viewer="pdfViewer" :searcher="pdfSearcher" :file-size="pdfSource?.byteLength" :fixed="pdfToolbarFixed" :settings="currentSettings?.pdfToolbar" @update-settings="handlePdfToolbarSettingsUpdate" @print="handlePrint" @download="handleDownload" @export-images="handleExportImages" @ocr-page="handleOcrPage" @ink-toggle="handleInkToggle" @ink-color="handleInkColor" @ink-width="handleInkWidth" @ink-undo="handleInkUndo" @ink-clear="handleInkClear" @ink-eraser="handleInkEraser" @shape-toggle="handleShapeToggle" @shape-type="handleShapeType" @shape-color="handleShapeColor" @shape-width="handleShapeWidth" @shape-filled="handleShapeFilled" @shape-undo="handleShapeUndo" @shape-clear="handleShapeClear"/>
-    <div ref="viewerContainerRef" class="viewer-container" :class="{'has-pdf-toolbar':isPdfMode,'has-fixed-toolbar':isPdfMode&&pdfToolbarFixed}"></div>
+    <EmbedPdfReader v-if="isEmbedPdfMode" :source="embedPdfSource" :book-url="currentBookUrl" :settings="currentSettings" :theme="currentSettings?.theme" :custom-theme="currentSettings?.customTheme" :i18n="i18n" class="viewer-container" @ready="handleEmbedPdfReady"/>
+    <div v-else ref="viewerContainerRef" class="viewer-container"></div>
     <Transition name="toc-popup">
       <div v-if="showToc&&!loading" class="reader-toc-popup" @click.stop>
         <DockShell :active-tab="tocMode" nav-position="top" :tabs="tocTabs" @update:activeTab="tocMode = $event as any">
@@ -27,56 +27,49 @@
         </div>
         <span class="panel-divider"/>
         <div class="mark-styles">
-          <button v-for="s in STYLES.filter(s=>(!s.pdfOnly||isPdfMode)&&(!s.epubOnly||!isPdfMode))" :key="s.type" class="mark-style-btn" :class="{active:quickMarkStyle===s.type}" @click="quickMarkStyle=s.type">
+          <button v-for="s in STYLES.filter(s=>!s.epubOnly)" :key="s.type" class="mark-style-btn" :class="{active:quickMarkStyle===s.type}" @click="quickMarkStyle=s.type">
             <span :data-type="s.type">{{s.text}}</span>
           </button>
         </div>
       </div>
-      <div class="reader-toolbar" :class="{'is-visible':toolbarVisible}">
-        <button class="toolbar-btn b3-tooltips b3-tooltips__n" @click.stop="handlePrev" :aria-label="i18n.prevChapter||'上一章'"><svg><use xlink:href="#iconLeft"/></svg></button>
-        <div v-if="isPdfMode" class="toolbar-page-nav" @click.stop>
-          <input v-model.number="pageInput" @keydown.enter="handlePageJump" type="number" :min="1" :max="totalPages" class="page-input">
-          <span class="page-total">/ {{totalPages}}</span>
-        </div>
-        <button class="toolbar-btn b3-tooltips b3-tooltips__n" @click.stop="handleNext" :aria-label="i18n.nextChapter||'下一章'"><svg><use xlink:href="#iconRight"/></svg></button>
-        <button class="toolbar-btn b3-tooltips b3-tooltips__n" @click.stop="openToc" :aria-label="i18n.toc||'目录'"><svg><use xlink:href="#iconList"/></svg></button>
-        <button class="toolbar-btn b3-tooltips b3-tooltips__n" :class="{active:hasBookmark}" @click.stop="toggleBookmark" :aria-label="hasBookmark?(i18n.removeBookmark||'删除书签'):(i18n.addBookmark||'添加书签')"><svg><use xlink:href="#iconBookmark"/></svg></button>
-        <button class="toolbar-btn b3-tooltips b3-tooltips__n" :class="{active:showSearch}" @click.stop="toggleSearch" :aria-label="i18n.search||'搜索'"><svg><use xlink:href="#iconSearch"/></svg></button>
-        <button class="toolbar-btn toolbar-mark-btn b3-tooltips b3-tooltips__n" :class="{active:quickMarkMode}" @click.stop="toggleQuickMark" :aria-label="quickMarkMode?'退出快速标注':'快速标注'">
+      <div v-if="!isEmbedPdfMode || isMobile()" class="reader-toolbar" :class="{'is-visible':toolbarVisible}">
+        <button v-if="!isEmbedPdfMode" class="toolbar-btn b3-tooltips b3-tooltips__n" @click.stop="handlePrev" :aria-label="i18n.prevChapter||'上一章'"><svg><use xlink:href="#iconLeft"/></svg></button>
+                <button v-if="!isEmbedPdfMode" class="toolbar-btn b3-tooltips b3-tooltips__n" @click.stop="handleNext" :aria-label="i18n.nextChapter||'下一章'"><svg><use xlink:href="#iconRight"/></svg></button>
+        <button v-if="!isEmbedPdfMode" class="toolbar-btn b3-tooltips b3-tooltips__n" @click.stop="openToc" :aria-label="i18n.toc||'目录'"><svg><use xlink:href="#iconList"/></svg></button>
+        <button v-if="!isEmbedPdfMode" class="toolbar-btn b3-tooltips b3-tooltips__n" :class="{active:hasBookmark}" @click.stop="toggleBookmark" :aria-label="hasBookmark?(i18n.removeBookmark||'删除书签'):(i18n.addBookmark||'添加书签')"><svg><use xlink:href="#iconBookmark"/></svg></button>
+        <button v-if="!isEmbedPdfMode" class="toolbar-btn b3-tooltips b3-tooltips__n" :class="{active:showSearch}" @click.stop="toggleSearch" :aria-label="i18n.search||'搜索'"><svg><use xlink:href="#iconSearch"/></svg></button>
+        <button v-if="!isEmbedPdfMode" class="toolbar-btn toolbar-mark-btn b3-tooltips b3-tooltips__n" :class="{active:quickMarkMode}" @click.stop="toggleQuickMark" :aria-label="quickMarkMode?'退出快速标注':'快速标注'">
           <svg><use xlink:href="#iconMark"/></svg>
           <span class="mark-indicator" :style="{background:COLORS[quickMarkColor].bg}"></span>
         </button>
-        <button v-if="ttsEnabled" class="toolbar-btn b3-tooltips b3-tooltips__n" :class="{active:ttsPlaying}" @click.stop="toggleTTS" :aria-label="ttsPlaying?(i18n.ttsPause||'暂停朗读'):(i18n.ttsPlay||'开始朗读')"><svg><use :xlink:href="ttsPlaying?'#iconPause':'#iconPlay'"/></svg></button>
-        <button v-if="isMobile()" class="toolbar-btn b3-tooltips b3-tooltips__n" @click.stop="handleClose" aria-label="关闭"><svg><use xlink:href="#iconClose"/></svg></button>
+        <button v-if="ttsEnabled&&!isEmbedPdfMode" class="toolbar-btn b3-tooltips b3-tooltips__n" :class="{active:ttsPlaying}" @click.stop="toggleTTS" :aria-label="ttsPlaying?(i18n.ttsPause||'暂停朗读'):(i18n.ttsPlay||'开始朗读')"><svg><use :xlink:href="ttsPlaying?'#iconPause':'#iconPlay'"/></svg></button>
+        <button v-if="isMobile()" class="toolbar-btn b3-tooltips b3-tooltips__n" @click.stop="handleClose" aria-label="Close"><svg><use xlink:href="#iconClose"/></svg></button>
       </div>
     </div>
   </div>
-  <MarkPanel ref="markPanelRef" :root="containerRef" :book-url="getBookUrl()" :manager="markManager" :pdf-viewer="pdfViewer" :reader="reader" :current-view="currentView" :i18n="i18n" :tts-controller="ttsController" :tts-config="currentSettings?.tts" :quick-mark-mode="quickMarkMode" :quick-mark-color="COLORS[quickMarkColor].color" :quick-mark-style="quickMarkStyle" :can="can" :show-upgrade="showUpgrade" @copy="(text,sel)=>handleCopy({text,cfi:sel?.cfi,page:sel?.page,section:sel?.section,rects:sel?.rects,textOffset:sel?.textOffset})" @dict="handleOpenDict" @copy-mark-only="handleCopyToClipboard" />
+  <MarkPanel v-if="!isEmbedPdfMode" ref="markPanelRef" :root="containerRef" :book-url="getBookUrl()" :manager="markManager" :reader="reader" :current-view="currentView" :read-only="false" :i18n="i18n" :tts-controller="ttsController" :tts-config="currentSettings?.tts" :quick-mark-mode="quickMarkMode" :quick-mark-color="COLORS[quickMarkColor].color" :quick-mark-style="quickMarkStyle" :can="can" :show-upgrade="showUpgrade" @copy="(text,sel)=>handleCopy({text,cfi:sel?.cfi,page:sel?.page,section:sel?.section,rects:sel?.rects,textOffset:sel?.textOffset})" @dict="handleOpenDict" @copy-mark-only="handleCopyToClipboard" />
 </template>
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { Menu, showMessage } from 'siyuan'
 import type { Plugin } from 'siyuan'
-import type { ReaderSettings, PdfToolbarSettings } from '@/composables/useSetting'
+import type { ReaderSettings } from '@/composables/useSetting'
 import { settingsManager } from '@/composables/useSetting'
 import { openDict as openDictDialog } from '@/utils/dictionary'
 import { createReader, type FoliateReader } from '@/core/epub/reader'
 import { setActiveReader, clearActiveReader } from '@/core/epub/state'
-import type { FoliateView } from '@/core/epub/types'
 import { COLORS, STYLES, createMarkManager, type MarkManager } from '@/core/MarkManager'
-import { createInkToolManager, type InkToolManager } from '@/core/pdf/ink'
-import { createShapeToolManager, type ShapeToolManager } from '@/core/pdf/shape'
-import { initPdfAnnotationEvents, initPdfAnnotationRender } from '@/core/pdf/annotation'
-import { saveMobilePosition, getMobilePosition, isMobile } from '@/utils/mobile'
-import PdfToolbar from './PdfToolbar.vue'
+import { saveMobilePosition, isMobile } from '@/utils/mobile'
+import EmbedPdfReader from './EmbedPdfReader.vue'
 import MarkPanel from './MarkPanel.vue'
 import ReaderToc from './ReaderToc.vue'
 import ReaderMarks from './ReaderMarks.vue'
 import Settings from './Settings.vue'
 import ReaderSplash from './ui/ReaderSplash.vue'
 import DockShell from './ui/DockShell.vue'
-import { gotoPDF, gotoEPUB, restorePosition as restorePos, initJump } from '@/utils/jump'
+import { gotoEPUB, initJump, pdfPageFromCfi } from '@/utils/jump'
 import { copyMark as copyMarkUtil } from '@/utils/copy'
+import { taskToPromise } from '@/utils/embedPdfActions'
 import { createKeyboardHandler, setupEpubKeyboard } from '@/utils/keyboard'
 import { getTTSController } from '@/services/TTSPlayer'
 import { useLicense } from '@/composables/useLicense'
@@ -85,7 +78,6 @@ const i18n = computed(() => props.i18n || {})
 const { can, showUpgrade } = useLicense(i18n.value)
 const currentSettings = ref(props.settings)
 const getSettings = () => currentSettings.value || props.settings
-const pdfToolbarFixed = computed(() => currentSettings.value?.pdfToolbarStyle === 'fixed')
 const openingSplashKey = props.bookInfo?.url || props.url || props.file?.name || ''
 const seenOpeningSplash = openingSplashKey ? sessionStorage.getItem(`sireader-opening:${openingSplashKey}`) === '1' : false
 const isPdfBook = computed(() => props.file?.name.endsWith('.pdf') || props.url?.split('?')[0].endsWith('.pdf') || props.bookInfo?.format === 'pdf')
@@ -105,30 +97,19 @@ const readerContext = computed(() => ({
   activeReader: reader,
   bookUrl: getBookUrl(),
   settings: getSettings(),
+  readOnlyMarks: false,
 }))
 const tocPaneProps = computed(() => tocMode.value === 'settings'
   ? { modelValue: currentSettings.value!, i18n: i18n.value, onSave: saveReaderSettings, 'onUpdate:modelValue': updateSettingsState }
   : { i18n: i18n.value, context: readerContext.value })
-let pdfToolbarSaveTimer:any
 const updateSettingsState=(settings:ReaderSettings)=>{
   currentSettings.value=settings
   ;(window as any).__sireader_settings=settings
 }
 const saveReaderSettings=async()=>{const settings=currentSettings.value||props.settings;settings&&await settingsManager.save(settings)}
 const closePanels=()=>{showToc.value=false}
-const queueSettingsSave=(settings:ReaderSettings)=>{
-  clearTimeout(pdfToolbarSaveTimer)
-  pdfToolbarSaveTimer=setTimeout(()=>settingsManager.save(settings).catch(()=>{}),200)
-}
 const hasSettingChanged=(prev:any,next:any,keys:string[])=>keys.some(key=>JSON.stringify(prev?.[key])!==JSON.stringify(next?.[key]))
 const getBookName=()=>props.bookInfo?.title||props.file?.name||props.url?.split('/').pop()?.split('?')[0]||'book'
-const handlePdfToolbarSettingsUpdate=(toolbar:PdfToolbarSettings)=>{
-  const base=(currentSettings.value||props.settings)
-  if(!base)return
-  const next={...base,pdfToolbar:{...base.pdfToolbar,...toolbar}}
-  updateSettingsState(next)
-  queueSettingsSave(next)
-}
 const markPanelRef = ref()
 const markManager = ref<MarkManager | null>(null)
 const handleSettingsUpdate=async(e:Event)=>{
@@ -136,8 +117,7 @@ const handleSettingsUpdate=async(e:Event)=>{
   const prev=currentSettings.value
   updateSettingsState(s)
   hasSettingChanged(prev,s,['theme','customTheme','textSettings','paragraphSettings','layoutSettings','visualSettings','viewMode','pageAnimation'])&&reader?.updateSettings?.(s)
-  hasSettingChanged(prev,s,['theme','customTheme','visualSettings','pdfToolbarStyle'])&&pdfViewer.value&&await pdfViewer.value.updateTheme(s)
-  JSON.stringify(prev?.tts)!==JSON.stringify(s?.tts)&&await syncTTS()
+    JSON.stringify(prev?.tts)!==JSON.stringify(s?.tts)&&await syncTTS()
 }
 const containerRef = ref<HTMLElement>()
 const viewerContainerRef = ref<HTMLElement>()
@@ -149,21 +129,21 @@ const currentBookUrl = ref('')
 let readerFocused = false
 let touchStartX=0,touchStartY=0
 const touchTargets = new Set<EventTarget>()
-const canHandleTouchPaging=()=>isMobile()&&isPdfMode.value
+const canHandleTouchPaging=()=>false
 const resetTouch=()=>{touchStartX=0;touchStartY=0}
-const isTouchActionTarget=(target:EventTarget|null)=>target instanceof HTMLElement&&!!target.closest('.reader-toolbar-group,.reader-toc-popup,.mark-menu,.sr-popup-panel,.pdf-toolbar,.pdf-menu,input,textarea,button,select,a,[contenteditable="true"]')
+const isTouchActionTarget=(target:EventTarget|null)=>target instanceof HTMLElement&&!!target.closest('.reader-toolbar-group,.reader-toc-popup,.mark-menu,.sr-popup-panel,input,textarea,button,select,a,[contenteditable="true"]')
 const toggleMobileToolbar=()=>isMobile()&&(mobileToolbarVisible.value=!mobileToolbarVisible.value)
-const handleTapZone=(x:number)=>{if(!isMobile()||isPdfMode.value||getSettings()?.viewMode==='scroll')return;const third=(containerRef.value?.clientWidth||window.innerWidth)/3;if(x<third)return handlePrev();if(x>third*2)return handleNext();toggleMobileToolbar()}
+const handleTapZone=(x:number)=>{if(!isMobile()||getSettings()?.viewMode==='scroll')return;const third=(containerRef.value?.clientWidth||window.innerWidth)/3;if(x<third)return handlePrev();if(x>third*2)return handleNext();toggleMobileToolbar()}
 const handleTouchStart=(e:TouchEvent)=>{if(canHandleTouchPaging()&&e.touches.length===1){touchStartX=e.touches[0].clientX;touchStartY=e.touches[0].clientY}}
 const handleTouchEnd=(e:TouchEvent)=>{if(!canHandleTouchPaging()||!touchStartX)return;const{clientX:x,clientY:y}=e.changedTouches[0],dx=x-touchStartX,dy=y-touchStartY;resetTouch();if(isTouchActionTarget(e.target))return;if(Math.abs(dx)>=50&&Math.abs(dx)>Math.abs(dy))return dx>0?handlePrev():handleNext();if(Math.abs(dx)<=30&&Math.abs(dy)<=30)handleTapZone(x)}
 const touchPagingEvents:[string,EventListener,AddEventListenerOptions?][]=[['touchstart',handleTouchStart as EventListener,{capture:true,passive:true}],['touchend',handleTouchEnd as EventListener,{capture:true,passive:true}]]
 const bindTouchPaging=(target:EventTarget|null|undefined)=>{if(!isMobile()||!target||touchTargets.has(target))return;touchTargets.add(target);touchPagingEvents.forEach(([type,handler,options])=>target.addEventListener(type,handler,options))}
 const unbindTouchPaging=()=>{touchTargets.forEach(target=>touchPagingEvents.forEach(([type,handler])=>target.removeEventListener(type,handler,true)));touchTargets.clear()}
-const pdfViewer = ref<any>(null)
-const pdfSearcher = ref<any>(null)
+const embedPdfSource = ref<File | string | null>(null)
+const embedPdfPages = ref<any>(null)
+const embedPdfAnnotations = ref<any>(null)
+const embedPdfMarks = ref<any[]>([])
 const currentView = ref<any>(null)
-const pageInput = ref(1)
-const totalPages = ref(0)
 const showSearch = ref(false)
 const showToc = ref(false)
 const showQuickMark = ref(false)
@@ -177,48 +157,6 @@ const searchQuery = ref('')
 const searchResults = ref<any[]>([])
 const searchCurrentIndex = ref(0)
 let reader: FoliateReader | null = null
-let pdfSource: ArrayBuffer | null = null
-let pdfBinarySource: Blob | null = null
-let pdfSourceUrl = ''
-let inkToolManager: InkToolManager | null = null
-let shapeToolManager: ShapeToolManager | null = null
-const bindPdfToolManagers=(manager:any,ink:InkToolManager,shape:ShapeToolManager)=>{
-  manager.inkManager=ink
-  manager.shapeManager=shape
-}
-const togglePdfToolManagers=async(ink:boolean,shape:boolean)=>{
-  await inkToolManager?.toggle(ink)
-  await shapeToolManager?.toggle(shape)
-}
-const updatePdfToolbarToolMode=(toolMode:'text'|'hand'|'ink'|'shape')=>{
-  const base=currentSettings.value||props.settings
-  if(!base||base.pdfToolbar?.toolMode===toolMode)return
-  const next={...base,pdfToolbar:{...base.pdfToolbar,toolMode}}
-  updateSettingsState(next)
-  queueSettingsSave(next)
-}
-const setPdfToolActive=async(type:'ink'|'shape',active:boolean)=>{
-  if(!active)return type==='ink'?await inkToolManager?.toggle(false):await shapeToolManager?.toggle(false)
-  if(type==='ink'){
-    await shapeToolManager?.toggle(false)
-    await inkToolManager?.toggle(true)
-    return
-  }
-  await inkToolManager?.toggle(false)
-  await shapeToolManager?.toggle(true)
-}
-const exitPdfAnnotationTool=async()=>{
-  await togglePdfToolManagers(false,false)
-  updatePdfToolbarToolMode('text')
-}
-const finishPdfAnnotation=async(item:any,x?:number,y?:number,edit?:boolean)=>{
-  await exitPdfAnnotationTool()
-  edit&&item&&markPanelRef.value?.showCard(item,x,y,true)
-}
-const withCurrentPdfPage=(fn:(page:number)=>Promise<void>|void)=>{
-  const page=pdfViewer.value?.getCurrentPage()
-  return page?fn(page):undefined
-}
 const ttsController = getTTSController()
 const ttsEnabled = computed(() => currentSettings.value?.tts?.enabled || false)
 const ttsPlaying = computed(() => ttsController.isActive.value && !ttsController.paused.value)
@@ -226,51 +164,57 @@ const clearReadingSelection=()=>{try{reader?.getView?.()?.renderer?.getContents?
 const toggleTTS = () => {if (!can.value('tts')) return showUpgrade('TTS朗读'); clearReadingSelection(); ttsController.toggle(() => reader, currentSettings.value?.tts, undefined, getBookName())}
 const syncTTS = async () => ttsController.sync(currentSettings.value?.tts?.enabled || false)
 const marks=computed(()=>markManager.value)
-const isPdfMode=computed(()=>!!pdfViewer.value)
+const isEmbedPdfMode=computed(()=>currentView.value?.engine==='embedpdf')
 const hasSearchResults=computed(()=>searchResults.value.length>0)
-const searchCount=computed(()=>isPdfMode.value?(searchResults.value.length?`${searchCurrentIndex.value+1}/${searchResults.value.length}`:'0/0'):(searchResults.value.length?`${searchResults.value.length}`:'0'))
+const searchCount=computed(()=>searchResults.value.length?`${searchResults.value.length}`:'0')
 const browserSource=(path='')=>path.startsWith('/data/public/')?path.replace('/data/public/','/public/'):path.startsWith('/public/')||path.startsWith('/assets/')||/^https?:\/\//.test(path)?path:path.startsWith('public/')||path.startsWith('assets/')?`/${path}`:''
-const initPdfMode=async(bookUrl:string,onProgress:()=>Promise<void>,loadSource:()=>Promise<File|string|null>,bookshelfManager:any)=>{
-  const{PDFViewer,PDFSearch}=await import('@/core/pdf')
-  const container=viewerContainerRef.value!
-  const showAnn=(a:any)=>markPanelRef.value?.showAnnotationCard(a)
-  const viewer=new PDFViewer({container,scale:1.5,onPageChange:onProgress,onAnnotationClick:showAnn})
-  ;(window as any).__pdfViewer=viewer
-  ;(container as any).__pdfViewer=viewer
-  getSettings()&&viewer.applyTheme(getSettings()!)
+const PDF_MARKUP_TYPES:Record<string,number>={highlight:9,underline:10,squiggly:11,strikeout:12}
+const embedPdfStyle=(type:number,custom?:any)=>custom?.style||Object.entries(PDF_MARKUP_TYPES).find(([,value])=>value===type)?.[0]||'highlight'
+const embedPdfColor=(color='')=>(COLORS.find(item=>item.color===color)?.bg||color).toLowerCase()
+const compact=(value:Record<string,any>)=>Object.fromEntries(Object.entries(value).filter(([,v])=>v!==undefined))
+const embedPdfMark=(item:any)=>{
+  const a=item?.annotation||item, page=(a.pageIndex??0)+1
+  return Object.assign(item,{id:a.id,type:a.type===1||a.type===3?'note':'highlight',format:'pdf',page,cfi:`#page-${page}`,text:a.custom?.text||a.contents||i18n.value.annotation||i18n.value.mark||'Annotation',note:a.custom?.note||a.contents||'',tags:a.custom?.tags||[],blockId:a.custom?.blockId,color:embedPdfColor(a.strokeColor||a.color||a.fontColor||a.backgroundColor||''),style:embedPdfStyle(a.type,a.custom),timestamp:new Date(a.created||a.modified||Date.now()).getTime(),chapter:a.custom?.chapter||`${i18n.value.page||'Page '}${page}${i18n.value.pageSuffix||''}`,customOrder:a.custom?.customOrder})
+}
+const loadEmbedPdfMarks=async()=>{
+  if(!embedPdfAnnotations.value)return
+  embedPdfMarks.value=(await embedPdfAnnotations.value.exportAnnotations().toPromise().catch(()=>[])).map(embedPdfMark)
+}
+const updateEmbedPdfMark=async(item:any,updates:any)=>{
+  const a=item.annotation||item
+  a.custom={...(a.custom||{}),...compact({text:updates.text,note:updates.note,tags:updates.tags,style:updates.style,blockId:updates.blockId})}
+  a.contents=updates.note??updates.text??a.contents
+  if(updates.style)a.type=PDF_MARKUP_TYPES[updates.style]||a.type
+  if(updates.color)a.strokeColor=a.color=updates.color
+  Object.assign(item,updates,{style:embedPdfStyle(a.type,a.custom),color:embedPdfColor(a.strokeColor||a.color||'')})
+  await embedPdfAnnotations.value.updateAnnotation(a.pageIndex,a.id,compact({type:a.type,contents:a.contents,custom:a.custom,strokeColor:a.strokeColor,color:a.color}))
+  await loadEmbedPdfMarks()
+}
+const deleteEmbedPdfMark=async(item:any)=>{const a=item.annotation||item;await embedPdfAnnotations.value.deleteAnnotation(a.pageIndex,a.id);await loadEmbedPdfMarks();return true}
+const initEmbedPdfMode=async(loadSource:()=>Promise<File|string|null>)=>{
   const file=await loadSource()
-  if(!file)throw new Error('未提供PDF文件')
-  pdfSourceUrl=typeof file==='string'?file:''
-  pdfBinarySource=file instanceof File?file:null
-  pdfSource=file instanceof File?await file.arrayBuffer():null as any
-  const searcher=new PDFSearch(container)
-  await viewer.open(file instanceof File ? pdfSource : file)
-  await viewer.fitWidth()
-  searcher.setPDF(viewer.getPDF()!)
-  ;(window as any).__pdfDoc=viewer.getPDF()
-  searcher.extractAllText().catch(()=>{})
-  const view=await viewer.createView()
-  const manager=createMarkManager({format:'pdf',plugin:props.plugin,bookUrl,bookName:getBookName(),onAnnotationClick:showAnn,pdfViewer:viewer})
-  await manager.init()
-  await bookshelfManager.restoreProgress(bookUrl,null,viewer)
-  const handleShapeClick=(shape:any)=>markPanelRef.value?.showShapeCard(shape,viewer)
-  const ink=createInkToolManager(container,props.plugin,bookUrl,getBookName(),viewer)
-  const shape=createShapeToolManager(container,props.plugin,bookUrl,getBookName(),handleShapeClick,viewer)
-  await ink.init()
-  await shape.init()
-  const toolbar=getSettings()?.pdfToolbar
-  toolbar&&await shape.setConfig({ shapeType: toolbar.shapeType, color: toolbar.shapeColor, width: toolbar.shapeWidth, filled: toolbar.shapeFilled })
-  bindPdfToolManagers(manager,ink,shape)
-  const cleanupEvents=initPdfAnnotationEvents(container,viewer,manager,(data,anchor)=>markPanelRef.value?.showMenu(data,anchor))
-  const cleanupRender=initPdfAnnotationRender(viewer,manager,ink,shape)
-  pdfViewer.value=viewer
-  pdfSearcher.value=searcher
-  markManager.value=manager
-  inkToolManager=ink
-  shapeToolManager=shape
-  currentView.value={...view,isPdf:true,marks:manager,cleanup:()=>{cleanupEvents();cleanupRender()}}
-  updatePageInfo()
+  if(!file)throw new Error('PDF file is missing')
+  embedPdfSource.value=file
+  embedPdfMarks.value=[]
+  markManager.value=null
+  currentView.value={engine:'embedpdf',isPdf:true,marks:{getAnnotations:()=>embedPdfMarks.value,getBookmarks:()=>[],updateMark:updateEmbedPdfMark,deleteMark:deleteEmbedPdfMark},goTo:(page:any)=>embedPdfPages.value?.scrollToPage({pageNumber:Number(page)||1,behavior:'smooth'}),cleanup:()=>{embedPdfSource.value=null;embedPdfPages.value=null;embedPdfAnnotations.value=null;embedPdfMarks.value=[]}}
   setActiveReader(currentView.value,null,getSettings())
+}
+const handleEmbedPdfReady=(registry:any)=>{
+  const documentId='sireader-document'
+  embedPdfPages.value=registry.getPlugin('scroll').provides().forDocument(documentId)
+  embedPdfAnnotations.value=registry.getPlugin('annotation').provides().forDocument(documentId)
+  const pageTextCache=new Map<number,Promise<string>>()
+  currentView.value.getPageText=(page:number)=>{
+    const pageNumber=Number(page)||1
+    if(!pageTextCache.has(pageNumber))pageTextCache.set(pageNumber,(async()=>{
+      const doc=registry.getPlugin('document-manager')?.provides?.().getDocument(documentId)
+      return doc ? await registry.getEngine().extractText(doc,[pageNumber-1]).toPromise() : ''
+    })())
+    return pageTextCache.get(pageNumber)!
+  }
+  currentView.value.getBookmarks=()=>taskToPromise<any>(registry.getPlugin('bookmark')?.provides?.()?.forDocument?.(documentId)?.getBookmarks?.()).then((result:any)=>result?.bookmarks||[])
+  window.dispatchEvent(new CustomEvent('sireader:tab-switched'))
 }
 const openImageMenu = ({ item, x, y }: any) => {
   const m = new Menu()
@@ -284,13 +228,14 @@ const init=async()=>{
   try{
     loading.value=true
     error.value=''
+    currentSettings.value = await settingsManager.get().catch(() => currentSettings.value || props.settings)
     const bookUrl=props.bookInfo?.url||props.url||(props.file?`file://${props.file.name}`:`book-${Date.now()}`)
     currentBookUrl.value=bookUrl
     ;(window as any).__currentBookUrl=bookUrl
     const isPdf=isPdfBook.value
     const isTemporary=!!props.bookInfo?.temporary
     const{bookshelfManager}=await import('@/core/bookshelf')
-    const onProgress=async()=>{updateBookmarkState();!isTemporary&&await bookshelfManager.updateProgressAuto(bookUrl,reader,pdfViewer.value,currentView.value);updatePageInfo()}
+    const onProgress=async()=>{updateBookmarkState();!isTemporary&&await bookshelfManager.updateProgressAuto(bookUrl,reader,currentView.value)}
     const loadSource=async()=>{
       if(props.file)return props.file
       if(props.url)return props.url
@@ -301,7 +246,7 @@ const init=async()=>{
       return bookshelfManager.loadFile(path)
     }
     if(isPdf){
-      await initPdfMode(bookUrl,onProgress,loadSource,bookshelfManager)
+      await initEmbedPdfMode(loadSource)
     }else{
       reader=createReader({container:viewerContainerRef.value!,settings:getSettings()!,plugin:props.plugin})
       await reader.open(await loadSource()||await Promise.reject(new Error('未提供书籍')),props.bookInfo?.format)
@@ -333,87 +278,48 @@ const init=async()=>{
   }finally{
     loading.value=false
     setTimeout(()=>readerSplashRef.value?.dismiss(),300)
-    if(!props.bookInfo?.temporary)await restorePos(getBookUrl(),reader,pdfViewer.value,getMobilePosition)
-    !props.bookInfo?.temporary&&props.bookInfo?.pos?.cfi&&initJump(props.bookInfo.pos.cfi,currentBookUrl.value)
+        !props.bookInfo?.temporary&&!isEmbedPdfMode.value&&props.bookInfo?.pos?.cfi&&initJump(props.bookInfo.pos.cfi,currentBookUrl.value)
   }
 }
 const handleCopy=(item:any)=>{
-  if(typeof item==='string'||(!item.id&&item.text&&!item.image)){const loc=isPdfMode.value?null:reader?.getLocation();item={text:item.text||item,cfi:item.cfi,page:item.page,chapter:loc?.tocItem?.label||loc?.tocItem?.title,id:''}}
-  copyMarkUtil(item,{bookUrl:getBookUrl(),bookInfo:props.bookInfo,settings:getSettings(),reader,pdfViewer:pdfViewer.value,showMsg:(msg:string)=>showMessage(msg,1000)})
+  if(typeof item==='string'||(!item.id&&item.text&&!item.image)){const loc=reader?.getLocation();item={text:item.text||item,cfi:item.cfi,page:item.page,chapter:loc?.tocItem?.label||loc?.tocItem?.title,id:''}}
+  copyMarkUtil(item,{bookUrl:getBookUrl(),bookInfo:props.bookInfo,settings:getSettings(),reader,showMsg:(msg:string)=>showMessage(msg,1000)})
 }
 const handleCopyToClipboard=(item:any)=>{
-  if(typeof item==='string'||(!item.id&&item.text&&!item.image)){const loc=isPdfMode.value?null:reader?.getLocation();item={text:item.text||item,cfi:item.cfi,page:item.page,chapter:loc?.tocItem?.label||loc?.tocItem?.title,id:''}}
-  copyMarkUtil(item,{bookUrl:getBookUrl(),bookInfo:props.bookInfo,settings:{...(getSettings()||{}),noteInsertTarget:'clipboard'},reader,pdfViewer:pdfViewer.value,showMsg:(msg:string)=>showMessage(msg,1000)})
+  if(typeof item==='string'||(!item.id&&item.text&&!item.image)){const loc=reader?.getLocation();item={text:item.text||item,cfi:item.cfi,page:item.page,chapter:loc?.tocItem?.label||loc?.tocItem?.title,id:''}}
+  copyMarkUtil(item,{bookUrl:getBookUrl(),bookInfo:props.bookInfo,settings:{...(getSettings()||{}),noteInsertTarget:'clipboard'},reader,showMsg:(msg:string)=>showMessage(msg,1000)})
 }
 const handleOpenDict=(text:string,x:number,y:number,selection:any)=>selection&&openDictDialog(text,x,y,selection)
 const isEpubScrollMode=()=>getSettings()?.viewMode==='scroll'
 const flipPage=async(dir:'prev'|'next')=>{
   if(dir==='next'&&readerSplashRef.value?.isVisible())return readerSplashRef.value.dismiss()
   if(props.bookInfo?.temporary&&typeof props.bookInfo?.webpageTurn==='function')return props.bookInfo.webpageTurn(dir)
-  if(isPdfMode.value)return currentView.value?.nav?.[dir]?.()
-  if(reader)return isEpubScrollMode() ? reader[dir]() : reader[dir==='prev'?'goLeft':'goRight']()
+  if(isEmbedPdfMode.value)return embedPdfPages.value?.[dir==='prev'?'scrollToPreviousPage':'scrollToNextPage']('smooth')
+    if(reader)return isEpubScrollMode() ? reader[dir]() : reader[dir==='prev'?'goLeft':'goRight']()
   return currentView.value?.[dir]?.()||currentView.value?.[dir==='prev'?'goLeft':'goRight']?.()
 }
 const handlePrev=()=>flipPage('prev')
 const handleNext=()=>flipPage('next')
-const handlePageJump=()=>{const p=Math.max(1,Math.min(totalPages.value,pageInput.value||1));pageInput.value=p;pdfViewer.value?.goToPage(p)}
-const updatePageInfo=()=>pdfViewer.value&&(totalPages.value=pdfViewer.value.getPageCount(),pageInput.value=pdfViewer.value.getCurrentPage())
 const searchInputRef=ref<HTMLInputElement>()
 const toggleSearch=()=>{showSearch.value=!showSearch.value;showSearch.value&&(showQuickMark.value=quickMarkMode.value=false,setTimeout(()=>searchInputRef.value?.focus(),100))}
 const toggleQuickMark=()=>{if(!can.value('quick-mark'))return showUpgrade('快速标注');showQuickMark.value=!showQuickMark.value;showQuickMark.value&&(showSearch.value=false);quickMarkMode.value=showQuickMark.value}
-const syncSearchNav=(r:any,page?:number)=>{
-  if(!r)return
-  searchCurrentIndex.value=isPdfMode.value?pdfSearcher.value.getCurrentIndex():reader.searchManager.getCurrentIndex()
-  page&&pdfViewer.value?.goToPage(page)
-}
+const syncSearchNav=(r:any)=>{if(r)searchCurrentIndex.value=reader.searchManager.getCurrentIndex()}
 const handleSearch=async()=>{
   if(!searchQuery.value.trim())return
-  if(isPdfMode.value&&pdfSearcher.value){
-    searchResults.value=await pdfSearcher.value.search(searchQuery.value)
-    searchCurrentIndex.value=0
-    searchResults.value.length&&pdfViewer.value?.goToPage(pdfSearcher.value.getCurrent().page)
-  }else if(reader?.searchManager){
+  if(reader?.searchManager){
     searchResults.value=[]
     for await(const r of reader.search(searchQuery.value))searchResults.value.push(r)
     searchCurrentIndex.value=searchResults.value.length?0:-1
   }
 }
-const moveSearch=(dir:'next'|'prev')=>syncSearchNav(isPdfMode.value?pdfSearcher.value?.[dir]():reader?.[dir==='next'?'nextSearchResult':'prevSearchResult'](),isPdfMode.value?pdfSearcher.value?.getCurrent()?.page:undefined)
+const moveSearch=(dir:'next'|'prev')=>syncSearchNav(reader?.[dir==='next'?'nextSearchResult':'prevSearchResult']())
 const handleSearchNext=()=>moveSearch('next')
 const handleSearchPrev=()=>moveSearch('prev')
-const handleSearchClear=()=>{searchQuery.value='';searchResults.value=[];searchCurrentIndex.value=0;pdfSearcher.value?.clear();reader?.clearSearch();showSearch.value=false}
-const getPdfBlob=async()=>pdfBinarySource||(pdfSourceUrl?(pdfBinarySource=await fetch(pdfSourceUrl).then(r=>r.blob())):null)
-const handlePrint=async()=>{const blob=await getPdfBlob();blob&&(await import('@/core/pdf')).printPDF(blob)}
-const handleDownload=async()=>{const blob=await getPdfBlob();blob&&(await import('@/core/pdf')).downloadPDF(blob,props.file?.name||props.bookInfo?.title||'document.pdf')}
-const handleExportImages=async()=>pdfViewer.value&&(await import('@/core/pdf')).exportAsImages(pdfViewer.value.getPDF()!)
-const handleOcrPage=async()=>{
-  if(!pdfViewer.value)return
-  const page=pdfViewer.value.getCurrentPage()
-  try{
-    const { ocrPdfPage } = await import('@/core/pdf')
-    const result=await ocrPdfPage(pdfViewer.value.getPDF()!,{bookKey:getBookUrl(),page,rotation:pdfViewer.value.getRotation(),scale:2})
-    showMessage(`OCR 完成：第 ${page} 页，${result.text.trim().length} 字`,2000,'success')
-  }catch(e:any){
-    showMessage(e?.message||'OCR 失败',2500,'error')
-  }
-}
-const handleInkToggle=async(a:boolean)=>setPdfToolActive('ink',a)
-const handleInkColor=async(c:string)=>inkToolManager?.setConfig({color:c})
-const handleInkWidth=async(w:number)=>inkToolManager?.setConfig({width:w})
-const handleInkEraser=async(a:boolean)=>inkToolManager?.setConfig(a?{color:'#fff',width:20}:{color:'#f00',width:2})
-const handleInkUndo=async()=>inkToolManager?.undo()
-const handleInkClear=async()=>inkToolManager?.clear()
-const handleShapeToggle=async(a:boolean)=>setPdfToolActive('shape',a)
-const handleShapeType=async(t:string)=>shapeToolManager?.setConfig({shapeType:t})
-const handleShapeColor=async(c:string)=>shapeToolManager?.setConfig({color:c})
-const handleShapeWidth=async(w:number)=>shapeToolManager?.setConfig({width:w})
-const handleShapeFilled=async(f:boolean)=>shapeToolManager?.setConfig({filled:f})
-const handleShapeUndo=async()=>withCurrentPdfPage(page=>shapeToolManager?.undo(page))
-const handleShapeClear=async()=>withCurrentPdfPage(page=>shapeToolManager?.clear(page))
+const handleSearchClear=()=>{searchQuery.value='';searchResults.value=[];searchCurrentIndex.value=0;reader?.clearSearch();showSearch.value=false}
 const updateBookmarkState=()=>hasBookmark.value=!!markManager.value?.hasBookmark?.()
-const toggleBookmark=async()=>{try{hasBookmark.value=await marks.value?.toggleBookmark?.();window.dispatchEvent(new CustomEvent('sireader:marks-updated'))}catch(e:any){showMessage(e.message||'操作失败',2000,'error')}}
+const toggleBookmark=async()=>{if(isEmbedPdfMode.value)return;try{hasBookmark.value=await marks.value?.toggleBookmark?.();window.dispatchEvent(new CustomEvent('sireader:marks-updated'))}catch(e:any){showMessage(e.message||'操作失败',2000,'error')}}
 const getBookUrl=()=>currentBookUrl.value||props.bookInfo?.url||props.url||''
-const savePosition=()=>isMobile()&&getBookUrl()&&saveMobilePosition(getBookUrl(),isPdfMode.value?{page:pdfViewer.value?.getCurrentPage()}:{cfi:reader?.getLocation()?.cfi})
+const savePosition=()=>isMobile()&&getBookUrl()&&reader&&saveMobilePosition(getBookUrl(),{cfi:reader.getLocation()?.cfi})
 const syncReaderFocus=(focused:boolean)=>{const bookUrl=getBookUrl();if(!bookUrl||readerFocused===focused)return;readerFocused=focused;window.dispatchEvent(new CustomEvent(focused?'reader:focus':'reader:blur',{detail:{bookUrl}}))}
 const hasReaderFocus=()=>!!containerRef.value&&containerRef.value.contains(document.activeElement)
 const handleFocusIn=()=>syncReaderFocus(true)
@@ -423,50 +329,41 @@ const handleWindowFocus=()=>syncReaderFocus(hasReaderFocus())
 const handleVisibilityChange=()=>syncReaderFocus(!document.hidden&&hasReaderFocus())
 const openToc=()=>{showToc.value=!showToc.value}
 const handleClose=()=>{savePosition();window.dispatchEvent(new CustomEvent('reader:mobile-close'))}
-const handlePdfZoomIn=()=>pdfViewer.value?.setScale(pdfViewer.value.getScale()+.25)
-const handlePdfZoomOut=()=>pdfViewer.value?.setScale(pdfViewer.value.getScale()-.25)
-const handlePdfZoomReset=()=>pdfViewer.value?.setScale(1.5)
-const handlePdfRotate=()=>pdfViewer.value?.setRotation(((pdfViewer.value.getRotation()+90)%360)as 0|90|180|270)
-const handlePdfSearch=()=>window.dispatchEvent(new CustomEvent('pdf:toggle-search'))
-const handlePdfFirstPage=()=>pdfViewer.value?.goToPage(1)
-const handlePdfLastPage=()=>pdfViewer.value?.goToPage(pdfViewer.value.getPageCount())
-const handlePdfPageUp=handlePrev
-const handlePdfPageDown=handleNext
-const handlePdfToolMode=async(toolMode:'text'|'hand'|'ink'|'shape')=>{
-  if(!isPdfMode.value)return
-  const next=currentSettings.value?.pdfToolbar?.toolMode===toolMode&&['ink','shape'].includes(toolMode)?'hand':toolMode
-  await togglePdfToolManagers(next==='ink',next==='shape')
-  updatePdfToolbarToolMode(next as 'text'|'hand'|'ink'|'shape')
-}
 const isThisActiveReader=()=>!(window as any).__sireader_active_view||(window as any).__sireader_active_view===currentView.value
 const activeOnly=<T extends any[]>(fn:(...args:T)=>any)=>(...args:T)=>isThisActiveReader()?fn(...args):undefined
 const handleGoto=(e:CustomEvent)=>{
   const{cfi,id,bookUrl}=e.detail
   if(bookUrl&&bookUrl!==currentBookUrl.value)return
   if(!cfi)return
-  if(isPdfMode.value){
-    const page=cfi.startsWith('#page-')?parseInt(cfi.slice(6)):/^\d+$/.test(cfi)?parseInt(cfi):0
-    page&&gotoPDF(page,id,pdfViewer.value,markManager.value,shapeToolManager)
-  }else gotoEPUB(cfi,id,reader,markManager.value)
+  const pdfPage=pdfPageFromCfi(cfi)
+  if(isEmbedPdfMode.value&&pdfPage)return void currentView.value?.goTo?.(pdfPage)
+  gotoEPUB(cfi,id,reader,markManager.value)
 }
-const handleUndo=()=>markManager.value?.undo()
-const keyboardHandler=createKeyboardHandler({handlePrev,handleNext,handleUndo,handlePdfFirstPage,handlePdfLastPage,handlePdfPageUp,handlePdfPageDown,handlePdfRotate,handlePdfZoomIn,handlePdfZoomOut,handlePdfZoomReset,handlePdfSearch,handlePrint,handlePdfTextTool:()=>handlePdfToolMode('text'),handlePdfHandTool:()=>handlePdfToolMode('hand'),handlePdfInkTool:()=>handlePdfToolMode('ink'),handlePdfShapeTool:()=>handlePdfToolMode('shape')},()=>isPdfMode.value)
+const handleUndo=()=>markManager.value?.undo?.()
+const refreshEmbedPdfMarks=()=>{if(isEmbedPdfMode.value)void loadEmbedPdfMarks()}
+const keyboardHandler=createKeyboardHandler({handlePrev,handleNext,handleUndo})
 const handleKeydown=(e:KeyboardEvent)=>isThisActiveReader()&&keyboardHandler(e)
-const events=[['sireaderSettingsUpdated',handleSettingsUpdate],['sireader:goto',handleGoto],['sireader:toggleBookmark',activeOnly(toggleBookmark)],['sireader:quickNote',async()=>{try{if(!currentView.value||!containerRef.value?.isConnected||!isThisActiveReader())return;const { openNoteTargetFloat } = await import('@/utils/copy');await openNoteTargetFloat(getBookUrl(),getSettings(),containerRef.value!)}catch(e:any){showMessage(e?.message||'打开目标文档失败',2000,'error')}}],['sireader:prevPage',activeOnly(handlePrev)],['sireader:nextPage',activeOnly(handleNext)],['sireader:pdfZoomIn',activeOnly(handlePdfZoomIn)],['sireader:pdfZoomOut',activeOnly(handlePdfZoomOut)],['sireader:pdfZoomReset',activeOnly(handlePdfZoomReset)],['sireader:pdfRotate',activeOnly(handlePdfRotate)],['sireader:pdfSearch',activeOnly(handlePdfSearch)],['sireader:pdfPrint',activeOnly(handlePrint)],['sireader:pdfFirstPage',activeOnly(handlePdfFirstPage)],['sireader:pdfLastPage',activeOnly(handlePdfLastPage)],['sireader:pdfPageUp',activeOnly(handlePdfPageUp)],['sireader:pdfPageDown',activeOnly(handlePdfPageDown)],['sireader:pdfTextTool',activeOnly(()=>handlePdfToolMode('text'))],['sireader:pdfHandTool',activeOnly(()=>handlePdfToolMode('hand'))],['sireader:pdfInkTool',activeOnly(()=>handlePdfToolMode('ink'))],['sireader:pdfShapeTool',activeOnly(()=>handlePdfToolMode('shape'))]]as const
+const events=[
+  ['sireaderSettingsUpdated',handleSettingsUpdate],
+  ['sireader:goto',handleGoto],
+  ['sireader:marks-updated',refreshEmbedPdfMarks],
+  ['sireader:close-reader-panels',closePanels],
+  ['sireader:toggleBookmark',activeOnly(toggleBookmark)],
+  ['sireader:quickNote',async()=>{try{if(isEmbedPdfMode.value||!currentView.value||!containerRef.value?.isConnected||!isThisActiveReader())return;const { openNoteTargetFloat } = await import('@/utils/copy');await openNoteTargetFloat(getBookUrl(),getSettings(),containerRef.value!)}catch(e:any){showMessage(e?.message||'Failed',2000,'error')}}],
+  ['sireader:prevPage',activeOnly(handlePrev)],
+  ['sireader:nextPage',activeOnly(handleNext)],
+]as const
 const suppressError=(e:PromiseRejectionEvent)=>/createTreeWalker|destroy/.test(e.reason?.message||'')&&e.preventDefault()
 const setupTabObserver=()=>{if(isMobile())return;let el=containerRef.value?.parentElement;while(el){if(el.hasAttribute('data-id')){const h=document.querySelector(`li[data-type="tab-header"][data-id="${el.getAttribute('data-id')}"]`);if(h){const obs=new MutationObserver(ms=>ms.forEach(m=>{if(m.type!=='attributes'||m.attributeName!=='class')return;const focused=(m.target as HTMLElement).classList.contains('item--focus');focused&&setActiveReader(currentView.value,reader,getSettings());focused&&window.dispatchEvent(new CustomEvent('sireader:tab-switched'));syncReaderFocus(focused&&hasReaderFocus())}));obs.observe(h,{attributes:true,attributeFilter:['class']});(containerRef.value as any).__observer=obs;break}}el=el.parentElement}}
-const handleShapeCreated=async(e:CustomEvent)=>{const{shape,source,x,y,edit}=e.detail;if(source&&!shapeToolManager?.ownsController?.(source))return;await finishPdfAnnotation(shape,x,y,edit)}
-const resize=()=>isPdfMode.value?pdfViewer.value?.resize?.():reader?.resize?.()
+const resize=()=>reader?.resize?.()
 defineExpose({ resize })
-onMounted(()=>{init();containerRef.value?.focus();events.forEach(([e,h])=>window.addEventListener(e,h as any));window.addEventListener('keydown',handleKeydown);window.addEventListener('unhandledrejection',suppressError);window.addEventListener('shape-created',handleShapeCreated as any);window.addEventListener('blur',handleWindowBlur);window.addEventListener('focus',handleWindowFocus);document.addEventListener('visibilitychange',handleVisibilityChange);setupTabObserver();const c=containerRef.value;c&&(c.addEventListener('focusin',handleFocusIn),c.addEventListener('focusout',handleFocusOut));bindTouchPaging(c);bindTouchPaging(viewerContainerRef.value);window.dispatchEvent(new CustomEvent('reader:open',{detail:{bookUrl:getBookUrl()}}));syncReaderFocus(true)})
-onUnmounted(async()=>{const{bookshelfManager}=await import('@/core/bookshelf');bookshelfManager.cleanup();syncReaderFocus(false);window.dispatchEvent(new CustomEvent('reader:close'));savePosition();clearTimeout(pdfToolbarSaveTimer);readerSplashRef.value?.cleanup();clearActiveReader(currentView.value);await markManager.value?.destroy();try{reader?.destroy();currentView.value?.cleanup?.();currentView.value?.viewer?.destroy?.()}catch{};inkToolManager?.destroy?.();shapeToolManager?.destroy?.();setTimeout(()=>viewerContainerRef.value&&(viewerContainerRef.value.innerHTML=''),50);events.forEach(([e,h])=>window.removeEventListener(e,h as any));window.removeEventListener('keydown',handleKeydown);window.removeEventListener('unhandledrejection',suppressError);window.removeEventListener('shape-created',handleShapeCreated as any);window.removeEventListener('blur',handleWindowBlur);window.removeEventListener('focus',handleWindowFocus);document.removeEventListener('visibilitychange',handleVisibilityChange);(containerRef.value as any)?.__observer?.disconnect();const c=containerRef.value;c&&(c.removeEventListener('focusin',handleFocusIn),c.removeEventListener('focusout',handleFocusOut));unbindTouchPaging();await bookshelfManager.flush()})
+onMounted(()=>{init();containerRef.value?.focus();events.forEach(([e,h])=>window.addEventListener(e,h as any));window.addEventListener('keydown',handleKeydown);window.addEventListener('unhandledrejection',suppressError);window.addEventListener('blur',handleWindowBlur);window.addEventListener('focus',handleWindowFocus);document.addEventListener('visibilitychange',handleVisibilityChange);setupTabObserver();const c=containerRef.value;c&&(c.addEventListener('focusin',handleFocusIn),c.addEventListener('focusout',handleFocusOut));bindTouchPaging(c);bindTouchPaging(viewerContainerRef.value);window.dispatchEvent(new CustomEvent('reader:open',{detail:{bookUrl:getBookUrl()}}));syncReaderFocus(true)})
+onUnmounted(async()=>{const{bookshelfManager}=await import('@/core/bookshelf');bookshelfManager.cleanup();syncReaderFocus(false);window.dispatchEvent(new CustomEvent('reader:close'));savePosition();readerSplashRef.value?.cleanup();clearActiveReader(currentView.value);await markManager.value?.destroy();try{reader?.destroy();currentView.value?.cleanup?.();}catch{};setTimeout(()=>viewerContainerRef.value&&(viewerContainerRef.value.innerHTML=''),50);events.forEach(([e,h])=>window.removeEventListener(e,h as any));window.removeEventListener('keydown',handleKeydown);window.removeEventListener('unhandledrejection',suppressError);window.removeEventListener('blur',handleWindowBlur);window.removeEventListener('focus',handleWindowFocus);document.removeEventListener('visibilitychange',handleVisibilityChange);(containerRef.value as any)?.__observer?.disconnect();const c=containerRef.value;c&&(c.removeEventListener('focusin',handleFocusIn),c.removeEventListener('focusout',handleFocusOut));unbindTouchPaging();await bookshelfManager.flush()})
 </script>
 <style scoped lang="scss">
 .reader-container{position:relative;width:100%;height:100%;outline:none;user-select:text;-webkit-user-select:text;isolation:isolate;display:flex;flex-direction:column;background:var(--b3-theme-background)}
 .reader-overlay{position:absolute;inset:0;z-index:999;background:transparent}
-.viewer-container{flex:1;position:relative;overflow:auto;background:var(--b3-theme-background);
-  &.has-fixed-toolbar{padding-top:40px}
-}
+.viewer-container{flex:1;position:relative;overflow:auto;background:var(--b3-theme-background)}
 .reader-loading{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:16px;color:var(--b3-theme-on-background);z-index:10;pointer-events:none}
 .spinner{width:48px;height:48px;border:4px solid var(--b3-theme-primary-lighter);border-top-color:var(--b3-theme-primary);border-radius:50%;animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -474,9 +371,6 @@ onUnmounted(async()=>{const{bookshelfManager}=await import('@/core/bookshelf');b
 .reader-toolbar,.reader-panel{display:flex;align-items:center;gap:2px;padding:3px 4px;background:var(--b3-theme-surface);border:1px solid var(--b3-border-color);border-radius:6px;box-shadow:0 2px 8px #0002;transition:opacity .2s}
 .toolbar-btn{width:28px;height:28px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;border-radius:4px;cursor:pointer;transition:all .15s;svg{width:14px;height:14px}&:hover{background:var(--b3-list-hover)}&.active{background:var(--b3-theme-primary-lightest);color:var(--b3-theme-primary)}}
 .toolbar-mark-btn{position:relative;.mark-indicator{position:absolute;right:2px;bottom:2px;width:8px;height:8px;border-radius:50%;border:1.5px solid var(--b3-theme-surface);box-shadow:0 0 0 .5px var(--b3-border-color)}}
-.toolbar-page-nav{display:flex;align-items:center;gap:3px;padding:0 4px;font-size:11px;color:var(--b3-theme-on-surface)}
-.page-input{width:36px;height:22px;padding:0 3px;border:none;background:var(--b3-theme-background-light);color:var(--b3-theme-on-surface);font-size:11px;text-align:center;border-radius:3px;transition:background .15s;&:focus{outline:none;background:var(--b3-theme-background)}&::-webkit-inner-spin-button,&::-webkit-outer-spin-button{display:none}}
-.page-total{opacity:.7}
 .search-input{width:160px;height:22px;padding:0 6px;border:none;background:var(--b3-theme-background-light);color:var(--b3-theme-on-surface);font-size:11px;border-radius:3px;transition:background .15s;&:focus{outline:none;background:var(--b3-theme-background)}}
 .search-count{font-size:11px;color:var(--b3-theme-on-surface-variant);min-width:40px;text-align:center;opacity:.7}
 .panel-divider{width:1px;height:20px;background:var(--b3-border-color)}
@@ -486,27 +380,4 @@ onUnmounted(async()=>{const{bookshelfManager}=await import('@/core/bookshelf');b
 .reader-toc-popup{position:absolute;bottom:60px;left:50%;transform:translateX(-50%);width:min(420px,92vw);height:min(520px,72vh);background:var(--b3-theme-surface);border:1px solid var(--b3-border-color);border-radius:8px;box-shadow:0 4px 20px #0003;z-index:1002;overflow:hidden}
 .toc-popup-enter-active,.toc-popup-leave-active{transition:all .2s}
 .toc-popup-enter-from,.toc-popup-leave-to{opacity:0;transform:translate(-50%,10px)}
-</style>
-<style>
-/* PDF 文本层选择优化 */
-.textLayer{position:absolute;inset:0;text-align:initial;line-height:1;overflow:clip;opacity:1;text-size-adjust:none;forced-color-adjust:none;transform-origin:0 0;caret-color:CanvasText;pointer-events:none;z-index:0}
-.textLayer :is(span,br){color:transparent;cursor:text;position:absolute;white-space:pre;transform-origin:0% 0%;pointer-events:auto;z-index:1}
-.textLayer ::selection{background:rgba(0,150,255,0.6) !important}
-.textLayer ::-moz-selection{background:rgba(0,150,255,0.6) !important}
-.textLayer br::selection{background:transparent}
-.textLayer.selecting{cursor:text}
-.endOfContent{display:block;position:absolute;inset:100% 0 0;z-index:0;cursor:default;user-select:none}
-.textLayer.selecting .endOfContent{top:0}
-/* PDF 搜索高亮 */
-.textLayer mark.pdf-search-hl{background:#ff06;border-radius:2px}
-.textLayer mark.pdf-search-current{background:#ff9800;color:#fff;box-shadow:0 0 0 2px #ff9800}
-/* 选择模式下标注透明，避免阻挡文本选择 */
-.pdf-selecting .pdf-highlight{pointer-events:none !important}
-.pdf-selecting [data-note-marker]{pointer-events:none !important}
-/* 标注闪烁动画 */
-.pdf-highlight--flash{animation:flash 1.2s ease-in-out 1}
-@keyframes flash{
-  0%,100%{opacity:1;transform:scale(1)}
-  50%{opacity:.3;transform:scale(1.05)}
-}
 </style>

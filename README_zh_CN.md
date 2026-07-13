@@ -5,9 +5,9 @@
 **专业电子书阅读器 · 智能标注系统**
 
 让思源笔记变身专业阅读器，支持 EPUB/PDF/TXT/在线小说  
-提供智能标注、TTS 朗读、词典查询、AI 翻译等功能；闪卡能力已拆分到独立 Sideck 插件
+专业电子书阅读器，支持 EPUB/PDF/MOBI/TXT/在线小说；PDF 支持高亮、墨迹、形状、表单、印章、签名、图片、截图、搜索、打印、导出和回链，并提供标注笔记、词典、翻译、主题与书架管理
 
-[![Version](https://img.shields.io/badge/version-1.3.9-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,77 @@
 ---
 
 ## 📝 最新更新
+
+### v2.0.0（2026.7.13）
+
+### 新增
+
+- PDF 阅读器全面切换为 EmbedPDF，使用 `@embedpdf/vue-pdf-viewer` 与 PDFium 渲染，作为插件内唯一 PDF 阅读路径。
+- 支持插件内直接打开本地 PDF、书架 PDF、文档链接 PDF 和 assets PDF；可通过“使用插件 PDF 阅读器”设置切换插件阅读器或思源原生 PDF 标签页。
+- 支持 PDF 连续滚动阅读、垂直/水平滚动、单页/奇数双页/偶数双页布局、上一页/下一页和页码跳转。
+- 支持 PDF 缩放、框选缩放、适应页面、适应宽度，以及 25%、50%、100%、125%、150%、200%、400%、800%、1600% 等固定缩放级别。
+- 支持 PDF 顺时针/逆时针旋转、手形拖动、指针选择、全屏阅读等 EmbedPDF 原生阅读工具。
+- 支持读取 PDF 原生目录/书签和页面缩略图，并在 SiReader 侧栏目录中按层级展示和跳转。
+- 支持 PDF 搜索侧栏，可按区分大小写、全词匹配搜索，并按页展示结果、上下跳转和定位命中内容。
+- 支持 PDF 打印、下载/导出等 EmbedPDF 原生文档操作，并遵循 PDF 文档权限限制。
+- 支持 PDF 截图/区域捕获，截图包含当前 PDF 标注，复制时以 PNG 写入剪贴板。
+- 支持 PDF 批注评论侧栏、标注样式侧栏、印章侧栏、签名侧栏和权限查看/保护弹窗等 EmbedPDF 原生面板。
+- 支持随插件打包 `pdfium.wasm` 与 EmbedPDF 默认印章资源，PDF 阅读器不再依赖旧的内置 PDF.js 工具链。
+- 支持 PDF 文本高亮、下划线、删除线、波浪线、插入文本、替换文本、评论、图钉笔记和批注框等文本标注。
+- 支持 PDF 笔记标注，可在标注中保存摘录文本、笔记内容、标签和绑定文档块。
+- 支持 PDF 标注颜色选择，兼容 SiReader 标注颜色：红、橙、黄、绿、青、蓝、紫、棕、黑、白和透明色。
+- 支持 PDF 标注样式调整，包括颜色、透明度、混合模式、线条粗细、描边颜色、填充颜色、边框样式、字体大小、字体、文字颜色、背景色、水平/垂直对齐和线端样式等。
+- 支持 16 种 PDF 混合模式：Normal、Multiply、Screen、Overlay、Darken、Lighten、Color Dodge、Color Burn、Hard Light、Soft Light、Difference、Exclusion、Hue、Saturation、Color、Luminosity。
+- 支持 PDF 墨迹和墨迹荧光笔，可手写批注并调整颜色、粗细、透明度和混合模式等属性。
+- 支持 PDF 形状标注，包括矩形、圆形、直线、箭头、多边形、折线等，并可设置描边、填充、粗细、边框样式和透明度。
+- 支持 PDF 文本框/自由文本和呼出标注，可在 PDF 页面上直接插入文字说明。
+- 支持 PDF 印章标注，内置 EmbedPDF 默认印章资源并随插件打包。
+- 支持 PDF 签名和姓名缩写，可绘制、输入或上传签名后插入 PDF 页面。
+- 支持 PDF 图片插入，可通过 EmbedPDF 图片标注能力向 PDF 页面添加图片。
+- 支持 PDF 表单填写与编辑，可创建文本框、复选框、单选框、下拉框和列表框，并支持只读、必填、多行、组合框、多选等表单属性。
+- 兼容 PDF 表单模型中的按钮、签名字段和 XFA 文本框/复选框/下拉框/列表框/按钮/签名/图片字段等控件类型。
+- 支持 PDF 撤销/重做、标注选择、移动、调整大小、旋转、分组/取消分组和删除。
+- 支持 PDF 遮蔽/涂黑工具，可创建遮蔽区域并应用遮蔽结果。
+- 支持复制 PDF 标注回链，回链格式统一为 `sireader://open?url=<bookUrl>&cfi=%23page-<page>&id=<annotationId>`。
+- 支持点击 PDF 回链后打开对应 PDF，并跳转到标注所在页。
+- 支持 PDF 选中文本后使用词典、翻译、复制、快捷发送到文档等操作。
+- 支持 PDF 标注菜单中复制回链、词典查询、翻译和快捷发送。
+- 支持将 PDF 选区或标注发送到配置好的快捷文档，PDF 菜单最多显示 5 个有效快捷文档。
+- 支持 PDF 截图复制，截图结果可直接写入剪贴板，也可继续使用 EmbedPDF 原生下载/导出入口。
+- 新增 EmbedPDF 专用存储：`records/embedpdf/<bookHash>.bin`，保存 PDF 标注和阅读进度。
+- 新增 `docs/embedpdf.md`，记录 EmbedPDF 集成、存储格式、旧数据迁移、PDF 回链、悬浮预览、菜单动作、主题策略和后续维护约束。
+
+### 优化
+
+- PDF 标注改为通过 EmbedPDF 的 `exportAnnotations()` / `importAnnotations()` 直接保存和恢复，减少中间格式转换导致的错位与丢失风险。
+- PDF 标注保存时会过滤 PDF 原生链接标注，只保存用户创建的标注，避免重复写入插件存储。
+- 首次打开旧 PDF 时，会在 EmbedPDF 记录为空的情况下自动迁移旧版 `records/<bookHash>.json` 中的高亮、墨迹、形状标注和阅读进度。
+- 旧 PDF 标注迁移会尽量保留 `id`、页码、摘录、笔记、标签、颜色、创建/修改时间、绑定块、章节、标注几何信息和阅读进度，并在迁移完成后提示迁移数量。
+- PDF 阅读进度改为保存 EmbedPDF 滚动状态，再次打开时恢复到上次阅读位置。
+- PDF 标注接入 SiReader 统一标注侧栏，可统一查看、编辑、删除 PDF 标注。
+- PDF 标注接入统一标注卡片，显示页码、章节、颜色、样式、笔记、标签和绑定块。
+- PDF 标注悬浮预览改为跟随 EmbedPDF 实际渲染命中区域，仅对带笔记或回复的标注显示摘录和笔记内容。
+- 思源文档内 PDF 回链悬浮预览支持已打开 PDF、已保存 EmbedPDF 标注，以及未打开 PDF 的按页懒加载上下文提取。
+- PDF 回链悬浮预览改为按页提取和缓存上下文，旧标注 ID 失效时会按页兜底查找，不再预先解析整本 PDF。
+- PDF 快捷发送改为复用 EmbedPDF 原生菜单和 SiReader 共享发送逻辑，不再维护自定义浮动菜单。
+- PDF 截图复制改为复用 EmbedPDF capture 状态，截图时自动收起 SiReader 侧栏，并在截图结果底部补充复制按钮。
+- PDF 目录侧栏保留 EmbedPDF 原生书签/大纲层级，不再扁平化目录。
+- PDF 暗色主题适配简化为 EmbedPDF UI 主题映射和暗色页面反色模式，降低主题滤镜对页面和标注的影响。
+- PDF 打开流程改为读取 `ArrayBuffer` 后交给 EmbedPDF `documentManager.initialDocuments`，并在思源插件环境中固定使用本地 wasm/assets 和 `worker:false` 加载策略。
+- 删除旧的内置 PDF.js 阅读器、PDF 工具栏和 `src/core/pdf` 兼容层，PDF 行为统一交给 EmbedPDF 与 SiReader 共享标注组件处理。
+
+### 修复
+
+- 修复旧 PDF 阅读器在部分 PDF 中可能出现页面空白、渲染不稳定或加载卡住的问题。
+- 修复 EmbedPDF 在思源插件环境中启用 worker 时可能一直停留在 loading 的问题。
+- 修复旧 PDF 主题方案可能导致背景覆盖文字、页面模糊、标注继承页面滤镜等显示问题。
+- 修复 PDF 标注在旧存储转换链路中可能出现的坐标错位、样式丢失和内容不完整问题。
+- 修复 PDF 原生链接标注被重复保存到插件标注记录的问题。
+- 修复 PDF 回链跳转误走 EPUB CFI 导航的问题，现在 `#page-N` 会交给 EmbedPDF 按页跳转。
+- 修复普通高亮也弹出 PDF 笔记悬浮卡片的问题，现在仅带笔记或回复的标注显示悬浮预览。
+- 修复 PDF 标注悬浮预览可能因距离猜测或选中状态兜底而显示错标注的问题。
+- 修复 PDF 快捷发送自定义浮动菜单在 EmbedPDF 选区菜单中层级和状态不稳定的问题。
+- 修复 PDF 截图复制只能下载、不能直接写入剪贴板的问题。
 
 ### v1.3.9 (2026.6.17)
 

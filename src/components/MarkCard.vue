@@ -10,7 +10,7 @@
         <input
           :value="tagInput"
           class="sr-tag-input-inline"
-      placeholder="输入标签，逗号分隔；下方点击选择"
+          :placeholder="props.i18n?.inputTags || 'Tags'"
           @click.stop
           @pointerdown.stop
           @input="emit('update:tagInput', ($event.target as HTMLInputElement).value)"
@@ -66,7 +66,7 @@
       v-if="editing"
       :value="note"
       class="b3-text-field sr-note-edit"
-      placeholder="添加笔记…"
+      :placeholder="props.i18n?.inputNote || props.i18n?.note || 'Note'"
       rows="4"
       @input="emit('update:note', ($event.target as HTMLTextAreaElement).value)"
       @keydown.ctrl.enter.prevent="emit('save')"
@@ -78,17 +78,17 @@
 
     <div v-if="editable" class="sr-card-foot">
       <template v-if="editing">
-        <button class="sr-text-btn" @click.stop="emit('cancel')">取消</button>
-        <button class="sr-text-btn sr-text-btn--primary" @click.stop="emit('save')">保存</button>
+        <button class="sr-text-btn" @click.stop="emit('cancel')">{{ props.i18n?.cancel || 'Cancel' }}</button>
+        <button class="sr-text-btn sr-text-btn--primary" @click.stop="emit('save')">{{ props.i18n?.save || 'Save' }}</button>
       </template>
       <template v-else>
         <button class="sr-text-btn" @click.stop="emit('edit')">
           <svg><use xlink:href="#iconTags" /></svg>
-          <span>{{ tags.length ? '编辑标签' : '添加标签' }}</span>
+          <span>{{ props.i18n?.inputTags || 'Tags' }}</span>
         </button>
         <button class="sr-text-btn sr-text-btn--primary" @click.stop="emit('edit')">
           <svg><use xlink:href="#iconEdit" /></svg>
-          <span>编辑笔记</span>
+          <span>{{ props.i18n?.note || 'Note' }}</span>
         </button>
       </template>
     </div>
@@ -101,7 +101,7 @@ export const parseMarkTags = (value = '') => normalizeMarkTags(value.split(/[#,�
 export const formatMarkTags = (tags?: unknown[]) => normalizeMarkTags(tags).join(', ')
 export const getMarkTags = (item: any) => normalizeMarkTags(item?.tags || [])
 export const collectMarkTags = (source: any[] | any = [], extra: unknown[] = []) => {
-  const items = Array.isArray(source) ? source : [...(source?.getAll?.() || []), ...(source?.getInkAnnotations?.() || []), ...(source?.getShapeAnnotations?.() || [])]
+  const items = Array.isArray(source) ? source : source?.getAll?.() || []
   return [...new Set([...items.flatMap(getMarkTags), ...normalizeMarkTags(extra)])].sort((a, b) => a.localeCompare(b)).slice(0, 24)
 }
 </script>
@@ -111,8 +111,9 @@ export const collectMarkTags = (source: any[] | any = [], extra: unknown[] = [])
 type ColorOption = { key: string; value: string; bg: string }
 type StyleOption = { value: string; label: string; icon?: string }
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   time: string
+  i18n?: any
   tags?: string[]
   tagOptions?: string[]
   selectedTags?: string[]
@@ -186,6 +187,7 @@ button.sr-tag-chip.active{opacity:1;background:var(--b3-theme-primary-lightest);
 .sr-style-svg{width:13px;height:13px}
 .sr-style-icon{font-size:12px;font-weight:700;line-height:1}
 .sr-style-icon[data-type="underline"]{text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:3px}
+.sr-style-icon[data-type="strikeout"]{text-decoration:line-through;text-decoration-thickness:2px}
 .sr-style-icon[data-type="outline"]{padding:0 2px;border:1px solid currentColor;border-radius:2px}
 .sr-style-icon[data-type="dotted"]{border-bottom:2px dotted currentColor}
 .sr-style-icon[data-type="dashed"]{border-bottom:2px dashed currentColor}

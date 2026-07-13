@@ -153,8 +153,6 @@ export const createWereadReaderContext = (options: { book: any; apiKey: string; 
   const marks = {
     getAnnotations: getAnnotationMarks,
     getBookmarks: getBookmarkMarks,
-    getInkAnnotations: () => [],
-    getShapeAnnotations: () => [],
     getAll: () => [...getBookmarkMarks(), ...getAnnotationMarks()],
     updateMark: async (mark: any, updates: any) => {
       Object.assign(mark, updates)

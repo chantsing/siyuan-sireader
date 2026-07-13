@@ -1,25 +1,11 @@
-// 阅读器快捷键处理
+﻿// 阅读器快捷键处理
 export interface KeyboardHandlers {
   handlePrev: () => void
   handleNext: () => void
   handleUndo?: () => void
-  handlePdfFirstPage?: () => void
-  handlePdfLastPage?: () => void
-  handlePdfPageUp?: () => void
-  handlePdfPageDown?: () => void
-  handlePdfRotate?: () => void
-  handlePdfZoomIn?: () => void
-  handlePdfZoomOut?: () => void
-  handlePdfZoomReset?: () => void
-  handlePdfSearch?: () => void
-  handlePrint?: () => void
-  handlePdfTextTool?: () => void
-  handlePdfHandTool?: () => void
-  handlePdfInkTool?: () => void
-  handlePdfShapeTool?: () => void
 }
 
-export const createKeyboardHandler = (handlers: KeyboardHandlers, isPdfMode: () => boolean) => {
+export const createKeyboardHandler = (handlers: KeyboardHandlers) => {
   return (e: KeyboardEvent) => {
     const t = e.target as HTMLElement
     if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return
@@ -39,34 +25,6 @@ export const createKeyboardHandler = (handlers: KeyboardHandlers, isPdfMode: () 
     // 通用导航
     if (['ArrowLeft', 'ArrowUp'].includes(k) || (k === ' ' && e.shiftKey)) return handlers.handlePrev(), consume()
     if (['ArrowRight', 'ArrowDown', ' '].includes(k)) return handlers.handleNext(), consume()
-
-    // PDF 专用快捷键
-    if (!isPdfMode()) return
-
-    const pdfKeys: Record<string, (() => void) | undefined> = {
-      Home: handlers.handlePdfFirstPage,
-      End: handlers.handlePdfLastPage,
-      PageUp: handlers.handlePdfPageUp,
-      PageDown: handlers.handlePdfPageDown,
-      r: handlers.handlePdfRotate,
-      t: handlers.handlePdfTextTool,
-      h: handlers.handlePdfHandTool,
-      i: handlers.handlePdfInkTool,
-      s: handlers.handlePdfShapeTool,
-    }
-
-    if (pdfKeys[key]) {
-      if (e.repeat && ['t', 'h', 'i', 's'].includes(key)) return consume()
-      return pdfKeys[key]?.(), consume()
-    }
-
-    if (c) {
-      if (k === '+' || k === '=') handlers.handlePdfZoomIn?.(), consume()
-      else if (k === '-') handlers.handlePdfZoomOut?.(), consume()
-      else if (k === '0') handlers.handlePdfZoomReset?.(), consume()
-      else if (k === 'f') handlers.handlePdfSearch?.(), consume()
-      else if (k === 'p') handlers.handlePrint?.(), consume()
-    }
   }
 }
 

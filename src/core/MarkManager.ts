@@ -1,10 +1,13 @@
-/**
+﻿/**
  * 统一标注管理器 - PDF/EPUB 双格式
  */
 import type{Plugin}from'siyuan'
 import{Overlayer}from'foliate-js/overlayer.js'
 import { getDatabase, type Annotation, type AnnotationType } from './database'
-import{compactNumber,getPdfSelectionRects,getPdfViewport,pdfRectToScreenBox,screenDeltaToPdfDelta}from'./pdf/annotation'
+const compactNumber = (value: number, digits = 1) => {
+  const factor = 10 ** digits
+  return Math.round(value * factor) / factor
+}
 
 type Format='pdf'|'epub'
 type HighlightColor='yellow'|'red'|'green'|'blue'|'purple'|'orange'|'pink'
@@ -14,7 +17,7 @@ type MarkType='bookmark'|'highlight'|'note'|'vocab'
 interface Mark{id:string;type:MarkType;format:Format;cfi?:string;section?:number;page?:number;rects?:Array<{page?:number;x:number;y:number;w:number;h:number}>;text?:string;color?:HighlightColor;style?:MarkStyle;note?:string;tags?:string[];title?:string;image?:string;timestamp:number;progress?:number;textOffset?:number;blockId?:string;chapter?:string;customOrder?:number}
 
 export const COLORS=[{name:'黄色',color:'yellow'as const,bg:'#ffeb3b'},{name:'红色',color:'red'as const,bg:'#ef5350'},{name:'绿色',color:'green'as const,bg:'#66bb6a'},{name:'蓝色',color:'blue'as const,bg:'#42a5f5'},{name:'紫色',color:'purple'as const,bg:'#ab47bc'},{name:'橙色',color:'orange'as const,bg:'#ff9800'},{name:'粉色',color:'pink'as const,bg:'#ec407a'}]
-export const STYLES=[{type:'highlight'as const,name:'高亮',text:'A'},{type:'underline'as const,name:'下划线',text:'A'},{type:'outline'as const,name:'边框',text:'A'},{type:'dotted'as const,name:'点线',text:'A',pdfOnly:true},{type:'dashed'as const,name:'虚线',text:'A',pdfOnly:true},{type:'double'as const,name:'双线',text:'A',pdfOnly:true},{type:'squiggly'as const,name:'波浪线',text:'A',epubOnly:true}]
+export const STYLES=[{type:'highlight'as const,name:'高亮',text:'A'},{type:'underline'as const,name:'下划线',text:'A'},{type:'outline'as const,name:'边框',text:'A'},{type:'squiggly'as const,name:'波浪线',text:'A',epubOnly:true}]
 export const getColorMap=()=>Object.fromEntries(COLORS.map(c=>[c.color,c.bg]))
 export const formatTime=(ts:number)=>{const d=new Date(ts);return`${d.getFullYear()}-${(d.getMonth()+1).toString().padStart(2,'0')}-${d.getDate().toString().padStart(2,'0')}`}
 
@@ -71,7 +74,7 @@ export const getChapterName=(params:{cfi?:string;page?:number;isPdf?:boolean;toc
 
 
 
-export interface MarkManagerConfig{format:Format;view?:any;plugin:Plugin;bookUrl:string;onAnnotationClick?:(mark:Mark)=>void;pdfViewer?:any;reader?:any}
+export interface MarkManagerConfig{format:Format;view?:any;plugin:Plugin;bookUrl:string;reader?:any}
 
 export class MarkManager{
   private format:Format
@@ -81,8 +84,6 @@ export class MarkManager{
   private marksMap=new Map<string,Mark>()
   private undoStack:Mark[]=[]
   private saveTimer:any
-  private onAnnotationClick?:(mark:Mark)=>void
-  private pdfViewer:any
   private reader:any
   private initialized=false
 
@@ -90,8 +91,6 @@ export class MarkManager{
     this.format=cfg.format
     this.view=cfg.view
     this.bookUrl=cfg.bookUrl
-    this.onAnnotationClick=cfg.onAnnotationClick
-    this.pdfViewer=cfg.pdfViewer
     this.reader=cfg.reader
     if(this.view)this.setupListeners()
   }
@@ -177,14 +176,8 @@ export class MarkManager{
   private add(m:Partial<Mark>):Mark{
     const mark:Mark={id:m.id||`${m.type}-${Date.now()}-${Math.random().toString(36).slice(2,9)}`,format:this.format,type:m.type!,timestamp:Date.now(),...m,tags:normalizeTags(m.tags)}as Mark
     if(!mark.chapter&&mark.type!=='bookmark'){
-      if(this.format==='pdf'&&mark.page){
-        const view=this.pdfViewer?.getPDF?.(),toc=view?.flatToc||view?.toc
-        if(toc?.length)for(let i=toc.length-1;i>=0;i--){const item=toc[i],pageNum=item.pageNumber||item.page;if(pageNum&&pageNum<=mark.page){mark.chapter=item.fullPath||item.label||item.title;break}}
-        if(!mark.chapter)mark.chapter=`第${mark.page}页`
-      }else{
-        const loc=this.reader?.getView?.()?.lastLocation||this.view?.lastLocation,book=this.reader?.getBook?.()||this.view?.book
-        mark.chapter=book?.toc&&loc?.tocItem?.href?this.findTocPath(book.toc,loc.tocItem.href)||loc.tocItem.label||loc.tocItem.title||'':loc?.tocItem?.label||loc?.tocItem?.title||loc?.label||''
-      }
+      const loc=this.reader?.getView?.()?.lastLocation||this.view?.lastLocation,book=this.reader?.getBook?.()||this.view?.book
+      mark.chapter=book?.toc&&loc?.tocItem?.href?this.findTocPath(book.toc,loc.tocItem.href)||loc.tocItem.label||loc.tocItem.title||'':loc?.tocItem?.label||loc?.tocItem?.title||loc?.label||''
     }
     this.marks.push(mark)
     this.marksMap.set(mark.id,mark)
@@ -193,17 +186,6 @@ export class MarkManager{
 
   private findTocPath(toc:any[],href:string,path=''):string{for(const item of toc){const cur=path?`${path} - ${item.label}`:item.label;if(item.href===href)return cur;if(item.subitems?.length){const found=this.findTocPath(item.subitems,href,cur);if(found)return found}}return''}
 
-  private getMarkPages(mark:Mark):number[]{
-    const pages=new Set<number>()
-    mark.rects?.forEach(r=>r?.page&&pages.add(r.page))
-    if(mark.page)pages.add(mark.page)
-    return [...pages]
-  }
-
-  private renderPdfMark(mark?:Mark){
-    if(this.format!=='pdf'||!mark)return
-    this.getMarkPages(mark).forEach(page=>this.renderPdf(page))
-  }
 
   /** 删除标注（内存+数据库） */
   private async del(id:string):Promise<boolean>{
@@ -237,7 +219,7 @@ export class MarkManager{
   }
 
   private setupListeners(){
-    if(this.format==='pdf')return
+    if(!this.view)return
     this.view.addEventListener('create-overlay',((e:CustomEvent)=>{
       const{index}=e.detail
       this.marks.forEach(m=>{if(m.type!=='bookmark'&&m.cfi)try{if(this.view.resolveCFI(m.cfi).index===index)this.view.addAnnotation({value:m.cfi,color:m.color,note:m.note}).catch(()=>{})}catch{}})
@@ -284,125 +266,32 @@ export class MarkManager{
       tooltip.innerHTML=createTooltip({icon:isVocab?'#iconLanguage':'#iconEdit',iconColor:themeColor,title:isVocab?'词典':'笔记',content:quoteText+noteContent,id:timestamp})
       window.document.body.appendChild(tooltip)
       let timer:any
-      marker.onmouseenter=()=>{clearTimeout(timer);marker.style.opacity='1';const r=marker.getBoundingClientRect(),iframe=doc.defaultView?.frameElement as HTMLIFrameElement,ir=iframe?.getBoundingClientRect();showTooltip(tooltip,(ir?.left||0)+r.left,(ir?.top||0)+r.bottom+8)}
-      marker.onmouseleave=()=>{timer=setTimeout(()=>{marker.style.opacity='0.85';hideTooltip(tooltip)},100)}
+      const iframe=doc.defaultView?.frameElement as HTMLIFrameElement,ir=()=>iframe?.getBoundingClientRect()
+      const show=(x:number,y:number)=>{clearTimeout(timer);marker.style.opacity='1';const r=ir();showTooltip(tooltip,(r?.left||0)+x,(r?.top||0)+y+8)}
+      const hide=()=>{timer=setTimeout(()=>{marker.style.opacity='0.85';hideTooltip(tooltip)},100)}
+      marker.onmouseenter=()=>{const r=marker.getBoundingClientRect();show(r.left,r.bottom)}
+      marker.onmouseleave=hide
       tooltip.onmouseenter=()=>clearTimeout(timer)
-      tooltip.onmouseleave=()=>{marker.style.opacity='0.85';hideTooltip(tooltip)}
+      tooltip.onmouseleave=hide
+      const onMove=(e:MouseEvent)=>{
+        const rect=[...range.getClientRects()].find(r=>e.clientX>=r.left&&e.clientX<=r.right&&e.clientY>=r.top&&e.clientY<=r.bottom)
+        rect?show(rect.right,rect.bottom):hide()
+      }
+      ;[range.startContainer,range.endContainer].map(n=>n.nodeType===1?n:n.parentElement).forEach(el=>{
+        el?.addEventListener('mousemove',onMove as EventListener)
+        el?.addEventListener('mouseleave',hide)
+      })
       const ec=range.endContainer,eo=range.endOffset
       if(ec.nodeType===3){const tn=ec as Text;eo===tn.length?tn.parentNode?.insertBefore(marker,tn.nextSibling):tn.parentNode?.insertBefore(marker,tn.splitText(eo))}
       else{const nn=ec.childNodes[eo];nn?ec.insertBefore(marker,nn):ec.appendChild(marker)}
     }catch(e){console.error('[Mark]',e)}
   }
 
-  private createNoteMarker(m:Mark,r:any,layer:HTMLElement){
-    if(layer.querySelector(`[data-note-marker][data-mark-id="${m.id}"]`))return
-    const bg=getColorBg(m.color)
-    const marker=document.createElement('span')
-    marker.setAttribute('data-note-marker','true')
-    marker.setAttribute('data-mark-id',m.id)
-    marker.textContent=getNoteIcon(m.color)
-    marker.style.cssText=`position:absolute;left:${r.x+r.w+3}px;top:${r.y-5}px;font-size:14px;cursor:pointer;user-select:none;opacity:0.85;transition:opacity .2s;pointer-events:auto;z-index:12`
-    cleanTooltips(m.id)
-    const tooltip=document.createElement('div')
-    tooltip.setAttribute('data-note-tooltip','true')
-    tooltip.setAttribute('data-mark-id',m.id)
-    tooltip.style.cssText='position:fixed;display:none;min-width:280px;max-width:420px;background:var(--b3-theme-surface);border:1px solid var(--b3-border-color);border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.12),0 4px 16px rgba(0,0,0,.08),0 2px 8px rgba(0,0,0,.04);z-index:99999;overflow:hidden;backdrop-filter:blur(8px);word-wrap:break-word'
-    tooltip.innerHTML=createTooltip({icon:m.type==='vocab'?'#iconLanguage':'#iconEdit',iconColor:bg,title:m.type==='vocab'?'词汇笔记':'标注笔记',content:`<div style="padding:14px;font-size:13px;line-height:1.7;color:var(--b3-theme-on-surface);max-height:300px;overflow-y:auto;word-wrap:break-word;word-break:break-word;background:var(--b3-theme-surface)">${m.note!.split('\n').map(l=>l.trim()).filter(Boolean).join('<br>')}</div>`})
-    document.body.appendChild(tooltip)
-    let timer:any
-    marker.onmouseenter=()=>{clearTimeout(timer);marker.style.opacity='1';showTooltip(tooltip,marker.getBoundingClientRect().left,marker.getBoundingClientRect().bottom+8)}
-    marker.onmouseleave=()=>{timer=setTimeout(()=>{marker.style.opacity='0.85';hideTooltip(tooltip)},100)}
-    tooltip.onmouseenter=()=>clearTimeout(timer)
-    tooltip.onmouseleave=()=>{timer=setTimeout(()=>hideTooltip(tooltip),100)}
-    marker.onclick=()=>this.onAnnotationClick?.(m)
-    layer.appendChild(marker)
-  }
-
-  renderPdf(page:number){
-    if(this.format!=='pdf'||!this.pdfViewer)return
-    const layer=document.querySelector(`[data-page="${page}"] .pdf-annotation-layer`)as HTMLElement
-    if(!layer)return
-    layer.querySelectorAll('[data-note-marker],.pdf-highlight').forEach(el=>el.remove())
-    this.marks.filter(m=>this.getMarkPages(m).includes(page)).forEach(m=>cleanTooltips(m.id))
-    // 固定rotation为0，避免旋转影响坐标计算（思源优化）
-    this.marks.filter(m=>this.getMarkPages(m).includes(page)&&(m.type==='highlight'||m.type==='note'||m.type==='vocab')).forEach(m=>{
-      const bg=getColorBg(m.color),style=m.style||'highlight'
-      const pageRects=this.getPdfMarkRects(m,page)
-      const markPages=this.getMarkPages(m)
-      const lastPage=markPages[markPages.length-1]
-      pageRects.forEach((r,idx)=>{
-        const div=document.createElement('div'),base=`position:absolute;left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px;pointer-events:auto;cursor:pointer`
-        div.className=`pdf-highlight pdf-${style}`
-        div.dataset.id=m.id
-        const w=style==='double'?'4px':'2px'
-        div.style.cssText=style==='highlight'?`${base};background:${bg};opacity:0.3`:style==='underline'?`${base};border-bottom:2px solid ${bg};opacity:0.8`:style==='outline'?`${base};border:2px solid ${bg};opacity:0.8`:`${base};border-bottom:${w} ${style} ${bg};opacity:0.8`
-        div.onclick=()=>this.onAnnotationClick?.(m)
-        layer.appendChild(div)
-        if(m.note&&page===lastPage&&idx===pageRects.length-1)this.createNoteMarker(m,r,layer)
-      })
-    })
-  }
-
-  private getPdfMarkRects(mark:Mark,page:number){
-    if(this.format!=='pdf'||!this.pdfViewer)return[]
-    const viewport=getPdfViewport(this.pdfViewer,page)
-    if(!viewport)return[]
-    return (mark.rects||[])
-      .filter(r=>(r.page||mark.page)===page)
-      .map(r=>{
-        return pdfRectToScreenBox(viewport,[r.x,r.y,r.x+r.w,r.y+r.h])
-      })
-      .filter(r=>r.w>0&&r.h>0)
-  }
-
-  findPdfMarkAt(page:number,x:number,y:number):Mark|null{
-    if(this.format!=='pdf'||!this.pdfViewer)return null
-    const marks=this.marks.filter(m=>this.getMarkPages(m).includes(page)&&(m.type==='highlight'||m.type==='note'||m.type==='vocab'))
-    for(let i=marks.length-1;i>=0;i--){
-      const mark=marks[i]
-      if(this.getPdfMarkRects(mark,page).some(r=>x>=r.x&&x<=r.x+r.w&&y>=r.y&&y<=r.y+r.h))return mark
-    }
-    return null
-  }
-
-  async movePdfMark(id:string,page:number,dx:number,dy:number):Promise<boolean>{
-    if(!this.movePdfMarkPreview(id,page,dx,dy))return false
-    this.commitPdfMarkMove()
-    return true
-  }
-
-  movePdfMarkPreview(id:string,page:number,dx:number,dy:number):boolean{
-    if(this.format!=='pdf'||!this.pdfViewer)return false
-    const mark=this.marksMap.get(id)
-    if(!mark?.rects?.length)return false
-    const viewport=getPdfViewport(this.pdfViewer,page)
-    if(!viewport)return false
-    const{dx:deltaX,dy:deltaY}=screenDeltaToPdfDelta(viewport,dx,dy)
-    mark.rects=compactMarkRects(mark.rects.map(r=>({ ...r,x:r.x+deltaX,y:r.y+deltaY })))
-    this.renderPdfMark(mark)
-    return true
-  }
-
-  commitPdfMarkMove(){
-    this.save()
-    window.dispatchEvent(new Event('sireader:marks-updated'))
-  }
-
-  /** PDF选择优化 - 使用思源笔记实现 */
-  getPdfSelectionRects():any[]|null{
-    if(this.format!=='pdf'||!this.pdfViewer)return null
-    return getPdfSelectionRects(this.pdfViewer)
-  }
-
-
-
-
   async addHighlight(loc:string|number,text:string,color:HighlightColor,style:MarkStyle='highlight',rects?:any[],textOffset?:number,tags?:string[]):Promise<Mark>{
-    const m=this.add({type:'highlight',[typeof loc==='string'?'cfi':this.format==='pdf'?'page':'section']:loc,text,color,style,rects,textOffset,tags})
+    const m=this.add({type:'highlight',[typeof loc==='string'?'cfi':'section']:loc,text,color,style,rects,textOffset,tags})
     this.undoStack.push({...m})
     if(this.undoStack.length>10)this.undoStack.shift()
-    if(this.format==='pdf')this.renderPdfMark(m)
-    else if(m.cfi)await this.view?.addAnnotation?.({value:m.cfi,color:m.color,note:m.note}).catch(()=>{})
+    if(m.cfi)await this.view?.addAnnotation?.({value:m.cfi,color:m.color,note:m.note}).catch(()=>{})
     this.save()
     window.dispatchEvent(new Event('sireader:marks-updated'))
     this.tryAutoSync(m)
@@ -410,11 +299,10 @@ export class MarkManager{
   }
 
   async addNote(loc:string|number,note:string,text:string,color:HighlightColor='blue',style:MarkStyle='outline',rects?:any[],textOffset?:number,tags?:string[]):Promise<Mark>{
-    const m=this.add({type:'note',[typeof loc==='string'?'cfi':this.format==='pdf'?'page':'section']:loc,text,note,color,style,rects,textOffset,tags})
+    const m=this.add({type:'note',[typeof loc==='string'?'cfi':'section']:loc,text,note,color,style,rects,textOffset,tags})
     this.undoStack.push({...m})
     if(this.undoStack.length>10)this.undoStack.shift()
-    if(this.format==='pdf')this.renderPdfMark(m)
-    else if(m.cfi)await this.view?.addAnnotation?.({value:m.cfi,color:m.color,note:m.note}).catch(()=>{})
+    if(m.cfi)await this.view?.addAnnotation?.({value:m.cfi,color:m.color,note:m.note}).catch(()=>{})
     this.save()
     window.dispatchEvent(new Event('sireader:marks-updated'))
     this.tryAutoSync(m)
@@ -425,31 +313,20 @@ export class MarkManager{
     if(m.type==='bookmark')return
     try{
       const{syncMarkOnCreate}=await import('@/utils/copy')
-      await syncMarkOnCreate(m,{bookUrl:this.bookUrl,isPdf:this.format==='pdf',reader:this.reader,pdfViewer:this.pdfViewer,marks:this})
+      await syncMarkOnCreate(m,{bookUrl:this.bookUrl,isPdf:false,reader:this.reader,marks:this})
     }catch(e){console.error('[AutoSync]',e)}
   }
 
   async updateMark(keyOrMark:string|any,updates?:Partial<Mark>):Promise<boolean>{
     if(typeof keyOrMark==='object'&&keyOrMark?.type){
       const{type,id}=keyOrMark
-      if(type==='shape'){
-        const result=await this.getManager('shape')?.updateShape?.(id,updates)
-        if(result)window.dispatchEvent(new Event('sireader:marks-updated'))
-        return result||false
-      }
-      if(type==='ink'){
-        const result=await this.getManager('ink')?.updateInk?.(id,updates)
-        if(result)window.dispatchEvent(new Event('sireader:marks-updated'))
-        return result||false
-      }
       keyOrMark=id
     }
     const m=this.marksMap.get(keyOrMark)
     if(!m)return false
     Object.assign(m,updates)
     m.tags=normalizeTags(m.tags)
-    if(this.format==='pdf')this.renderPdfMark(m)
-    else if(m.cfi){
+    if(m.cfi){
       await this.view?.deleteAnnotation?.({value:m.cfi}).catch(()=>{})
       await this.view?.addAnnotation?.({value:m.cfi,color:m.color,note:m.note}).catch(()=>{})
     }
@@ -458,25 +335,12 @@ export class MarkManager{
     return true
   }
 
-  private getManager(type:'ink'|'shape'){return(this as any)[`${type}Manager`]}
-  
-  private async callManager(type:'ink'|'shape',method:string,id:string):Promise<boolean>{
-    const manager=this.getManager(type)
-    if(!manager?.toJSON?.().some((i:any)=>i.id===id))return false
-    const result=await manager[method]?.(id)
-    if(result)window.dispatchEvent(new Event('sireader:marks-updated'))
-    return result
-  }
-
   /** 删除标注 */
   async deleteMark(idOrKey:string|any):Promise<boolean>{
     if(typeof idOrKey==='object'&&idOrKey?.type){
       const{type,id}=idOrKey
-      if(type==='shape'||type==='ink')return this.callManager(type,'delete'+type.charAt(0).toUpperCase()+type.slice(1),id)
       idOrKey=id
     }
-    if(await this.callManager('ink','deleteInk',idOrKey))return true
-    if(await this.callManager('shape','deleteShape',idOrKey))return true
     const m=this.marksMap.get(idOrKey)
     if(!m||!await this.del(m.id))return false
     
@@ -484,8 +348,7 @@ export class MarkManager{
     if(m.blockId)import('@/utils/copy').then(({syncMarkOnDelete})=>syncMarkOnDelete(m)).catch(e=>console.error('[DeleteBlock]',e))
     
     // 清理渲染
-    if(this.format==='pdf')this.renderPdfMark(m)
-    else{
+    {
       if(m.cfi)await this.view?.deleteAnnotation?.({value:m.cfi}).catch(()=>{})
       cleanTooltips(m.id)
       this.view?.renderer?.getContents?.()?.forEach(({doc}:any)=>doc?.querySelectorAll(`[data-mark-id="${m.id}"]`).forEach((el:Element)=>el.remove()))
@@ -496,10 +359,10 @@ export class MarkManager{
 
   addBookmark(loc?:string|number,title?:string):Mark{
     const l=this.view?.lastLocation||this.reader?.getLocation?.()
-    const useLoc=loc||(this.format==='pdf'?this.pdfViewer?.getCurrentPage()||1:l?.cfi||l?.index)
+    const useLoc=loc||(l?.cfi||l?.index)
     const existing=this.marks.find(m=>m.type==='bookmark'&&(m.cfi===useLoc||m.page===useLoc||m.section===useLoc))
     if(existing)throw new Error('已有书签')
-    const m=this.add({type:'bookmark',format:this.format,[typeof useLoc==='string'?'cfi':this.format==='pdf'?'page':'section']:useLoc,title:title||l?.tocItem?.label||l?.label||`第${(useLoc||0)+1}章`,progress:Math.round((l?.fraction||0)*100)})
+    const m=this.add({type:'bookmark',format:this.format,[typeof useLoc==='string'?'cfi':'section']:useLoc,title:title||l?.tocItem?.label||l?.label||`第${(useLoc||0)+1}章`,progress:Math.round((l?.fraction||0)*100)})
     this.undoStack.push({...m})
     if(this.undoStack.length>10)this.undoStack.shift()
     this.save()
@@ -513,7 +376,7 @@ export class MarkManager{
   /** 切换书签 */
   async toggleBookmark(loc?:string|number,title?:string):Promise<boolean>{
     const l=this.view?.lastLocation||this.reader?.getLocation?.()
-    const useLoc=loc||(this.format==='pdf'?this.pdfViewer?.getCurrentPage()||1:l?.cfi||l?.index)
+    const useLoc=loc||(l?.cfi||l?.index)
     const existing=this.marks.find(m=>m.type==='bookmark'&&(m.cfi===useLoc||m.page===useLoc||m.section===useLoc))
     if(existing){await this.deleteBookmark(existing.id);return false}
     this.addBookmark(useLoc,title)
@@ -522,7 +385,7 @@ export class MarkManager{
 
   hasBookmark(loc?:string|number):boolean{
     const l=this.view?.lastLocation||this.reader?.getLocation?.()
-    const useLoc=loc||(this.format==='pdf'?this.pdfViewer?.getCurrentPage()||1:l?.cfi||l?.index)
+    const useLoc=loc||(l?.cfi||l?.index)
     return this.marks.some(m=>m.type==='bookmark'&&(m.cfi===useLoc||m.page===useLoc||m.section===useLoc))
   }
   
@@ -537,16 +400,10 @@ export class MarkManager{
   undo=async()=>{
     const m=this.undoStack.pop()
     if(m){await this.deleteMark(m.id);return}
-    const ink=this.getManager('ink')
-    if(ink?.undo?.())return
-    const shape=this.getManager('shape')
-    if(shape&&this.pdfViewer){const p=this.pdfViewer.getCurrentPage();if(p)await shape.undo(p)}
   }
-  getInkAnnotations=()=>this.getManager('ink')?.toJSON?.()||[]
-  getShapeAnnotations=()=>this.getManager('shape')?.toJSON?.()||[]
   
   async goTo(m:Mark){
-    const d=this.format==='pdf'&&m.page?{cfi:`#page-${m.page}`,id:m.id}:{cfi:m.cfi||`section-${m.section}`,id:m.id}
+    const d={cfi:m.cfi||`section-${m.section}`,id:m.id}
     window.dispatchEvent(new CustomEvent('sireader:goto',{detail:d}))
   }
 
