@@ -18,7 +18,7 @@ type ExportItem = {
 }
 
 const DEFAULT_LINK_FORMAT = '> [!NOTE] 📑 {{title}}\n> [{{chapter}}]({{url}}) {{text}}\n> {{image}}\n> {{note}}'
-export const inlineLinkText = (text = '') => text.replace(/\s+/g, ' ').trim()
+export const inlineLinkText = (text = '') => text.replace(/\s+/g, ' ').replace(/([\p{Script=Han}\u3000-\u303f\uff00-\uffef]) ([\p{Script=Han}\u3000-\u303f\uff00-\uffef])/gu, '$1$2').trim()
 
 const getShelfBook = async (bookUrl: string) => bookUrl ? (await import('@/core/bookshelf')).bookshelfManager.getBook(bookUrl) : null
 const getGlobalSettings = async () => (window as any).__sireader_settings || await (await import('@/composables/useSetting')).settingsManager.get().catch(() => null)
@@ -192,6 +192,7 @@ export const syncMarkOnDelete = async (item: any) => {
 export const saveMarkEdit = async (mark: any, updates: any, ctx: any) => {
   if (!ctx.marks) throw new Error('标注系统未初始化')
   await ctx.marks.updateMark(mark, updates)
+  updates.tags?.length && await (await import('@/composables/useSetting')).collectAnnotationTagPresets(updates.tags).catch(() => {})
   try {
     if (await getBoundDocId(ctx.bookUrl)) await updateMarkInDoc({ ...mark, ...updates }, ctx)
   } catch {}

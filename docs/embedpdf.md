@@ -24,20 +24,25 @@ Current loading path:
 EmbedPDF state is stored at:
 
 ```txt
-records/embedpdf/<bookHash>.bin
+records/<bookDataId>.json
 ```
 
-The file is a V8-serialized object:
+The file is the normal SiReader per-book JSON record:
 
 ```ts
 {
   version: 1
+  book: Book
   annotations: AnnotationTransferItem[]
   progress?: {
     pageNumber: number
     totalPages: number
     pageCoordinates?: { x: number; y: number }
     updatedAt: number
+  }
+  updatedAt: number
+  migration?: {
+    pdfAnnotations?: string
   }
 }
 ```
@@ -48,6 +53,20 @@ Annotations are imported and exported only through EmbedPDF:
 - `annotation.importAnnotations()`
 
 SiReader filters exported annotations before saving so PDF-native link annotations are not duplicated into plugin storage. User annotations remain in EmbedPDF transfer format. Keep this direct round trip; do not add an adapter layer unless EmbedPDF changes its transfer shape.
+
+PDF annotations, PDF bookmarks, and PDF progress all use the same per-book JSON record. Do not reintroduce `.bin` as the active storage path.
+
+Current split:
+
+- [`src/core/bookStore.ts`](../src/core/bookStore.ts): thin storage entry for book records, PDF annotation reads/writes, and PDF progress writes.
+- [`src/core/dataMigration.ts`](../src/core/dataMigration.ts): legacy PDF conversion, EmbedPDF annotation normalization, migration marker, text/geometry repair.
+- [`src/components/EmbedPdfReader.vue`](../src/components/EmbedPdfReader.vue): EmbedPDF lifecycle glue only; no migration algorithm or annotation template logic.
+
+When older SiReader PDF marks are found in the same JSON record, SiReader converts them in time-sliced batches to EmbedPDF transfer items and writes the repaired record back. Items that cannot be converted are kept in the JSON record so later repair logic can try again. Concurrent PDF progress and annotation reads share one migration task per book. Completed records are marked with `migration.pdfAnnotations`; do not show migration messages or rerun migration when that marker is current.
+
+Legacy `records/embedpdf/<bookHash>.bin` records are imported into the same JSON record once and then removed only after the import count matches the legacy annotation count.
+
+Legacy notes with selected text are migrated as normal text highlights with the note saved as the EmbedPDF comment (`contents`). Missing old style/color data falls back to the basic highlight style; do not preserve old SiReader-only style fields if EmbedPDF does not need them.
 
 Progress is saved from EmbedPDF scroll metrics and restored with `scrollToPage()`.
 
@@ -65,6 +84,46 @@ The annotation page reads exported EmbedPDF annotations and maps only UI fields 
 - `chapter`
 
 Fields not shown by current UI should stay out of `custom` unless they drive rendering or sync.
+
+Saved annotation records should stay close to standard EmbedPDF transfer items:
+
+- keep `annotation` and optional `ctx`
+- dedupe by annotation `id`
+- compact/round rects enough to avoid bloated JSON
+- remove temporary migration fields after successful text alignment: `legacyType`, `legacyCoord`, `textCoord`
+- avoid duplicating the same note in both `contents` and `custom.note`
+
+Normalization is the compatibility boundary for malformed or older PDF annotation data. Keep the defensive fixes in [`src/core/dataMigration.ts`](../src/core/dataMigration.ts), not in render components:
+
+- non-array annotation containers are treated as empty
+- malformed annotation entries are skipped
+- missing `rect` falls back to a 1x1 safe rect
+- text markup annotations restore `segmentRects` from `rect`
+- polygon/polyline annotations always expose `vertices`
+- line annotations always expose `linePoints`
+- ink annotations always expose `inkList` and per-path `points`
+- invalid `custom`, `strokeDashArray`, and `replies` values are cleaned before saving
+
+This is intentionally a render-safety layer, not a full data reconstruction system. If geometry cannot be recovered, prefer a harmless fallback over crashing the whole PDF reader.
+
+PDF annotation import lives in [`src/core/pdfAnnotationImport.ts`](../src/core/pdfAnnotationImport.ts). It is a small sidecar-data importer for bookshelf PDFs:
+
+- accepts JSON, XFDF, Markdown, and TXT annotation export files
+- recognizes EmbedPDF/SiReader records, Zotero-like JSON fields, and simple reader exports with page/text/note/rect data
+- converts through the same migration/normalization path before writing
+- merges by annotation `id` and skips duplicates
+
+Do not parse annotated PDF binaries here. If a reader only stores annotations inside the PDF file itself, export a sidecar file first or add a dedicated parser with samples.
+
+## PDF Bookmarks
+
+PDF bookmarks are EmbedPDF annotations too. They should use the same save/load/edit/delete path as other PDF annotations.
+
+Rules:
+
+- no special "bookmark cannot delete/edit" branch
+- TOC bookmark icons are format-agnostic; PDF should not be blocked when EPUB has the icon
+- bookmark cards use the shared mark card style, with title/text using the theme color and notes/comments staying normal text
 
 ## Annotation Links
 
@@ -140,7 +199,7 @@ Backlinks inserted into SiYuan documents should preview PDF annotation context o
 Preview lookup order:
 
 - live opened PDF annotations, when the book is already active
-- stored EmbedPDF annotations from `records/embedpdf/<bookHash>.bin`
+- stored EmbedPDF annotations from `records/<bookDataId>.json`
 - fallback by page when the stored annotation id is stale
 
 Context text comes from EmbedPDF text extraction:
@@ -151,6 +210,12 @@ Context text comes from EmbedPDF text extraction:
 Preview range should include text before and after the annotation. It should not stop at only the next sentence when the following paragraph still fits inside the context window.
 
 Keep extraction lazy. Do not pre-extract the whole PDF for document hover.
+
+## PDF Search
+
+PDF search should stay on EmbedPDF's native search plugin and search layer. SiReader should not rebuild PDF text matching, highlight positioning, result scrolling, or sidebar search controls.
+
+The search layer's own highlight elements must not be covered by broad shadow-root CSS. If dark-page theming needs a small compatibility rule, keep it scoped to the rendered search highlight blend mode only; do not override generic positioned elements or background-color styles in the PDF page.
 
 ## PDF Theme
 
@@ -163,53 +228,12 @@ EmbedPDF's `theme` config is used for viewer UI chrome only. It does not reliabl
 
 The current implementation lives in:
 
-- [`src/utils/embedPdfTheme.ts`](../src/utils/embedPdfTheme.ts): maps SiReader theme/custom theme to EmbedPDF UI theme preference and basic UI colors
+- [`src/utils/embedPdfTheme.ts`](../src/utils/embedPdfTheme.ts): maps SiReader theme/custom theme to EmbedPDF UI theme preference and the small set of UI colors used by sidebars, comments, controls, scrollbars, and tooltips
 - [`src/components/EmbedPdfReader.vue`](../src/components/EmbedPdfReader.vue): calls `setTheme()`, sets `data-sireader-page-mode`, and injects one small `style[data-sireader-page-theme]` into EmbedPDF's shadow root
 
+For EmbedPDF UI chrome, keep `background.surface` and `surfaceAlt` aligned with the reader theme background instead of SiYuan's app `--b3-theme-surface`; otherwise dark SiYuan panels can make PDF sidebars and comments too dark when the reader theme itself is lighter or custom. In dark-like reader themes, secondary/muted text should remain readable against that reader background.
+
 Do not reintroduce PDFium/render `pageColors`, patched `@embedpdf` packages, or broad canvas filters. Those attempts previously caused blank pages, background covering text, blurred content, or annotations inheriting the page theme. If richer sepia/green/blue PDF page theming is needed later, treat it as a new feature with visual regression checks.
-
-## Legacy Migration
-
-Old SiReader PDF records may exist at:
-
-```txt
-records/<bookHash>.json
-```
-
-On first EmbedPDF open, if no EmbedPDF annotations exist, old PDF annotations are converted once into EmbedPDF transfer items:
-
-- old `highlight` -> EmbedPDF highlight annotation
-- old `ink` -> EmbedPDF ink annotation
-- old `shape` textbox -> EmbedPDF free text annotation
-- old `shape` rect/circle -> EmbedPDF square/circle annotation
-
-After conversion, EmbedPDF owns the data. The old PDF mark compatibility layer is not used.
-
-Legacy fields intentionally preserved:
-
-- `id`
-- `page/pageIndex`
-- `text`
-- `note/contents`
-- `tags`
-- `color`
-- `created/updated`
-- `block/blockId`
-- `chapter`
-- highlight geometry: `rects -> segmentRects`
-- ink geometry: `paths -> inkList`
-- shape geometry/style: `shapeType`, `rect`, `strokeWidth`, `opacity`
-- reading progress: `chapter/total/read -> progress`
-
-Legacy fields that do not currently show in the UI:
-
-- `textOffset`
-- `customOrder`
-- old EPUB-only styles such as `outline`, `dotted`, `dashed`, `double`
-
-If simplifying migration, keep visual/rendering fields and visible card fields first. Dropping `textOffset` and `customOrder` is safe for current PDF UI; dropping geometry, color, contents, dates, tags, note, or block binding is not.
-
-When old annotations are migrated, show `pdfMigrated` from i18n with the migrated count.
 
 ## Rule
 
@@ -218,12 +242,16 @@ If EmbedPDF does not expose a stable capability, SiReader leaves that PDF featur
 ## New Chat Checklist
 
 - Keep `buffer + worker:false + local wasm/assets`.
-- Keep one-time legacy migration when `.bin` has no annotations.
+- Keep PDF state in the normal per-book JSON record.
 - Keep EmbedPDF `exportAnnotations()` / `importAnnotations()` as the storage boundary.
+- Keep PDF annotations/bookmarks/progress on the same JSON record path; `.bin` is legacy migration input only.
+- Keep migration logic in `dataMigration.ts`; keep `bookStore.ts` as a thin read/write layer.
+- Keep completed migration guarded by `migration.pdfAnnotations` so opening a PDF does not migrate every time.
 - Keep PDF backlinks as `sireader://open?...&cfi=%23page-N&id=...`.
 - Keep PDF click navigation on EmbedPDF page anchors, not EPUB CFI navigation.
+- Keep PDF search on EmbedPDF native search/highlight; do not add a custom PDF search renderer.
 - Keep PDF page theme support to default/light and dark inversion only.
-- Keep EmbedPDF UI theme mapping small; avoid unused full-token color maps.
+- Keep EmbedPDF UI theme mapping small; use the reader background for sidebars/comments and avoid unused full-token color maps.
 - Keep the PDF theme shadow style injected once with `data-sireader-page-theme`.
 - Keep PDF tooltip tied to EmbedPDF rendered pointer hit areas and annotation overlap.
 - Keep PDF quick send on native EmbedPDF `menus + openMenu()`, with shared send/copy helpers in `.ts` files.

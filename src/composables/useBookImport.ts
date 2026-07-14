@@ -1,5 +1,5 @@
 import { computed, ref } from 'vue'
-import { buildBookMetadata, bookshelfManager, hasBookBulkPatch, type BookBulkPatch, type BookFormat } from '@/core/bookshelf'
+import { buildBookMetadata, bookshelfManager, dataIdFromFingerprint, fileFingerprint, hasBookBulkPatch, type BookBulkPatch, type BookFormat, urlFingerprint } from '@/core/bookshelf'
 import { createLocalFileRef, filterSupportedBookFiles, materializeNativeFile, normalizeBookTitle, saveBookFile, saveCoverFile, toFileUrl } from '@/core/bookStore'
 
 export interface BookImportItem {
@@ -180,17 +180,19 @@ export const importRemoteBook = async (request: RemoteDownloadRequest) => {
   const source = info?.title && !file.name.toLowerCase().split('?')[0].endsWith(`.${format}`)
     ? new File([file], `${normalizeBookTitle(info.title) || 'book'}.${format}`, { type: file.type || 'application/octet-stream' })
     : file
+  const fingerprint = await fileFingerprint(source), dataId = await dataIdFromFingerprint(fingerprint)
   const [path, cover] = await Promise.all([saveBookFile(source, request.url), downloadCover(request.coverUrl, request.url)])
-  await bookshelfManager.addBook({ url: request.url, title: normalizeBookTitle(info?.title || source.name.replace(/\.[^.]+$/, '')) || info?.title || source.name, author: info?.author || '未知作者', cover, format, path, size: source.size, tags: importTags(info), metadata: remoteMetadata(info) })
+  await bookshelfManager.addBook({ url: request.url, title: normalizeBookTitle(info?.title || source.name.replace(/\.[^.]+$/, '')) || info?.title || source.name, author: info?.author || '未知作者', cover, format, path, size: source.size, tags: importTags(info), metadata: remoteMetadata(info), dataId, fingerprint })
 }
 
 export const addOnlineBookToShelf = async (info: OnlineBookImportInfo) => {
   const cover = await downloadCover(info.coverUrl, info.url)
   const meta = { ...remoteMetadata(info), downloadUrl: info.downloadUrl }
+  const fingerprint = urlFingerprint(info.url), dataId = await dataIdFromFingerprint(fingerprint)
   const payload = { title: normalizeBookTitle(info.title) || info.title, author: info.author || '未知作者', cover, format: info.format || 'epub', path: info.readUrl, size: 0, tags: importTags(info) }
   const existing = await bookshelfManager.getBook(info.url)
   if (existing) return bookshelfManager.updateBook(info.url, { ...payload, cover: cover || existing.cover, meta: { ...(existing.meta || {}), ...meta } })
-  return bookshelfManager.addBook({ url: info.url, ...payload, metadata: meta })
+  return bookshelfManager.addBook({ url: info.url, ...payload, metadata: meta, dataId, fingerprint })
 }
 
 export const useBookImport = () => {
@@ -242,7 +244,7 @@ export const useBookImport = () => {
     await parseItems(
       next,
       async item => item.mode === 'file'
-        ? bookshelfManager.previewLocalBook(getImportFile(item))
+        ? bookshelfManager.previewLocalBook(item.source as File)
         : bookshelfManager.previewUrlBook(await resolveItemUrl(item)),
       3,
     )
@@ -253,7 +255,7 @@ export const useBookImport = () => {
     if (!validFiles.length) return
     await parseItems(
       validFiles.map(file => createItem('file', file, file.name, toFileUrl(file))),
-      item => bookshelfManager.previewLocalBook(getImportFile(item)),
+      item => bookshelfManager.previewLocalBook(item.source as File),
       validFiles.length > 8 ? 5 : 3,
     )
   }
@@ -289,31 +291,37 @@ export const useBookImport = () => {
     let success = 0
     let failed = 0
     const urls: string[] = []
-    const concurrency = mode === 'file' ? (selected.length > 8 ? 3 : 2) : 4
+    const concurrency = mode === 'file' ? 1 : 4
     const importFile = {
       file: (item: BookImportItem) => bookshelfManager.addLocalBook(getImportFile(item), item.preview),
-      link: (item: BookImportItem) => bookshelfManager.addLocalLinkBook(getImportFile(item), item.preview),
+      link: (item: BookImportItem) => bookshelfManager.addLocalLinkBook(item.source as File, item.preview),
     } satisfies Record<ImportMode, (item: BookImportItem) => Promise<string>>
 
-    await chunked(selected, concurrency, async item => {
-      try {
-        let url = ''
-        if (item.mode === 'url') url = await bookshelfManager.addUrlBook(item.linkSource, undefined, undefined, item.preview)
-        else if (mode === 'file' || item.linkSource) url = await importFile[mode](item)
-        else throw new Error('当前环境不支持以链接方式导入本地文件')
-        item.error = ''
-        if (url) urls.push(url)
-        success++
-      } catch (error) {
-        item.error = error instanceof Error ? error.message : '导入失败'
-        failed++
-      }
-    })
+    try {
+      await chunked(selected, concurrency, async item => {
+        item.loading = true
+        try {
+          let url = ''
+          if (item.mode === 'url') url = await bookshelfManager.addUrlBook(item.linkSource, undefined, undefined, item.preview)
+          else if (mode === 'file' || item.linkSource) url = await importFile[mode](item)
+          else throw new Error('当前环境不支持以链接方式导入本地文件')
+          item.error = ''
+          if (url) urls.push(url)
+          success++
+        } catch (error) {
+          item.error = error instanceof Error ? error.message : '导入失败'
+          failed++
+        } finally {
+          item.loading = false
+        }
+      })
 
-    if (urls.length && hasBookBulkPatch(patch)) await bookshelfManager.batchUpdateBooks(urls, patch!)
+      if (urls.length && hasBookBulkPatch(patch)) await bookshelfManager.batchUpdateBooks(urls, patch!)
 
-    importing.value = false
-    return { success, failed, urls }
+      return { success, failed, urls }
+    } finally {
+      importing.value = false
+    }
   }
 
   // 拖拽导入直接入库，不经过预览列表。

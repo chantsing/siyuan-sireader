@@ -20,9 +20,16 @@
       </div>
 
       <div v-if="confirmDelete" class="sr-selection-bar sr-confirm-bar" :class="{ 'sr-confirm-bar--above-selection': selecting }" @click.stop>
-        <span class="sr-selection-count">{{ confirmDeleteText }}</span>
-        <button class="b3-button b3-button--outline" type="button" @click="clearConfirmDelete">取消</button>
-        <button class="b3-button b3-button--remove" type="button" @click="confirmDeleteAction">删除</button>
+        <div class="sr-selection-detail"><span class="sr-selection-count">{{ confirmDeleteText }}</span></div>
+        <div class="sr-row sr-actions-end">
+          <button class="b3-button b3-button--outline" type="button" @click="clearConfirmDelete">取消</button>
+          <button v-if="confirmDelete?.type === 'group'" class="b3-button b3-button--outline" type="button" @click="confirmDeleteAction(false)">确认删除</button>
+          <template v-else>
+            <button v-if="confirmDelete?.phase !== 'delete'" class="b3-button b3-button--outline" type="button" @click="confirmDeleteAction(false)">确认移除</button>
+            <button v-if="confirmDelete?.phase !== 'delete'" class="b3-button b3-button--remove" type="button" @click="confirmDelete.phase = 'delete'">彻底删除</button>
+            <button v-else class="b3-button b3-button--remove" type="button" @click="confirmDeleteAction(true)">确认彻底删除</button>
+          </template>
+        </div>
       </div>
 
     <template #overlay>
@@ -32,12 +39,13 @@
 
         <div class="sr-modal__body">
           <template v-if="modalMode === 'manage'">
-            <div class="sr-form-item"><span class="ft__secondary">快捷操作</span><div class="sr-grid2"><button class="b3-button b3-button--outline" type="button" @click="importMode = 'file'; pickAndParseFiles()">导入书籍</button><button class="b3-button b3-button--outline" type="button" @click="importMode = 'link'">导入链接</button><button class="b3-button b3-button--outline" type="button" @click="importMode = 'cloud'">导入思盘</button><button class="b3-button b3-button--outline" type="button" @click="startEditGroup()">手动分组</button><button class="b3-button b3-button--outline" type="button" @click="startEditGroup(undefined, 'smart')">智能分组</button></div></div>
+            <div class="sr-form-item"><span class="ft__secondary">快捷操作</span><div class="sr-grid2"><button class="b3-button b3-button--outline" type="button" @click="importMode = 'file'; pickAndParseFiles()">本地导入</button><button class="b3-button b3-button--outline" type="button" @click="importMode = 'cloud'">思盘导入</button><button class="b3-button b3-button--outline" type="button" @click="startEditGroup()">手动分组</button><button class="b3-button b3-button--outline" type="button" @click="startEditGroup(undefined, 'smart')">智能分组</button></div></div>
 
-            <template v-if="importMode === 'link'">
+            <template v-if="importMode === 'file'">
               <div class="sr-form-item">
-                <span class="ft__secondary">链接导入</span>
-                <textarea class="b3-text-field fn__block sr-textarea" v-model="importDraft" placeholder="支持批量导入，每行一个链接" />
+                <span class="ft__secondary">本地导入</span>
+                <div class="sr-row"><button class="b3-button b3-button--outline" type="button" @click="pickAndParseFiles" :disabled="importParsing || importing">选择文件</button></div>
+                <textarea class="b3-text-field fn__block sr-textarea" v-model="importDraft" placeholder="链接导入，每行一个本地路径或链接" />
                 <div class="sr-row"><button class="b3-button b3-button--outline" type="button" @click="parseImportUrls" :disabled="!importDraft.trim() || importParsing">{{ importParsing ? '解析中...' : '解析链接' }}</button></div>
               </div>
             </template>
@@ -88,8 +96,9 @@
             </template>
 
             <div class="sr-row sr-actions-end sr-section-line">
-              <button class="b3-button b3-button--outline" type="button" @click="closePopups">关闭</button>
-              <button v-if="importHasItems" class="b3-button b3-button--outline" type="button" @click="confirmImport(importMode === 'file' ? 'file' : 'link')" :disabled="!importSelectedCount || importParsing || importing">{{ importing ? '导入中...' : '确认导入' }}</button>
+              <button class="b3-button b3-button--outline" type="button" @click="closePopups">取消</button>
+              <button v-if="importHasItems && importMode === 'file'" class="b3-button b3-button--outline" type="button" @click="confirmImport('file')" :disabled="!importSelectedCount || importParsing || importing">文件导入</button>
+              <button v-if="importHasItems && (importMode !== 'file' || importLinkSelectedCount)" class="b3-button b3-button--outline" type="button" @click="confirmImport('link')" :disabled="!importSelectedCount || importParsing || importing">链接导入</button>
             </div>
           </template>
 
@@ -151,7 +160,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { showMessage, Menu } from 'siyuan'
 import { bookInGroup, bookshelfManager, SORTS, STATUS_OPTIONS, STATUS_MAP, RATING_OPTIONS, VIEW_MODES, VIEW_MODE_ICONS, MODAL_TITLES, STAR_OPTIONS, createDefaultGroupRules, createDefaultEditForm, getNextViewMode, buildFilterSections, buildEditFields, buildGroupFields, buildDetailFields, hasBookBulkPatch, normalizeCloudPath, siyuanCloudUrl, mergeCloudNodes, listCloudNodes, searchCloudNodes, cloudNodesToItems, isCloudBookPath, type BookBulkPatch, type SortType, type Book, type BookStatus, type BookFormat, type GroupConfig, type BookshelfViewMode, type BookshelfModalMode, type SiyuanCloudNode } from '@/core/bookshelf'
 import View from '@/components/bookshelf/View.vue'
@@ -160,11 +169,12 @@ import { isMobile } from '@/utils/mobile'
 import { searchDocs } from '@/composables/useSetting'
 import { useBookImport } from '@/composables/useBookImport'
 import { useLicense } from '@/composables/useLicense'
+import { importPdfAnnotationsForBook } from '@/core/pdfAnnotationImport'
 
-type ImportMode = 'link' | 'file' | 'cloud'
+type ImportMode = 'file' | 'cloud'
 type GroupType = 'folder' | 'smart'
 
-const props = defineProps<{ i18n?: any; coverSize?: number }>()
+const props = defineProps<{ i18n?: any; coverSize?: number; hiddenItems?: string[] }>()
 const emit = defineEmits<{ read: [book: Book] }>()
 const { can, showUpgrade } = useLicense(props.i18n || {})
 const MENU_ICONS = { status: { unread: 'iconUncheck', reading: 'iconEye', finished: 'iconCheck' } }
@@ -177,7 +187,7 @@ const sortType = ref<SortType>('time'), viewMode = ref<BookshelfViewMode>('grid'
 const batchMode = ref<'rate' | 'status' | 'tags' | 'groups' | null>(null)
 const selecting = ref(false), selectedBookUrls = ref<string[]>([]), groupCounts = ref<Record<string, number>>({})
 const editingBook = ref<string | null>(null), editingGroup = ref<GroupConfig | null>(null)
-const confirmDelete = ref<{ type: 'group' | 'book'; id: string; item: any } | { type: 'batch'; id: string; count: number; urls: string[] } | null>(null)
+const confirmDelete = ref<{ type: 'group' | 'book'; id: string; item: any; phase?: 'delete' } | { type: 'batch'; id: string; count: number; urls: string[]; phase?: 'delete' } | null>(null)
 const modalMode = ref<BookshelfModalMode>(null), panelBook = ref<Book | null>(null), importMode = ref<ImportMode>('file')
 const importBulkTags = ref(''), importBulkStatus = ref<BookStatus | ''>(''), importBulkRating = ref(0), importBulkGroups = ref<string[]>([])
 const batchTags = ref(''), batchGroups = ref<string[]>([])
@@ -185,7 +195,7 @@ const batchTagAction = ref<'add' | 'remove' | 'set'>('add'), batchGroupAction = 
 const editForm = ref(createDefaultEditForm())
 const bindSearch = ref(''), bindResults = ref<any[]>([])
 const cloudInput = ref(''), cloudKeyword = ref(''), cloudLoading = ref(false), cloudError = ref(''), cloudResults = ref<SiyuanCloudNode[]>([])
-const { items: importItems, draft: importDraft, parsing: importParsing, importing, progress: importProgress, hasItems: importHasItems, selectedCount: importSelectedCount, allSelected: importAllSelected, reset: resetImport, pickAndParseFiles, parseDraftUrls, importSelected } = useBookImport()
+const { items: importItems, draft: importDraft, parsing: importParsing, importing, progress: importProgress, hasItems: importHasItems, selectedCount: importSelectedCount, linkSelectedCount: importLinkSelectedCount, allSelected: importAllSelected, reset: resetImport, pickAndParseFiles, parseDraftUrls, importSelected } = useBookImport()
 
 let settingsLoaded = false
 let reloading = false
@@ -207,7 +217,7 @@ const toolbarStartActions = computed(() => currentGroup.value ? [{ id: 'back', i
 const toolbarActions = computed(() => [{ id: 'view', icon: viewModeIcon.value, label: '切换视图' }, { id: 'select', icon: selecting.value ? '#iconCheck' : '#iconUncheck', label: selecting.value ? '退出选择' : '选择书籍' }, { id: 'organize', icon: '#lucide-sliders-horizontal', label: '整理书架' }, { id: 'manage', icon: '#lucide-book-plus', label: '添加内容' }])
 const modalTitle = computed(() => modalMode.value ? MODAL_TITLES[modalMode.value] : '书架')
 const panelCover = computed(() => panelBook.value ? getCoverUrl(panelBook.value) : '')
-const viewProps = computed(() => ({ items: displayItems.value, mode: viewMode.value, gridStyle: gridStyle.value, groupCounts: groupCounts.value, statusMap: STATUS_MAP, getCoverUrl, getGroupCoverUrls, getProgress, currentGroup: currentGroup.value, selecting: selecting.value, selectedUrls: selectedBookUrls.value }))
+const viewProps = computed(() => ({ items: displayItems.value, mode: viewMode.value, gridStyle: gridStyle.value, groupCounts: groupCounts.value, statusMap: STATUS_MAP, getCoverUrl, getGroupCoverUrls, getProgress, currentGroup: currentGroup.value, selecting: selecting.value, selectedUrls: selectedBookUrls.value, hiddenItems: props.hiddenItems || [] }))
 
 const getSortKey = (item: any, type: string) => item.type === 'group'
   ? (type === 'name' ? item.data.name : type === 'time' ? (item.data as any).created || 0 : item.data.order)
@@ -250,7 +260,7 @@ const batchRows = computed(() => {
   const chip = (key: string, label: string, click: () => void, extra = {}) => ({ key, label, click, ...extra })
   const rows: any[] = [
     { key: 'main', items: [{ key: 'count', text: `选中 ${selectedCount.value}` }, chip('clear', '清空', clearSelection, { disabled: !selectedCount.value }), chip('all', '全选', selectDisplayedBooks), chip('invert', '反选', invertDisplayedBooks), chip('exit', '退出', exitSelection, { primary: true })] },
-    { key: 'ops', items: [modeButton('rate', '评分'), modeButton('status', '状态'), modeButton('tags', '标签'), modeButton('groups', '分组'), chip('remove', '删除', confirmBatchRemove, { danger: true, disabled: !selectedCount.value })] },
+    { key: 'ops', items: [modeButton('rate', '评分'), modeButton('status', '状态'), modeButton('tags', '标签'), modeButton('groups', '分组'), chip('remove', '移除', confirmBatchRemove, { danger: true, disabled: !selectedCount.value })] },
   ]
   if (batchMode.value === 'rate') rows.push({ key: 'rate', items: batchRatingOptions.value.map(([v, label]) => chip(`r-${v}`, label, () => batchOp('rate', v))) })
   if (batchMode.value === 'status') rows.push({ key: 'status', items: STATUS_OPTIONS.map(([v, label]) => chip(`s-${v}`, label, () => batchOp('status', v))) })
@@ -342,7 +352,11 @@ const toggleBatchGroup = (gid: string) => toggleArrayItem(batchGroups.value, gid
 const buildImportPatch = (): BookBulkPatch => ({ ...(importTagList.value.length ? { tags: { add: importTagList.value } } : {}), ...(importBulkStatus.value ? { status: importBulkStatus.value } : {}), ...(importBulkRating.value ? { rating: importBulkRating.value } : {}), ...(importBulkGroups.value.length ? { groups: { add: importBulkGroups.value } } : {}) })
 const buildBatchListPatch = (kind: 'tags' | 'groups', values?: string[]): BookBulkPatch => ({ [kind]: { [kind === 'tags' ? batchTagAction.value : batchGroupAction.value]: values ?? (kind === 'tags' ? batchTagList.value : batchGroups.value) } })
 const batchScopeText = () => `已选 ${selectedCount.value} 本`
-const confirmDeleteText = computed(() => confirmDelete.value?.type === 'batch' ? `确认移出 ${confirmDelete.value.count} 本？` : confirmDelete.value?.type === 'group' ? '确认删除该分组？' : '确认移出书架？')
+const confirmDeleteText = computed(() => confirmDelete.value?.type === 'batch'
+  ? confirmDelete.value?.phase === 'delete' ? `确认彻底删除 ${confirmDelete.value.count} 本？将删除标注数据` : `确认移除 ${confirmDelete.value.count} 本？将删除托管文件，保留阅读数据`
+  : confirmDelete.value?.type === 'group'
+    ? '确认删除该分组？'
+    : confirmDelete.value?.phase === 'delete' ? '确认彻底删除？将删除标注数据' : '确认移除？将删除托管文件，保留阅读数据')
 
 const createGroupDraft = (type: GroupType): GroupConfig => ({ id: `group_${Date.now()}`, name: '', icon: type === 'smart' ? '⚡' : '📁', order: groups.value.length, type, rules: createDefaultGroupRules() })
 const startEditGroup = (g?: GroupConfig, type: GroupType = 'folder') => {
@@ -399,26 +413,26 @@ const readBook = async (book: Book) => {
   if (isMobile()) window.dispatchEvent(new CustomEvent('reader:mobile-open', { detail: { book: full } }))
   else emit('read', full)
 }
-const removeBook = async (book: Book) => {
-  const res = await bookshelfManager.removeBooks([book.url])
+const removeBook = async (book: Book, deleteData = false) => {
+  const res = await bookshelfManager.removeBook(book.url, deleteData).then(ok => ({ success: ok ? 1 : 0, failed: ok ? 0 : 1 }))
   clearConfirmDelete()
   await refresh()
-  showResult(res.success, res.failed, '已移出书架', '删除失败')
+  showResult(res.success, res.failed, deleteData ? '已彻底删除' : '已移除并删除托管文件', '删除失败')
 }
-const removeBatchBooks = async () => {
+const removeBatchBooks = async (deleteData = false) => {
   if (confirmDelete.value?.type !== 'batch') return
-  const res = await bookshelfManager.removeBooks(confirmDelete.value.urls)
+  const res = await bookshelfManager.removeBooks(confirmDelete.value.urls, deleteData)
   clearConfirmDelete()
   batchMode.value = null
   await refresh()
-  showResult(res.success, res.failed, `已移出 ${res.success} 本`)
+  showResult(res.success, res.failed, deleteData ? `已彻底删除 ${res.success} 本` : `已移除并删除托管文件 ${res.success} 本`)
 }
-const confirmDeleteAction = async () => {
+const confirmDeleteAction = async (deleteData = false) => {
   const target = confirmDelete.value
   if (!target) return
-  if (target.type === 'book') return removeBook(target.item)
+  if (target.type === 'book') return removeBook(target.item, deleteData)
   if (target.type === 'group') return deleteGroup(target.item)
-  return removeBatchBooks()
+  return removeBatchBooks(deleteData)
 }
 const parseImportUrls = async () => { try { await parseDraftUrls() } catch (e) { showMessage(e instanceof Error ? e.message : '解析失败', 2000, 'error') } }
 const listCloud = async (path = '/') => {
@@ -454,12 +468,23 @@ const confirmImport = async (mode: 'file' | 'link') => {
 }
 const toggleImportItem = (item: { selected: boolean; error: string; loading: boolean }) => { if (!item.error && !item.loading) item.selected = !item.selected }
 const openBookPanel = async (mode: 'detail' | 'edit', book: Book) => { panelBook.value = await bookshelfManager.getBook(book.url) || book; if (mode === 'edit') { if (!can.value('book-edit')) return showUpgrade('书籍编辑'); editingBook.value = panelBook.value.url; resetEditForm(); assignEditForm(panelBook.value) } modalMode.value = mode }
+const importBookAnnotations = async (book: Book) => {
+  if (String(book.format || '').toLowerCase() !== 'pdf') return showMessage('批注导入暂仅支持 PDF', 2000, 'error')
+  try {
+    const result = await importPdfAnnotationsForBook(book.url)
+    if (result.canceled) return
+    await refresh()
+    showMessage(result.imported ? `已导入 ${result.imported} 条批注，跳过 ${result.skipped} 条` : '未识别到可导入批注', 3000, result.imported ? 'info' : 'error')
+  } catch (e) {
+    showMessage(e instanceof Error ? e.message : '批注导入失败', 3000, 'error')
+  }
+}
 const showContextMenu = (book: Book, e: MouseEvent) => {
   const hasBinding = !!(book as any).bindDocId
   const ratingMenu = ratingItems(rating => updateBookField(book, 'rating', rating, rating ? `已评 ${rating} 星` : '已清除评分'))
   const groupMenu = (book.groups.length ? [{ icon: 'iconFiles', label: '首页', click: () => updateBookField(book, 'group', 'home', '已移动到首页') }, ...(folderGroups.value.length ? [{ type: 'separator' }] : [])] : []).concat(folderGroups.value.map(g => ({ icon: 'iconFolder', label: g.name, click: () => updateBookField(book, 'group', g.id, `已移动到：${g.name}`) })))
   const m = new Menu()
-  ;[{ icon: 'iconPlay', label: '打开阅读', click: () => readBook(book) }, { icon: 'iconInfo', label: '详细信息', click: () => openBookPanel('detail', book) }, { icon: 'iconCheck', label: selectedBookUrls.value.includes(book.url) ? '取消选择' : '选择此书', click: () => toggleSelectBook(book) }, { icon: 'iconStar', label: '评分', type: 'submenu', submenu: ratingMenu }, { icon: 'iconCheck', label: '标记状态', type: 'submenu', submenu: statusItems(status => updateBookField(book, 'status', status, `已标记为${STATUS_MAP[status]}`)) }, { icon: 'iconFolder', label: '移动到', type: 'submenu', submenu: groupMenu }, { icon: hasBinding ? 'iconLinkOff' : 'iconLink', label: hasBinding ? '解除绑定' : '绑定文档', click: () => openBookPanel('edit', book) }, { type: 'separator' }, { icon: 'iconEdit', label: '编辑信息', click: () => openBookPanel('edit', book) }, { icon: 'iconTrashcan', label: '移出书架', click: () => { m.close(); confirmDelete.value = { type: 'book', id: book.url, item: book } } }].forEach(item => m.addItem(item))
+  ;[{ icon: 'iconPlay', label: '打开阅读', click: () => readBook(book) }, { icon: 'iconInfo', label: '详细信息', click: () => openBookPanel('detail', book) }, { icon: 'iconCheck', label: selectedBookUrls.value.includes(book.url) ? '取消选择' : '选择此书', click: () => toggleSelectBook(book) }, { icon: 'iconStar', label: '评分', type: 'submenu', submenu: ratingMenu }, { icon: 'iconCheck', label: '标记状态', type: 'submenu', submenu: statusItems(status => updateBookField(book, 'status', status, `已标记为${STATUS_MAP[status]}`)) }, { icon: 'iconFolder', label: '移动到', type: 'submenu', submenu: groupMenu }, { icon: hasBinding ? 'iconLinkOff' : 'iconLink', label: hasBinding ? '解除绑定' : '绑定文档', click: () => openBookPanel('edit', book) }, { icon: 'iconDownload', label: '导入批注', click: () => importBookAnnotations(book) }, { type: 'separator' }, { icon: 'iconEdit', label: '编辑信息', click: () => openBookPanel('edit', book) }, { icon: 'iconTrashcan', label: '移除', click: () => { m.close(); confirmDelete.value = { type: 'book', id: book.url, item: book } } }].forEach(item => m.addItem(item))
   m.open({ x: e.clientX, y: e.clientY })
 }
 
@@ -514,19 +539,27 @@ const handleVisibilityChange = () => { if (!document.hidden) void reloadStorage(
 onMounted(async () => {
   await bookshelfManager.reload()
   lastReloadAt = Date.now()
-  const [, allTagsData] = await Promise.all([refreshGroups(), bookshelfManager.getAllTags()])
-  allTags.value = allTagsData
-  sortType.value = await bookshelfManager.getSetting('bookshelf_sortType', 'time')
-  sortReverse.value = await bookshelfManager.getSetting('bookshelf_sortReverse', false)
-  viewMode.value = await bookshelfManager.getSetting('bookshelf_viewMode', 'grid')
-  settingsLoaded = true
   await loadBooks()
+  void (async () => {
+    const [nextSort, nextReverse, nextView] = await Promise.all([
+      bookshelfManager.getSetting('bookshelf_sortType', 'time'),
+      bookshelfManager.getSetting('bookshelf_sortReverse', false),
+      bookshelfManager.getSetting('bookshelf_viewMode', 'grid'),
+    ])
+    sortType.value = nextSort
+    sortReverse.value = nextReverse
+    viewMode.value = nextView
+    await nextTick()
+    settingsLoaded = true
+  })()
+  void refreshGroups()
+  void bookshelfManager.getAllTags().then(tags => { allTags.value = tags })
   window.addEventListener('sireader:bookshelf-updated', handleBookshelfUpdated)
   window.addEventListener('sireader:storage-changed', handleStorageChanged)
   document.addEventListener('visibilitychange', handleVisibilityChange)
 })
 onUnmounted(() => { window.removeEventListener('sireader:bookshelf-updated', handleBookshelfUpdated); window.removeEventListener('sireader:storage-changed', handleStorageChanged); document.removeEventListener('visibilitychange', handleVisibilityChange); settingTimers.forEach(timer => clearTimeout(timer)); settingTimers.clear() })
-watch([filterStatus, filterRating, filterFormats, filterTags, sortType, sortReverse], loadBooks, { deep: true })
+watch([filterStatus, filterRating, filterFormats, filterTags, sortType, sortReverse], () => loadBooks(), { deep: true })
 watch(sortType, v => settingsLoaded && saveUiSetting('bookshelf_sortType', v))
 watch(sortReverse, v => settingsLoaded && saveUiSetting('bookshelf_sortReverse', v))
 watch(viewMode, v => settingsLoaded && saveUiSetting('bookshelf_viewMode', v))
@@ -541,6 +574,8 @@ watch(viewMode, v => settingsLoaded && saveUiSetting('bookshelf_viewMode', v))
 .sr-selection-bar{position:absolute;right:12px;bottom:12px;z-index:18;display:flex;flex-direction:column;gap:6px;width:min(360px,calc(100% - 24px));max-height:min(48vh,220px);overflow:auto;padding:6px;border:1px solid var(--b3-border-color);border-radius:8px;background:var(--b3-theme-surface);box-sizing:border-box}
 .sr-selection-detail{display:flex;align-items:center;flex-wrap:wrap;gap:6px;min-width:0}
 .sr-selection-count{flex:1 1 auto;min-width:50px;font-size:12px;font-weight:600;color:var(--b3-theme-on-surface)}
+.sr-confirm-bar{z-index:30;gap:8px;max-height:none;overflow:visible;padding:8px 10px;border-color:color-mix(in srgb,var(--b3-theme-error) 24%,var(--b3-border-color));background:color-mix(in srgb,var(--b3-theme-surface) 94%,var(--b3-theme-error));box-shadow:0 8px 24px #0002}
+.sr-confirm-bar .b3-button{white-space:nowrap}.sr-confirm-bar--above-selection{bottom:76px}
 .sr-selection-input{flex:1 1 116px;min-width:96px;height:26px;font-size:12px}
 .sr-manage-panel{position:absolute;top:44px;left:8px;right:8px;z-index:20;max-height:calc(100% - 56px);overflow:auto;padding:12px;box-sizing:border-box;background:var(--b3-theme-surface);border:1px solid var(--b3-border-color);border-radius:10px;box-shadow:0 8px 24px #0002}
 .sr-modal__head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--b3-border-color);font-size:13px;font-weight:600}
@@ -555,7 +590,7 @@ watch(viewMode, v => settingsLoaded && saveUiSetting('bookshelf_viewMode', v))
 .sr-actions-end{justify-content:flex-end}.sr-grow{flex:1;min-width:0}.sr-inline{display:flex;align-items:center;gap:4px;flex:0 0 auto;flex-wrap:nowrap}.sr-group-item{display:flex;align-items:center;gap:8px;margin-top:8px}
 .sr-group-label{display:flex;align-items:center;justify-content:flex-start;gap:4px;min-width:0;min-height:32px;padding:0 12px;font-size:12px}
 .sr-group-label strong,.sr-group-label .sr-entry-meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sr-section-line{padding-top:12px;border-top:1px solid var(--b3-border-color)}.sr-confirm-bar{z-index:30;flex-direction:row;align-items:center;border-color:color-mix(in srgb,var(--b3-theme-error) 24%,var(--b3-border-color));background:color-mix(in srgb,var(--b3-theme-surface) 94%,var(--b3-theme-error));box-shadow:0 8px 24px #0002}.sr-confirm-bar--above-selection{bottom:76px}
+.sr-section-line{padding-top:12px;border-top:1px solid var(--b3-border-color)}
 .sr-editor{display:flex;flex-direction:column;margin-top:12px;padding:12px;background:var(--b3-theme-background);border:1px solid var(--b3-border-color);border-radius:10px}
 .sr-editor-head{padding:0 0 12px;border-bottom:1px solid var(--b3-border-color);font-size:13px;font-weight:600}
 .sr-editor .sr-form-item{padding:0;border-bottom:none}.sr-editor .sr-form-item + .sr-form-item{margin-top:10px}.sr-editor-actions{margin-top:12px;padding-top:0}

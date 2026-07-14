@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { showMessage } from 'siyuan'
 import type { ReaderSettings, FontFileInfo } from '@/composables/useSetting'
 import { DEFAULT_NAV_ITEMS, LINK_FORMAT_PRESETS, NOTE_MODE_LABELS, NOTE_MODE_OPTIONS, NOTE_TARGET_OPTIONS, PRESET_THEMES, SectionTitle, SettingItem, SettingRows, SettingSection, UI_CONFIG, getLicenseMedia, setCustomBackgroundFromInput, settingSectionIcon, useSetting, useConfirm, useDocSearch, useNotebooks } from '@/composables/useSetting'
@@ -51,6 +51,12 @@ const isFav = (name:string) => (settings.value.tts?.favoriteVoices||[]).some(v =
 const myVoices = computed(() => [...ttsVoices.value.filter(v => v.isLocal),...(settings.value.tts?.favoriteVoices||[]).filter(v => !v.isLocal)])
 const onlineVoices = computed(() => ttsVoices.value.filter(v => !v.isLocal))
 watch(() => props.modelValue,v => settings.value=v,{immediate:true})
+const syncAnnotationTagPresets = (e: Event) => {
+  const value = (e as CustomEvent).detail?.annotationTagPresets
+  if (value == null || value === settings.value.annotationTagPresets) return
+  settings.value.annotationTagPresets = value
+  emit('update:modelValue', settings.value)
+}
 // 词典与笔记插入
 const offlineDicts = ref<any[]>([]),
   onlineDicts = ref<any[]>([]),
@@ -67,6 +73,7 @@ const {license,userAvatar,code:activationCode,loading:loadingLicense,processing,
 const licenseMedia = computed(() => getLicenseMedia(license.value, userAvatar.value, props.i18n))
 const ttsFields = computed(() => [...ttsItems, ...ttsOptions.map(item => ({ ...item, desc: ttsI18nKey(item.key,'Desc') }))])
 const linkFormatPresetOptions = Object.keys(LINK_FORMAT_PRESETS) as (keyof typeof LINK_FORMAT_PRESETS)[]
+const linkFormatPresetValue = computed(() => Object.values(LINK_FORMAT_PRESETS).includes(settings.value.linkFormat as any) ? settings.value.linkFormat : '')
 const translateEngines = Object.keys(translators)
 const translateEngineLabels = translateEngines.map(key => `translationEngine${key.split('-').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join('')}`)
 const themeItems = computed(() => customThemeItems.filter(item => item.key !== 'bgImg'))
@@ -78,6 +85,18 @@ const presetThemeItem = computed(() => ({
 const selectField = (key:string, label:string, value:string, options:any[], set:(value:string)=>void, show=true, empty='') => ({ key, type: 'select', label, value, options, set, show, empty })
 const checkboxField = (key:string, label:string, value:boolean, set:(value:boolean)=>void, show=true, hint='') => ({ key, type: 'checkbox', label, value, set, show, hint })
 const searchField = (key:string, label:string, docs:any[], input:string, results:any[], setInput:(value:string)=>void, search:()=>void, select:(doc:any)=>void, remove:(doc:any,i:number)=>void, show=true, hint='', drag?:'quickDoc') => ({ key, type: 'search', label, docs, input, results, setInput, search, select, remove, show, hint, drag })
+const bookshelfHiddenFields = [
+  { key: 'bookshelfHideProgress', value: 'progress', label: '隐藏书架进度' },
+  { key: 'bookshelfHideStatus', value: 'status', label: '隐藏书架状态' },
+  { key: 'bookshelfHideRating', value: 'rating', label: '隐藏书架评分' },
+  { key: 'bookshelfHideLastRead', value: 'lastRead', label: '隐藏最近阅读' },
+]
+const toggleBookshelfHidden = (key:string, checked:boolean) => {
+  const set = new Set(settings.value.bookshelfHiddenItems || [])
+  checked ? set.add(key) : set.delete(key)
+  settings.value.bookshelfHiddenItems = [...set]
+  save()
+}
 const dictSections = computed(() => [
   {
     key: 'offlineDict', title: props.i18n.offlineDict||'离线词典', items: offlineDicts.value, empty: props.i18n.noDicts||'暂无离线词典',
@@ -105,8 +124,9 @@ const noteFields = computed(() => [
   selectField('noteInsertTarget', props.i18n.noteInsertTarget || '插入位置', settings.value.noteInsertTarget, NOTE_TARGET_OPTIONS.map(value => ({ value, label: props.i18n[`noteInsertTarget${value.charAt(0).toUpperCase()}${value.slice(1)}`] || value })), value => (settings.value.noteInsertTarget = value as any, save())),
   selectField('noteInsertMode', props.i18n.noteInsertMode || '插入方式', settings.value.noteInsertMode, NOTE_MODE_OPTIONS.map(value => ({ value, label: props.i18n[NOTE_MODE_LABELS[value]] || value })), value => (settings.value.noteInsertMode = value as any, save()), settings.value.noteInsertTarget === 'current'),
   selectField('notebookId', props.i18n.notebookId || props.i18n.notebook || '笔记本', settings.value.notebookId || '', notebooks.value.map((nb:any) => ({ value: nb.id, label: nb.name })), value => (settings.value.notebookId = value, save()), ['notebook', 'dailynote'].includes(settings.value.noteInsertTarget), props.i18n.notSelected || '未选择'),
-  selectField('linkFormatPreset', props.i18n.linkFormatPreset || '模板预设', '', linkFormatPresetOptions.map(value => ({ value, label: props.i18n[`linkFormatPreset${value.charAt(0).toUpperCase()}${value.slice(1)}`] || value })), applyLinkFormatPreset, true, props.i18n.selectPreset || '请选择'),
-  { key: 'linkFormat', type: 'textarea', label: props.i18n.linkFormat || '链接格式', value: settings.value.linkFormat, hint: props.i18n.linkFormatDesc || '可用变量：书名 作者 章节 位置 链接 文本 笔记 截图' },
+  selectField('linkFormatPreset', props.i18n.linkFormatPreset || '模板预设', linkFormatPresetValue.value, linkFormatPresetOptions.map(value => ({ value: LINK_FORMAT_PRESETS[value], label: props.i18n[`linkFormatPreset${value.charAt(0).toUpperCase()}${value.slice(1)}`] || value })), applyLinkFormatPreset, true, props.i18n.selectPreset || '请选择'),
+  { key: 'linkFormat', type: 'textarea', label: props.i18n.linkFormat || '链接格式', value: settings.value.linkFormat, set: (value:string) => (settings.value.linkFormat = value, debouncedSave()), hint: props.i18n.linkFormatDesc || '可用变量：书名 作者 章节 位置 链接 文本 笔记 图片' },
+  { key: 'annotationTagPresets', type: 'textarea', label: props.i18n.annotationTagPresets || '标注标签预设', value: settings.value.annotationTagPresets, set: (value:string) => (settings.value.annotationTagPresets = value, debouncedSave()), hint: props.i18n.annotationTagPresetsDesc || '每行一组：分组: 标签1, 标签2' },
   searchField('parentDoc', props.i18n.parentDoc || '父文档', settings.value.parentDoc ? [settings.value.parentDoc] : [], insertDoc.state.value.input, insertDoc.state.value.results, value => (insertDoc.state.value.input = value, !value.trim() && (insertDoc.state.value.results = [])), insertDoc.search, doc => insertDoc.select(doc, selectInsertDoc), () => clearInsertDoc(), settings.value.noteInsertTarget === 'document'),
   searchField('quickSendDocs', props.i18n.quickSendDocs || '快捷发送文档', settings.value.quickSendDocs || [], quickDoc.state.value.input, quickDoc.state.value.results, value => (quickDoc.state.value.input = value, !value.trim() && (quickDoc.state.value.results = [])), quickDoc.search, doc => quickDoc.select(doc, addQuickDoc), (_doc:any, i:number) => removeQuickDoc(i), true, props.i18n.quickSendDocsDesc || '用于快速发送标注', 'quickDoc')
 ].filter((item:any) => item.show !== false))
@@ -169,9 +189,7 @@ const bgImageRows = computed(() => [{
   actionTitle: props.i18n.select || props.i18n.upload || '选择',
   actionIcon: '#iconUpload'
 }])
-const applyLinkFormatPreset = (preset:string) => {
-  const format = LINK_FORMAT_PRESETS[preset as keyof typeof LINK_FORMAT_PRESETS]
-// 拖拽排序
+const applyLinkFormatPreset = (format:string) => {
   if (!format) return
   settings.value.linkFormat = format
   save()
@@ -217,6 +235,12 @@ const navRows = computed(() => navItems.value.map((item, idx) => ({
   checkbox: item.enabled,
   disabled: item.id === 'appearance',
   onCheck: (value:boolean) => (item.enabled = value, save())
+})))
+const bookshelfRows = computed(() => bookshelfHiddenFields.map(item => ({
+  key: item.key,
+  text: props.i18n[item.key] || item.label,
+  checkbox: settings.value.bookshelfHiddenItems?.includes(item.value),
+  onCheck: (checked:boolean) => toggleBookshelfHidden(item.value, checked)
 })))
 const fontGuideRows = computed(() => [{
   key: 'custom-fonts',
@@ -286,11 +310,13 @@ const openMembershipInfo = () => openPage('https://sireader.745201.xyz')
 
 // 生命周期
 onMounted(() => {
+  window.addEventListener('sireaderSettingsUpdated', syncAnnotationTagPresets)
   bookshelfManager.init()
   loadingDict.value = true
   offlineDictManager.init(plugin).then(refreshDicts).finally(() => loadingDict.value=false)
   loadLicense()
 })
+onUnmounted(() => window.removeEventListener('sireaderSettingsUpdated', syncAnnotationTagPresets))
 </script>
 
 <template>
@@ -363,6 +389,10 @@ onMounted(() => {
             <template v-if="isSubOpen('navItems')">
               <SettingRows :rows="navRows" :i18n="i18n" />
             </template>
+            <SectionTitle :title="i18n.bookshelfConfig || '书架配置'" icon="#lucide-library-big" :open="isSubOpen('bookshelfConfig')" @toggle="toggleSub('bookshelfConfig')" />
+            <template v-if="isSubOpen('bookshelfConfig')">
+              <SettingRows :rows="bookshelfRows" :i18n="i18n" />
+            </template>
         </SettingSection>
 
         <SettingSection :title="i18n.readingTheme || '阅读主题'" :icon="settingSectionIcon('root', 'theme')" :open="isOpen('theme')" @toggle="toggleAccordion('theme')">
@@ -433,9 +463,9 @@ onMounted(() => {
                     <option v-for="opt in (field.options || [])" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                   </select>
                   <label v-else-if="field.type === 'checkbox'" class="fn__flex-center"><input :checked="field.value" type="checkbox" class="b3-switch" @change="field.set(($event.target as HTMLInputElement).checked)"></label>
+                  <textarea v-else-if="field.type === 'textarea'" :value="field.value" class="b3-text-field sr-textarea-control" rows="1" @input="field.set(($event.target as HTMLTextAreaElement).value)"></textarea>
                 </div>
-                <textarea v-if="field.type === 'textarea'" v-model="settings.linkFormat" class="b3-text-field" rows="3" @input="debouncedSave"></textarea>
-                <template v-else-if="field.type === 'search'">
+                <template v-if="field.type === 'search'">
                   <SettingRows v-if="field.docs?.length" :rows="docRows(field)" :i18n="i18n" />
                   <div>
                     <input :value="field.input" class="b3-text-field" :placeholder="i18n?.searchDocPlaceholder || '搜索文档'" @input="field.setInput(($event.target as HTMLInputElement).value); ($event.target as HTMLInputElement).value.trim() && field.search()" @keyup.enter="field.search()">
@@ -493,6 +523,7 @@ onMounted(() => {
 .bs-tree :deep(.b3-list-item__text),.bs-tree :deep(.b3-text-field){min-width:0}
 .bs-tree :deep(.b3-list-item__meta){min-width:0;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bs-tree :deep(.b3-text-field){width:100%;max-width:100%;box-sizing:border-box}
+.sr-textarea-control{width:220px;max-width:45%;height:28px;min-height:28px;resize:vertical}
 .bs-tree :deep(ul.b3-list.b3-list--background){border:1px solid var(--bs-tree-border);border-radius:var(--b3-border-radius)}
 .bs-tree :deep(.sr-section-title > svg.b3-list-item__graphic){width:14px;height:14px;flex:0 0 14px;color:var(--b3-theme-on-surface);opacity:.86;stroke-width:1.8;shape-rendering:geometricPrecision}
 .bs-tree :deep(.sr-section-title:hover > svg.b3-list-item__graphic){color:inherit;opacity:1}

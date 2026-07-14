@@ -86,10 +86,10 @@
         </template>
         <img v-else :src="coverSrc(item)" :alt="mainText(item)" loading="lazy" decoding="async">
         <template v-if="isBook(item)">
-          <span v-if="item.data.rating" class="bs-badge bs-badge--left">{{ starText(item.data.rating) }}</span>
+          <span v-if="item.data.rating && !hidden('rating')" class="bs-badge bs-badge--left">{{ starText(item.data.rating) }}</span>
           <span class="bs-badge bs-badge--right">{{ item.data.format.toUpperCase() }}</span>
-          <span class="bs-badge bs-badge--bottom">{{ getProgress(item.data) }}</span>
-          <span class="bs-watermark" :class="watermarkClass(item.data.status)">{{ statusMap[item.data.status] }}</span>
+          <span v-if="!hidden('progress')" class="bs-badge bs-badge--bottom">{{ getProgress(item.data) }}</span>
+          <span v-if="!hidden('status')" class="bs-watermark" :class="watermarkClass(item.data.status)">{{ statusMap[item.data.status] }}</span>
         </template>
         <template v-else>
           <div v-if="item.data.type === 'smart'" class="bs-tags">
@@ -141,15 +141,15 @@
       <div class="b3-list-item__text bs-row__main">
         <div class="bs-row__head">
           <div class="bs-row__title ariaLabel" :aria-label="mainText(item)">{{ mainText(item) }}</div>
-          <div v-if="isBook(item)" class="bs-row__progress">{{ getProgress(item.data) }}</div>
+          <div v-if="isBook(item) && !hidden('progress')" class="bs-row__progress">{{ getProgress(item.data) }}</div>
         </div>
 
         <div class="bs-row__author ariaLabel" :aria-label="authorText(item)">{{ authorText(item) }}</div>
 
         <div v-if="isBook(item)" class="bs-tags" :class="{ 'is-stacked': bookTags(item.data).length > 1 }">
           <span class="bs-tag bs-tag--type">{{ item.data.format.toUpperCase() }}</span>
-          <span class="bs-tag bs-tag--state" :class="`bs-tag--${item.data.status}`">{{ statusMap[item.data.status] }}</span>
-          <span v-if="item.data.rating" class="bs-tag bs-tag--state">{{ starText(item.data.rating) }}</span>
+          <span v-if="!hidden('status')" class="bs-tag bs-tag--state" :class="`bs-tag--${item.data.status}`">{{ statusMap[item.data.status] }}</span>
+          <span v-if="item.data.rating && !hidden('rating')" class="bs-tag bs-tag--state">{{ starText(item.data.rating) }}</span>
           <span v-for="tag in bookTags(item.data)" :key="tag" class="bs-tag" :style="tagStyle(tag)">{{ tag }}</span>
         </div>
         <div v-else-if="isGroup(item) && item.data.type === 'smart'" class="bs-tags">
@@ -160,8 +160,8 @@
           <span v-if="annotationText(item.data)" class="ariaLabel" :aria-label="annotationText(item.data)">{{ annotationText(item.data) }}</span>
           <span v-if="annotationText(item.data) && chapterText(item.data)">·</span>
           <span v-if="chapterText(item.data)" class="ariaLabel" :aria-label="chapterText(item.data)">{{ chapterText(item.data) }}</span>
-          <span v-if="(annotationText(item.data) || chapterText(item.data)) && lastReadText(item.data.read)">·</span>
-          <span v-if="lastReadText(item.data.read)" class="ariaLabel" :aria-label="lastReadText(item.data.read)">{{ lastReadText(item.data.read) }}</span>
+          <span v-if="!hidden('lastRead') && (annotationText(item.data) || chapterText(item.data)) && lastReadText(item.data.read)">·</span>
+          <span v-if="!hidden('lastRead') && lastReadText(item.data.read)" class="ariaLabel" :aria-label="lastReadText(item.data.read)">{{ lastReadText(item.data.read) }}</span>
         </div>
 
         <div v-if="isImport(item) && item.data.error" class="ft__error">{{ item.data.error }}</div>
@@ -202,6 +202,7 @@ const props = withDefaults(defineProps<{
   selectedUrls?: string[]
   dense?: boolean
   showGroupMeta?: boolean
+  hiddenItems?: string[]
 }>(), { gridStyle: () => ({}), groupCounts: () => ({}), currentGroup: null, dense: false, showGroupMeta: true })
 
 const emit = defineEmits<{
@@ -219,6 +220,7 @@ const isBook = (item: Item): item is BookItem => item.type === 'book'
 const isGroup = (item: Item): item is GroupItem => item.type === 'group'
 const isImport = (item: Item): item is ImportItem => item.type === 'import'
 const isSelectableBook = (item: Item): item is BookItem => !!props.selecting && isBook(item)
+const hidden = (key: string) => props.hiddenItems?.includes(key)
 const isBookSelected = (book: Book) => props.selectedUrls?.includes(book.url)
 const groupCount = (group: GroupConfig) => props.groupCounts[group.id] || 0
 const itemKey = (item: Item) => isGroup(item) ? `group-${item.data.id}` : isBook(item) ? `book-${item.data.url}` : `import-${item.data.id}`
@@ -396,7 +398,7 @@ const groupChips = (group: GroupConfig) => [
 ].slice(0, 3)
 const authorText = (item: Item) => isGroup(item) ? (item.data.type === 'smart' ? '智能分组' : '分组') : isBook(item) ? item.data.author || '未知作者' : item.data.preview?.author || '未知作者'
 const onCompactHover = (event: MouseEvent) => (event.target as HTMLElement).hasAttribute('data-playlist-item') && event.stopPropagation()
-const compactMeta = (item: Item) => isGroup(item) ? (props.showGroupMeta ? countText(groupCount(item.data)) : '') : isBook(item) ? props.getProgress(item.data) : importStateText(item.data)
+const compactMeta = (item: Item) => isGroup(item) ? (props.showGroupMeta ? countText(groupCount(item.data)) : '') : isBook(item) ? (hidden('progress') ? '' : props.getProgress(item.data)) : importStateText(item.data)
 const sideTexts = (item: Item) => isGroup(item) ? [countText(groupCount(item.data))] : isBook(item) ? [] : [importStateText(item.data)]
 const groupCoverUrls = (item: Item) => isGroup(item) ? props.getGroupCoverUrls(item.data) : []
 const bookTags = (book: Book) => book.tags.slice(0, 4)
@@ -422,7 +424,7 @@ const placeholderCover = (item: Item) => {
   const art = kind === 'group' ? shapes.group(accent, ink) : kind === 'pdf' ? shapes.pdf(accent, ink) : shapes.book(accent, ink, kind === 'txt' ? 6 : 20, kind === 'txt' ? 2 : 8)
   return `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 180"><rect width="120" height="180" fill="${bg}"/><circle cx="94" cy="24" r="22" fill="${accent}" fill-opacity=".12"/><rect x="22" y="28" width="74" height="92" rx="16" fill="#fff" fill-opacity=".68"/>${art}<rect x="22" y="138" width="68" height="6" rx="3" fill="${ink}" fill-opacity=".34"/><rect x="22" y="150" width="52" height="6" rx="3" fill="${ink}" fill-opacity=".24"/><rect x="22" y="162" width="60" height="6" rx="3" fill="${ink}" fill-opacity=".18"/></svg>`)}` 
 }
-const importStateText = (item: BookImportItem) => item.error ? '失败' : item.loading ? '解析中...' : item.preview?.format?.toUpperCase?.() || '待导入'
+const importStateText = (item: BookImportItem) => item.error ? '失败' : item.loading ? (item.preview ? '导入中...' : '解析中...') : item.preview?.format?.toUpperCase?.() || '待导入'
 const annotationText = (book: Book) => book.annotationCount ? `标注 ${book.annotationCount}` : ''
 const chapterText = (book: Book) => book.total ? `章节 ${book.chapter || 0}/${book.total}` : book.chapter ? `章节 ${book.chapter}` : ''
 const lastReadText = (ts: number) => ts ? `最近阅读 ${new Date(ts).toLocaleDateString('zh-CN')}` : ''
@@ -451,7 +453,7 @@ const tagStyle = (tag: string) => {
 .bs-home-drop{grid-column:1/-1;align-items:center;justify-content:center;min-height:38px;padding:0 12px;border-radius:10px;background:color-mix(in srgb,var(--b3-theme-primary) 8%,transparent);color:var(--b3-theme-on-surface-variant);font-size:12px}
 .bs-home-drop.is-visible{display:flex}
 .bs-home-drop.is-drop-target{background:color-mix(in srgb,var(--b3-theme-primary) 18%,transparent);color:var(--b3-theme-primary)}
-.bs-grid-item{position:relative;min-width:0;cursor:pointer}
+.bs-grid-item{position:relative;min-width:0;cursor:pointer;content-visibility:auto;contain-intrinsic-size:180px}
 .bs-grid-item.is-selected .bs-cover,.bs-grid-item.is-selected:hover .bs-cover{box-shadow:inset 0 0 0 2px var(--b3-theme-primary)}
 .bs-grid-item.is-selected .bs-cover::before,.bs-grid-item.is-selected:hover .bs-cover::before{content:'';position:absolute;inset:0;z-index:1;background:color-mix(in srgb,var(--b3-theme-primary) 38%,transparent);pointer-events:none}
 .bs-row.is-selected,.bs-row.is-selected:hover{background:color-mix(in srgb,var(--b3-theme-primary) 20%,var(--b3-theme-background))!important;border-color:color-mix(in srgb,var(--b3-theme-primary) 55%,var(--b3-border-color))}
@@ -473,7 +475,7 @@ const tagStyle = (tag: string) => {
 .bs-watermark--reading{color:var(--b3-theme-primary)}
 .bs-watermark--finished{color:var(--b3-card-success-color,#2aa775)}
 .bs-list{display:flex;flex-direction:column;gap:6px;overflow:auto;scrollbar-gutter:stable;padding:8px 0 8px 8px;box-sizing:border-box}
-.bs-row{position:relative;display:flex;align-items:flex-start;gap:10px;min-height:102px;padding:0 12px 0 0;border:1px solid color-mix(in srgb,var(--b3-border-color) 92%, transparent);border-radius:8px;background:linear-gradient(180deg,color-mix(in srgb,var(--b3-theme-background) 96%, white),var(--b3-theme-background));box-sizing:border-box;overflow:hidden}
+.bs-row{position:relative;display:flex;align-items:flex-start;gap:10px;min-height:102px;padding:0 12px 0 0;border:1px solid color-mix(in srgb,var(--b3-border-color) 92%, transparent);border-radius:8px;background:linear-gradient(180deg,color-mix(in srgb,var(--b3-theme-background) 96%, white),var(--b3-theme-background));box-sizing:border-box;overflow:hidden;content-visibility:auto;contain-intrinsic-size:104px}
 .bs-row__cover{flex:0 0 auto;width:64px;height:96px;margin:2px;border-right:1px solid color-mix(in srgb,var(--b3-border-color) 88%, transparent);border-radius:8px}
 .bs-row__main{display:flex;flex:1;flex-direction:column;justify-content:flex-start;gap:5px;min-width:0;padding:10px 0 9px}
 .bs-row__head{display:flex;align-items:flex-start;gap:8px;min-width:0}

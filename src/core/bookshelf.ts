@@ -2,7 +2,7 @@
  * 书架管理 - 极简架构
  */
 import { getDatabase } from './database';
-import { loadBookFile, normalizeBookTitle, normalizeSiyuanCloudUrl, readDirEntries, removeManagedFile, saveBookFile, saveCoverFile, saveOptionalCover, SIYUAN_CLOUD_BASE, toFileUrl } from './bookStore';
+import { loadBookFile, materializeNativeFile, normalizeBookTitle, normalizeNativePath, normalizeSiyuanCloudUrl, readDirEntries, removeManagedFile, saveBookFile, saveCoverFile, saveOptionalCover, SIYUAN_CLOUD_BASE, toFileUrl } from './bookStore';
 
 export type BookFormat = 'pdf' | 'epub' | 'mobi' | 'azw3' | 'txt';
 export type BookStatus = 'unread' | 'reading' | 'finished';
@@ -71,6 +71,14 @@ const fmt = {
 export const buildBookMetadata = (meta: any = {}) => ({ publisher: meta.publisher, publishDate: meta.published || meta.publishDate, language: meta.language, isbn: meta.identifier || meta.isbn, description: meta.intro || meta.description, series: meta.series, sourceName: meta.sourceName, fileSize: meta.fileSize })
 export interface SiyuanCloudNode { name: string; path: string; parent: string; is_dir: boolean; size?: number }
 const BOOK_RE = /\.(epub|pdf|mobi|azw3|azw|fb2|cbz|txt)$/i
+const hex = (buffer: ArrayBuffer) => Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join('')
+const digest = async (value: BufferSource) => hex(await crypto.subtle.digest('SHA-256', value))
+export const dataIdFromFingerprint = async (fingerprint: string) => `data-${await digest(new TextEncoder().encode(fingerprint))}`
+export const fileFingerprint = async (file: File) => {
+  const path = normalizeNativePath((file as any)?.path || (file as any)?._path || '')
+  return path ? `file-ref:${path}:${file.size || 0}:${Math.floor(file.lastModified || 0)}` : `file-sha256:${await digest(await file.arrayBuffer())}`
+}
+export const urlFingerprint = (url: string, extra = '') => `url:${url}${extra ? `:${extra}` : ''}`
 export const normalizeCloudPath = (path = '/') => `/${path}`.replace(/\/+/g, '/').replace(/\/$/, '') || '/'
 export const siyuanCloudUrl = (path: string) => `${SIYUAN_CLOUD_BASE}/p${decodeURI(encodeURI(normalizeCloudPath(path))).replace(/#/g, '%23').replace(/\?/g, '%3F')}`
 export const isCloudBookPath = (path: string) => BOOK_RE.test(path)
@@ -106,7 +114,7 @@ export const buildDetailFields = (book: any, groups: GroupConfig[]): BookshelfDe
   return !book ? [] : [['书名', book.title], ['作者', book.author], ['格式', book.format.toUpperCase()], ['进度', `${book.progress || 0}%`], ['状态', STATUS_MAP[book.status]], ['评分', book.rating ? '★'.repeat(book.rating) : '未评分'], ['章节', `${book.chapter || 0}/${book.total || '-'}`], ['时长', fmt.time(book.time || 0)], ['大小', fmt.bytes(book.size || 0)], ['添加', fmt.date(book.added)], ['最后阅读', fmt.date(book.read)], book.finished && ['完成', fmt.date(book.finished)], book.tags.length && ['标签', book.tags.join(', ')], book.groups.length && ['分组', groups.filter(g => book.groups.includes(g.id)).map(g => g.name).join(', ')], book.bindDocName && ['绑定文档', book.bindDocName], m.publisher && ['出版社', m.publisher], m.publishDate && ['出版日期', m.publishDate], m.isbn && ['ISBN', m.isbn], m.series && ['系列', m.series], m.description && ['简介', m.description], book.path && ['路径', book.path, true]].filter(Boolean).map(([label, value, mono]) => ({ label, value, mono })) as BookshelfDetailField[];
 };
 
-class BookshelfManager {
+export class BookshelfManager {
   private ready = false;
   private db = async () => { await this.init(); return getDatabase(); };
   private async useDb<T>(task: (db: Awaited<ReturnType<typeof getDatabase>>) => Promise<T>) { return task(await this.db()); }
@@ -126,7 +134,7 @@ class BookshelfManager {
       return true;
     }, fallback);
   
-  private prepareLocalBook = async (file: File, parsedMeta?: any) => { const format = this.getFormat(file.name), name = file.name.replace(/\.[^.]+$/, ''); const meta = parsedMeta || await this.extractMeta(file, format, name), title = normalizeBookTitle(meta.title || name) || name; return { file, format, name, meta, title } }
+  private prepareLocalBook = async (file: File, parsedMeta?: any) => { const format = this.getFormat(file.name), name = file.name.replace(/\.[^.]+$/, ''); const source = parsedMeta || format === 'pdf' || format === 'txt' ? file : materializeNativeFile(file); const meta = parsedMeta || await this.extractMeta(source, format, name), title = normalizeBookTitle(meta.title || name) || name; return { file: source, format, name, meta, title } }
   private downloadCover = async (coverUrl: string | undefined, url: string) => {
     if (!coverUrl) return '';
     try {
@@ -158,6 +166,8 @@ class BookshelfManager {
     groups: info.groups || [],
     bindDocId: info.bindDocId || '',
     bindDocName: info.bindDocName || '',
+    dataId: info.dataId || '',
+    fingerprint: info.fingerprint || '',
   });
   private cleanPath = (path = '') => path.split(/[?#]/)[0]
   private fileBaseName = (path: string, fallback = '未知书籍') => {
@@ -166,8 +176,8 @@ class BookshelfManager {
     return path.replace(/\.[^.]+$/, '') || fallback
   }
   private resolvedTitle = (meta: any, name: string) => normalizeBookTitle(meta.title || name) || name
-  private savePreparedBook = async ({ url, path, format, size, meta, name, cover = '' }: { url: string; path: string; format: BookFormat; size?: number; meta: any; name: string; cover?: string }) => {
-    await this.addBook({ url, title: this.resolvedTitle(meta, name), author: meta.author || '未知作者', cover, format, path, size: size || 0, metadata: this.buildMetadata(meta) })
+  private savePreparedBook = async ({ url, path, format, size, meta, name, cover = '', dataId = '', fingerprint = '' }: { url: string; path: string; format: BookFormat; size?: number; meta: any; name: string; cover?: string; dataId?: string; fingerprint?: string }) => {
+    await this.addBook({ url, title: this.resolvedTitle(meta, name), author: meta.author || '未知作者', cover, format, path, size: size || 0, metadata: this.buildMetadata(meta), dataId, fingerprint })
     return url
   }
   
@@ -193,16 +203,16 @@ class BookshelfManager {
   }
 
   async updateBook(url: string, updates: any) { return this.mutateBook(url, () => updates); }
-  async removeBook(url: string) { 
+  async removeBook(url: string, deleteData = false) {
     return this.withBook(url, async book => {
-      await this.useDb(db => db.deleteBook(url));
+      await this.useDb(db => db.deleteBook(url, deleteData));
       await Promise.all([removeManagedFile(book.path), removeManagedFile(book.cover)]);
       this.notify();
       return true;
     }, false); 
   }
   
-  removeBooks = async (urls: string[]) => this.batch(urls, url => this.removeBook(url));
+  removeBooks = async (urls: string[], deleteData = false) => this.batch(urls, url => this.removeBook(url, deleteData));
   
   async filterBooks(opt: FilterOptions = {}) {
     const { query, groups, ...dbOpt } = opt;
@@ -385,9 +395,10 @@ class BookshelfManager {
   async addLocalBook(file: File, parsedMeta?: any) {
     await this.init()
     const { file: source, format, meta, title } = await this.prepareLocalBook(file, parsedMeta)
+    const fingerprint = await fileFingerprint(source), dataId = await dataIdFromFingerprint(fingerprint)
     const url=`${format}://${source.name.replace(/\.[^.]+$/,'')}_${source.size}`
     const [path, cover] = await Promise.all([saveBookFile(source, url), saveOptionalCover(meta.coverBlob, url)])
-    return this.savePreparedBook({ url, path, format, size: source.size, meta, name: title, cover })
+    return this.savePreparedBook({ url, path, format, size: source.size, meta, name: title, cover, dataId, fingerprint })
   }
 
   async addLocalLinkBook(file: File, parsedMeta?: any) {
@@ -395,9 +406,10 @@ class BookshelfManager {
     const localPath = (file as any)?.path || (file as any)?._path || ''
     if (!localPath) throw new Error('本地文件链接不可用')
     const { file: source, format, meta, title } = await this.prepareLocalBook(file, parsedMeta)
+    const fingerprint = await fileFingerprint(source), dataId = await dataIdFromFingerprint(fingerprint)
     const url=toFileUrl(localPath)
     const cover = await saveOptionalCover(meta.coverBlob, url)
-    return this.savePreparedBook({ url, path: url, format, size: source.size, meta, name: title, cover })
+    return this.savePreparedBook({ url, path: url, format, size: source.size, meta, name: title, cover, dataId, fingerprint })
   }
   
   async addUrlBook(url: string, coverUrl?: string, bookInfo?: { title?: string; author?: string }, parsedMeta?: any) {
@@ -406,24 +418,28 @@ class BookshelfManager {
     
     // HTTP书源快速通道：跳过文件下载和元数据提取
     if (bookInfo?.title) {
+      const fingerprint = urlFingerprint(bookUrl), dataId = await dataIdFromFingerprint(fingerprint)
       const format = this.getFormat(bookUrl)
       const cover = await this.downloadCover(coverUrl, bookUrl)
-      await this.addBook({ url: bookUrl, title: normalizeBookTitle(bookInfo.title) || bookInfo.title, author: bookInfo.author || '未知作者', cover, format, path: bookUrl, size: 0, metadata: {} })
+      await this.addBook({ url: bookUrl, title: normalizeBookTitle(bookInfo.title) || bookInfo.title, author: bookInfo.author || '未知作者', cover, format, path: bookUrl, size: 0, metadata: {}, dataId, fingerprint })
       return bookUrl
     }
     
     // 常规路径：预览阶段可能已临时读取文件，但入库时保留链接本身，不托管远端正文。
-    const { filePath, name, format, meta } = parsedMeta
-      ? { filePath: bookUrl, name: parsedMeta.title || this.fileBaseName(bookUrl), format: this.getFormat(bookUrl), meta: parsedMeta }
+    const { filePath, name, format, meta, file } = parsedMeta
+      ? { filePath: bookUrl, name: parsedMeta.title || this.fileBaseName(bookUrl), format: this.getFormat(bookUrl), meta: parsedMeta, file: null }
       : await this.parseUrlBook(bookUrl)
+    const fingerprint = parsedMeta?.fingerprint || (file ? await fileFingerprint(file) : urlFingerprint(filePath))
+    const dataId = parsedMeta?.dataId || await dataIdFromFingerprint(fingerprint)
     let cover = await this.downloadCover(coverUrl, filePath)
     if (!cover) cover = await saveOptionalCover(meta.coverBlob, filePath)
-    return this.savePreparedBook({ url: filePath, path: filePath, format, size: parsedMeta?.fileSize || 0, meta, name, cover })
+    return this.savePreparedBook({ url: filePath, path: filePath, format, size: parsedMeta?.fileSize || 0, meta, name, cover, dataId, fingerprint })
   }
 
   async previewUrlBook(url: string) {
-    const { meta, format } = await this.parseUrlBook(url)
-    return { ...meta, format, cover: meta.coverBlob ? URL.createObjectURL(meta.coverBlob) : '' }
+    const { meta, format, file } = await this.parseUrlBook(url)
+    const fingerprint = await fileFingerprint(file)
+    return { ...meta, format, fingerprint, dataId: await dataIdFromFingerprint(fingerprint), cover: meta.coverBlob ? URL.createObjectURL(meta.coverBlob) : '' }
   }
 
   async previewLocalBook(file: File) {
@@ -439,17 +455,17 @@ class BookshelfManager {
     url = normalizeSiyuanCloudUrl(url)
     const filePath = url.startsWith(SIYUAN_CLOUD_BASE) ? url : isAbsolute && !url.startsWith('file://') ? toFileUrl(url) : url
     const name = this.fileBaseName(url), format = this.getFormat(url)
-    const meta = format === 'txt'
-      ? await this.extractMeta(new File([], `${name}.txt`, { type: 'text/plain' }), format, name)
-      : await this.extractMeta(await loadBookFile(filePath), format, name)
+    const file = await loadBookFile(filePath)
+    const meta = await this.extractMeta(file, format, name)
     
-    return { filePath, name, format, meta }
+    return { filePath, name, format, meta, file }
   }
   
   async addAssetBook(assetPath: string, file: File) {
     await this.init()
     const format = this.getFormat(file.name), name = file.name.replace(/\.[^.]+$/, ''), url = `asset://${assetPath}`, meta = await this.extractMeta(file, format, name)
-    return this.savePreparedBook({ url, path: assetPath, format, meta, name, cover: await saveOptionalCover(meta.coverBlob, url) })
+    const fingerprint = urlFingerprint(url), dataId = await dataIdFromFingerprint(fingerprint)
+    return this.savePreparedBook({ url, path: assetPath, format, meta, name, cover: await saveOptionalCover(meta.coverBlob, url), dataId, fingerprint })
   }
   
   // 对阅读器保留统一入口，底层实现已下沉到 bookStore。

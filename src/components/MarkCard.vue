@@ -15,14 +15,21 @@
           @pointerdown.stop
           @input="emit('update:tagInput', ($event.target as HTMLInputElement).value)"
         />
-        <div v-if="tagOptions.length" class="sr-tag-options">
-          <button
-            v-for="tag in tagOptions"
-            :key="tag"
-            class="sr-tag-chip"
-            :class="{ active: selectedTags.includes(tag) }"
-            @click.stop="emit('toggle-tag', tag)"
-          >#{{ tag }}</button>
+        <div v-if="tagGroups.length" class="sr-tag-options">
+          <template v-for="group in tagGroups" :key="group.name">
+            <button
+              class="sr-tag-group-title"
+              :class="{ active: isGroupActive(group.tags) }"
+              @click.stop="emit('toggle-tags', group.tags)"
+            >{{ group.name }}</button>
+            <button
+              v-for="tag in group.tags"
+              :key="tag"
+              class="sr-tag-chip"
+              :class="{ active: selectedTags.includes(tag) }"
+              @click.stop="emit('toggle-tags', [tag])"
+            >#{{ tag }}</button>
+          </template>
         </div>
       </template>
       <span v-else v-for="tag in tags" :key="tag" class="sr-tag-chip">#{{ tag }}</span>
@@ -52,11 +59,11 @@
           <span v-else class="sr-style-icon" :data-type="style.value">A</span>
         </button>
       </div>
-      <div class="sr-title" :style="{ '--mark-color': markColor }">
+      <div class="sr-title" :class="titleClass" :style="{ '--mark-color': markColor }">
         <div class="sr-title-text" :title="text">{{ text }}</div>
       </div>
     </div>
-    <div v-else class="sr-title" :class="{ 'sr-title-bookmark': bookmark }" :style="{ '--mark-color': markColor }">
+    <div v-else class="sr-title" :class="titleClass" :style="{ '--mark-color': markColor }">
       <div v-if="chapter" class="sr-inline-chapter" :title="chapter">{{ chapter }}</div>
       <div v-if="text" class="sr-title-text" :title="text">{{ text }}</div>
       <slot name="meta" />
@@ -97,25 +104,45 @@
 
 <script lang="ts">
 const normalizeMarkTags = (tags?: unknown[]) => Array.from(new Set((tags || []).map(tag => String(tag || '').trim()).filter(Boolean)))
-export const parseMarkTags = (value = '') => normalizeMarkTags(value.split(/[#,，;；\n]/))
+export const parseMarkTags = (value = '') => normalizeMarkTags(value.split(/[#;\uFF1B,\uFF0C\u3001\n]/))
 export const formatMarkTags = (tags?: unknown[]) => normalizeMarkTags(tags).join(', ')
 export const getMarkTags = (item: any) => normalizeMarkTags(item?.tags || [])
 export const collectMarkTags = (source: any[] | any = [], extra: unknown[] = []) => {
   const items = Array.isArray(source) ? source : source?.getAll?.() || []
   return [...new Set([...items.flatMap(getMarkTags), ...normalizeMarkTags(extra)])].sort((a, b) => a.localeCompare(b)).slice(0, 24)
 }
+export const toggleMarkTags = (tags: unknown[] = [], next: unknown[] = []) => {
+  const base = normalizeMarkTags(tags), items = normalizeMarkTags(next)
+  return normalizeMarkTags(items.every(tag => base.includes(tag)) ? base.filter(tag => !items.includes(tag)) : [...base, ...items])
+}
+export type MarkTagGroup = { name: string; tags: string[] }
+const UNGROUPED_TAG_GROUP = '\u672A\u5206\u7EC4'
+export const parseMarkTagPresets = (value = ''): MarkTagGroup[] => value.split('\n').map(line => {
+  const [name, tags = ''] = line.split(/[:\uFF1A]/)
+  return { name: name?.trim(), tags: parseMarkTags(tags) }
+}).filter(group => group.name && (group.tags.length || group.name === UNGROUPED_TAG_GROUP))
+export const collectMarkTagGroups = (source: any[] | any = [], extra: unknown[] = [], preset = (globalThis as any).window?.__sireader_settings?.annotationTagPresets || '') => {
+  const presetGroups = parseMarkTagPresets(preset)
+  const groups = presetGroups.filter(group => group.name !== UNGROUPED_TAG_GROUP), ungroupedPreset = presetGroups.find(group => group.name === UNGROUPED_TAG_GROUP)
+  const used = collectMarkTags(source, extra)
+  const presetTags = new Set(groups.flatMap(group => group.tags))
+  const ungrouped = normalizeMarkTags([...(ungroupedPreset?.tags || []), ...used.filter(tag => !presetTags.has(tag))])
+  return [...groups, { name: UNGROUPED_TAG_GROUP, tags: ungrouped }]
+}
 </script>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 
 type ColorOption = { key: string; value: string; bg: string }
 type StyleOption = { value: string; label: string; icon?: string }
+type MarkKind = 'highlight' | 'note' | 'bookmark'
 
 const props = withDefaults(defineProps<{
   time: string
   i18n?: any
   tags?: string[]
-  tagOptions?: string[]
+  tagGroups?: MarkTagGroup[]
   selectedTags?: string[]
   tagInput?: string
   editing?: boolean
@@ -128,10 +155,10 @@ const props = withDefaults(defineProps<{
   colorOptions?: ColorOption[]
   styleValue?: string
   styleOptions?: StyleOption[]
-  bookmark?: boolean
+  kind?: MarkKind
 }>(), {
   tags: () => [],
-  tagOptions: () => [],
+  tagGroups: () => [],
   selectedTags: () => [],
   tagInput: '',
   text: '',
@@ -142,14 +169,18 @@ const props = withDefaults(defineProps<{
   colorOptions: () => [],
   styleValue: 'highlight',
   styleOptions: () => [],
+  kind: 'highlight',
 })
+
+const titleClass = computed(() => props.kind === 'note' ? 'sr-title--note' : 'sr-title--primary')
+const isGroupActive = (tags: string[]) => !!tags.length && tags.every(tag => props.selectedTags.includes(tag))
 
 const emit = defineEmits<{
   'update:tagInput': [value: string]
   'update:note': [value: string]
   'update:colorValue': [value: string]
   'update:styleValue': [value: string]
-  'toggle-tag': [tag: string]
+  'toggle-tags': [tags: string[]]
   edit: []
   cancel: []
   save: []
@@ -165,16 +196,19 @@ const emit = defineEmits<{
 .sr-time{font-size:12px;line-height:18px;color:var(--b3-theme-on-surface-variant);white-space:nowrap;flex-shrink:0}
 .sr-tag-list{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sr-gap,4px);min-height:var(--sr-line,19px)}
 .sr-tag-editor{flex-direction:column;align-items:stretch}
-.sr-tag-options{display:flex;flex-wrap:wrap;gap:var(--sr-gap,4px)}
+.sr-tag-options{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sr-gap,4px)}
+.sr-tag-group-title{flex-basis:100%;height:18px;padding:0 4px;border:0;border-radius:2px;background:transparent;color:var(--b3-theme-on-surface-variant);font-size:11px;line-height:18px;text-align:left;cursor:pointer}
+.sr-tag-group-title.active{color:var(--b3-theme-primary);background:var(--b3-theme-primary-lightest)}
 .sr-tag-chip{display:inline-flex;align-items:center;height:18px;padding:0 6px;border:0;border-radius:2px;background:var(--b3-theme-primary-lightest);color:var(--b3-theme-primary);font-size:12px;line-height:18px;cursor:default}
 button.sr-tag-chip{cursor:pointer;opacity:.58}
 button.sr-tag-chip.active{opacity:1;background:var(--b3-theme-primary-lightest);color:var(--b3-theme-primary)}
 .sr-tag-input-inline{width:100%;height:20px;padding:0 4px;border:0;border-bottom:1px solid var(--b3-border-color);background:transparent;color:var(--b3-theme-on-surface);font-size:12px;line-height:20px;outline:none;box-sizing:border-box}
 .sr-title,.sr-note{flex:0 0 auto;min-height:var(--sr-line,19px);font-size:13px;line-height:var(--sr-line,19px);overflow:hidden}
-.sr-title{position:relative;display:flex;flex-direction:column;gap:var(--sr-gap,4px);padding:0 0 0 9px;background:transparent;color:var(--b3-theme-on-surface-variant);font-weight:500;cursor:pointer}
+.sr-title{position:relative;display:flex;flex-direction:column;gap:var(--sr-gap,4px);padding:0 0 0 9px;background:transparent;font-weight:500;cursor:pointer}
 .sr-title::before{content:"";position:absolute;left:0;top:1px;bottom:1px;width:3px;border-radius:999px;background:var(--mark-color,#e0e0e0)}
 .sr-title:focus,.sr-title:focus-visible{outline:none!important;box-shadow:none!important}
-.sr-title-bookmark{color:var(--b3-theme-primary)}
+.sr-title--primary{color:var(--b3-theme-primary)}
+.sr-title--note{color:var(--b3-theme-on-surface)}
 .sr-title-text,.sr-inline-chapter{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sr-inline-chapter{color:var(--b3-theme-on-surface-variant);font-weight:500}
 .sr-title-edit{display:flex;flex-direction:column;gap:var(--sr-gap,4px);min-width:0}

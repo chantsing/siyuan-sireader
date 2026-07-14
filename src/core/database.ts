@@ -37,6 +37,8 @@ export interface Book {
   groups: string[]
   bindDocId?: string
   bindDocName?: string
+  dataId?: string
+  fingerprint?: string
   annotationCount?: number
 }
 
@@ -110,6 +112,7 @@ export class ReaderDatabase {
   private booksDirty = false
   private settingsDirty = false
   private dailyDirty = false
+  private annotationCountRebuildPending = false
 
   private async readStorageState() {
     const [booksRaw, settingsRaw, dailyRaw] = await Promise.all([
@@ -239,6 +242,8 @@ export class ReaderDatabase {
       groups: Array.from(new Set(book.groups || [])),
       bindDocId: book.bindDocId || '',
       bindDocName: book.bindDocName || '',
+      dataId: book.dataId || '',
+      fingerprint: book.fingerprint || '',
     }
   }
 
@@ -253,11 +258,13 @@ export class ReaderDatabase {
   private mergeRecordBook = (book: Book, record?: Partial<Book> | null) =>
     record ? { ...book, ...record, tags: book.tags, groups: book.groups } : book
 
-  private readBookRecord = async (book: Book) =>
-    await loadBookRecord(book.url) || { version: 1, book: { ...book }, annotations: [], updatedAt: Date.now() } as BookRecord
+  private dataKey = (book: Pick<Book, 'url'> & Partial<Pick<Book, 'dataId'>>) => book.dataId || book.url
 
-  private writeBookRecord = async (book: Book, annotations: Annotation[]) =>
-    await saveBookRecord(book.url, { version: 1, book: { ...book }, annotations, updatedAt: Date.now() })
+  private readBookRecord = async (book: Book) =>
+    await loadBookRecord(this.dataKey(book)) || await loadBookRecord(book.url) || { version: 1, book: { ...book }, annotations: [], updatedAt: Date.now() } as BookRecord
+
+  private writeBookRecord = async (book: Book, annotations: any[], progress?: BookRecord['progress']) =>
+    await saveBookRecord(this.dataKey(book), { version: 1, book: { ...book }, annotations, progress, updatedAt: Date.now() })
 
   private listBooks = (orderBy = 'read DESC') => {
     const books = Object.values(this.books)
@@ -282,23 +289,15 @@ export class ReaderDatabase {
   }
 
   private async hydrateBook(book: Book) {
-    const record = await loadBookRecord(book.url)
+    const record = await this.readBookRecord(book)
     return {
       ...this.mergeRecordBook(book, record?.book),
       annotationCount: record?.annotations?.length || 0,
     }
   }
 
-  private async hydrateBooks(books: Book[]) {
-    return Promise.all(books.map(book => this.hydrateBook(book)))
-  }
-
-  private async listHydratedBooks(orderBy = 'read DESC') {
-    return this.hydrateBooks(this.listBooks(orderBy))
-  }
-
   private async countRecordAnnotations(books: Book[]) {
-    return (await Promise.all(books.map(async book => (await loadBookRecord(book.url))?.annotations?.length || 0))).reduce((sum, count) => sum + count, 0)
+    return (await Promise.all(books.map(async book => (await this.readBookRecord(book))?.annotations?.length || 0))).reduce((sum, count) => sum + count, 0)
   }
 
   private getCachedAnnotationCount = () => Number(this.readRawSetting(ANNOTATION_COUNT_KEY) || 0)
@@ -311,6 +310,13 @@ export class ReaderDatabase {
     return total
   }
 
+  private scheduleAnnotationCountRebuild() {
+    if (this.annotationCountRebuildPending) return
+    this.annotationCountRebuildPending = true
+    const run = () => void this.rebuildAnnotationCount().finally(() => { this.annotationCountRebuildPending = false }).catch(() => {})
+    ;(globalThis as any).requestIdleCallback ? (globalThis as any).requestIdleCallback(run, { timeout: 5000 }) : setTimeout(run, 1500)
+  }
+
   async getBook(url: string) {
     await this.init()
     const book = this.books[url]
@@ -319,13 +325,13 @@ export class ReaderDatabase {
 
   async getBooks() {
     await this.init()
-    return this.listHydratedBooks('read DESC')
+    return this.listBooks('read DESC')
   }
 
   async saveBook(book: Partial<Book> & Pick<Book, 'url' | 'title' | 'format' | 'status'>) {
     await this.init()
     const indexBook = this.books[book.url]
-    const record = await loadBookRecord(book.url)
+    const record = await loadBookRecord(book.dataId || book.url) || await loadBookRecord(book.url)
     const current = indexBook ? this.mergeRecordBook(indexBook, record?.book) : null
     const hasPath = Object.prototype.hasOwnProperty.call(book, 'path')
     const hasCover = Object.prototype.hasOwnProperty.call(book, 'cover')
@@ -339,24 +345,29 @@ export class ReaderDatabase {
     } as Book
     const prevBook = current ? { ...current } : null
     this.persistBookIndex(fullBook)
-    if (!same(prevBook, fullBook)) await this.writeBookRecord(fullBook, record?.annotations || [])
+    if (!same(prevBook, fullBook)) await this.writeBookRecord(fullBook, record?.annotations || [], record?.progress)
   }
 
-  async deleteBook(url: string) {
+  async deleteBook(url: string, deleteData = false) {
     await this.init()
-    const annotationCount = (await loadBookRecord(url))?.annotations?.length || 0
+    const book = this.books[url]
+    const annotationCount = deleteData ? (await loadBookRecord(book ? this.dataKey(book) : url))?.annotations?.length || 0 : 0
     delete this.books[url]
     Object.values(this.dailyReading).forEach(items => delete items[url])
     this.markDirty('books')
     this.markDirty('daily')
-    await removeBookRecord(url)
-    this.bumpCachedAnnotationCount(-annotationCount)
+    if (deleteData) {
+      if (book?.dataId) await removeBookRecord(book.dataId)
+      await removeBookRecord(url)
+      this.bumpCachedAnnotationCount(-annotationCount)
+    }
     await this.saveNow()
   }
 
   async getAnnotations(book: string) {
     await this.init()
-    return (await loadBookRecord(book))?.annotations || []
+    const item = this.books[book]
+    return (await loadBookRecord(item ? this.dataKey(item) : book) || await loadBookRecord(book))?.annotations || []
   }
 
   async saveAnnotation(annotation: Partial<Annotation> & Pick<Annotation, 'id' | 'book' | 'type'>) {
@@ -377,6 +388,7 @@ export class ReaderDatabase {
     const now = Date.now()
     const book = await this.getBook(annotation.book)
     if (!book) throw new Error('book not found')
+    if (book.format === 'pdf') return
     const record = await this.readBookRecord(book)
     const next = {
       id: annotation.id,
@@ -399,16 +411,25 @@ export class ReaderDatabase {
     annotations.sort((a, b) => (a.created || 0) - (b.created || 0))
     const prev = (record.annotations || []).find(item => item.id === annotation.id)
     if (same(prev, next)) return
-    await this.writeBookRecord(record.book ? { ...book, ...record.book } : book, annotations)
+    await this.writeBookRecord(record.book ? { ...book, ...record.book } : book, annotations, record.progress)
     this.bumpCachedAnnotationCount(annotations.length - prevCount)
   }
 
   async deleteAnnotation(id: string) {
     await this.init()
     for (const book of this.listBooks('added DESC')) {
-      const record = await loadBookRecord(book.url)
+      if (book.format === 'pdf') {
+        const record = await loadBookRecord(this.dataKey(book)) || await loadBookRecord(book.url)
+        const annotations = record?.annotations || []
+        const next = annotations.filter(item => (item.annotation || item).id !== id)
+        if (next.length === annotations.length) continue
+        await this.writeBookRecord(record?.book ? { ...book, ...record.book } : book, next, record?.progress)
+        this.bumpCachedAnnotationCount(-1)
+        break
+      }
+      const record = await loadBookRecord(this.dataKey(book)) || await loadBookRecord(book.url)
       if (!record?.annotations?.some(item => item.id === id)) continue
-      await this.writeBookRecord(record.book ? { ...book, ...record.book } : book, record.annotations.filter(item => item.id !== id))
+      await this.writeBookRecord(record.book ? { ...book, ...record.book } : book, record.annotations.filter(item => item.id !== id), record.progress)
       this.bumpCachedAnnotationCount(-1)
       break
     }
@@ -472,7 +493,7 @@ export class ReaderDatabase {
       if (av === bv) return 0
       return opt.reverse ? (av > bv ? 1 : -1) : (av < bv ? -1 : 1)
     })
-    return this.hydrateBooks(books)
+    return books
   }
 
   async getStats() {
@@ -487,7 +508,8 @@ export class ReaderDatabase {
       if ((book.rating || 0) > 0) byRating[book.rating] = (byRating[book.rating] || 0) + 1
     })
     const cached = this.readRawSetting(ANNOTATION_COUNT_KEY)
-    const annotationCount = cached == null ? await this.rebuildAnnotationCount() : Number(cached || 0)
+    const annotationCount = cached == null ? 0 : Number(cached || 0)
+    if (cached == null) this.scheduleAnnotationCountRebuild()
     return { byStatus, byFormat, byRating, annotationCount }
   }
 

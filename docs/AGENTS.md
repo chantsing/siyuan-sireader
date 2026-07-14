@@ -72,6 +72,7 @@ Important files:
 - Book and annotation schema/types: [`src/core/database.ts`](../src/core/database.ts)
 - Bookshelf operations: [`src/core/bookshelf.ts`](../src/core/bookshelf.ts)
 - Managed file/storage helpers: [`src/core/bookStore.ts`](../src/core/bookStore.ts)
+- PDF migration/EmbedPDF annotation normalization: [`src/core/dataMigration.ts`](../src/core/dataMigration.ts)
 - Mark manager: [`src/core/MarkManager.ts`](../src/core/MarkManager.ts)
 
 ## Storage Model
@@ -89,6 +90,16 @@ There are two storage layers:
 `bookStore.ts` intentionally reads critical storage through `/api/file/getFile` so SiYuan sync changes are visible without trusting only the in-memory plugin data cache.
 
 When modifying import/storage logic, preserve the current `/public/siyuan-sireader` managed-file model and backward compatibility for old stored paths.
+
+Bookshelf import should stay lightweight. Local batch preview must not read whole native files just to fingerprint or parse basic metadata; use native file path, size, and modified time when available, and only materialize file content when a format-specific parser truly needs it. Keep file import writes conservative for large files so one large book does not freeze the whole batch UI.
+
+Bookshelf remove/delete semantics:
+
+- `移除` removes plugin-managed book files and covers, but keeps per-book reading data and annotations for future re-import matching.
+- `彻底删除` removes the book plus reading/annotation data.
+- Original external files, remote URLs, `asset://` files, and plugin-private paths should not be deleted by managed-file cleanup.
+
+PDF data also lives in the normal per-book JSON record. Active PDF state should not use `.bin`; old `.bin` files are migration input only and are removed only after all legacy annotations are accounted for.
 
 ## Reader Modes
 
@@ -158,7 +169,7 @@ For most tasks, read in this order:
 Examples:
 
 - Reader bug: `Reader.vue` -> relevant EmbedPDF wrapper, `src/core/epub`, or `src/core/txt` module -> `jump.ts` / `keyboard.ts`.
-- PDF/EmbedPDF bug: read `docs/embedpdf.md` first, then `EmbedPdfReader.vue`, `Reader.vue`, and `bookStore.ts`.
+- PDF/EmbedPDF bug: read `docs/embedpdf.md` first, then `EmbedPdfReader.vue`, `Reader.vue`, `bookStore.ts`, and `dataMigration.ts`.
 - Import/open bug: `bookOpen.ts` -> `bookshelf.ts` -> `bookStore.ts`.
 - Settings bug: `useSetting.ts` -> impacted component.
 - Annotation bug: `MarkManager.ts` -> `MarkPanel.vue` / `useReaderMarks.ts` -> format-specific code.
@@ -169,6 +180,8 @@ Examples:
 - Storage code can break existing user libraries.
 - Reader open-position logic affects bookshelf, links, tabs, native PDF open, and resume behavior.
 - PDF annotation state belongs to EmbedPDF; avoid rebuilding PDF tools in SiReader.
+- PDF bookmarks should follow the same EmbedPDF annotation read/write/edit/delete path as normal PDF annotations.
+- PDF migration must be idempotent; current records use `migration.pdfAnnotations` to avoid rerunning on every open.
 - Settings persistence assumes immediate runtime sync through global events.
 - License gating intentionally controls some features.
 - Mobile behavior has a separate event path from desktop tabs.

@@ -95,6 +95,7 @@ const SettingsDock = defineComponent({
           h(BookShelf, {
             i18n: props.i18n,
             coverSize: model.value.bookshelfCoverSize,
+            hiddenItems: model.value.bookshelfHiddenItems,
             openDocAssets: model.value.openDocAssets,
             onRead: handleReadOnline,
             style: { display: activeTab.value === 'bookshelf' ? '' : 'none' },
@@ -113,7 +114,8 @@ const SettingsDock = defineComponent({
 
 const DOCK_TYPE = 'reader'
 const DOCK_ID = `${plugin.name}${DOCK_TYPE}`
-const openWereadTab = registerWeread(plugin)
+const { openWereadTab, topBar: wereadTopBar } = registerWeread(plugin)
+watch(() => settings.value.showWereadTopBar, show => wereadTopBar.style.display = show === false ? 'none' : '', { immediate: true })
 
 // 打开设置并展开授权
 const openSetting = (openLicense = false) => {

@@ -37,7 +37,7 @@
               :time="formatDateTime(mark.timestamp || Date.now())"
               :i18n="props.i18n"
               :tags="getMarkTags(mark)"
-              :tag-options="markTagOptions"
+              :tag-groups="markTagGroups"
               :selected-tags="editTagList"
               :tag-input="editTags"
               :editing="isEditing(mark)"
@@ -50,12 +50,12 @@
               :color-options="isEditing(mark) && showEditOptions(mark) ? getEditColorOptions() : []"
               :style-value="editStyle"
               :style-options="isEditing(mark) ? getMarkStyleOptions(mark) : []"
-              :bookmark="isBookmark(mark)"
+              :kind="mark.type === 'note' ? 'note' : mark.type === 'bookmark' ? 'bookmark' : 'highlight'"
               @update:tag-input="editTags = $event"
               @update:note="editNote = $event"
               @update:color-value="editColor = $event"
               @update:style-value="editStyle = $event"
-              @toggle-tag="toggleEditTag"
+              @toggle-tags="toggleEditTags"
               @go="goTo(mark)"
               @edit="startEdit(mark)"
               @cancel="cancelEdit"
@@ -64,7 +64,7 @@
               <template #actions>
                 <div class="sr-head-actions">
                   <button class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.copy || '复制'" @click.stop="copyMark(mark)"><svg><use xlink:href="#iconCopy" /></svg></button>
-                  <button v-if="mark.blockId && !isBookmark(mark)" class="b3-tooltips b3-tooltips__nw" aria-label="打开块" @click.stop="openBlock(mark.blockId)" @mouseenter="onBlockEnter($event, mark.blockId)" @mouseleave="hideFloat"><svg><use xlink:href="#iconRef" /></svg></button>
+                  <button v-if="mark.blockId && mark.type !== 'bookmark'" class="b3-tooltips b3-tooltips__nw" aria-label="打开块" @click.stop="openBlock(mark.blockId)" @mouseenter="onBlockEnter($event, mark.blockId)" @mouseleave="hideFloat"><svg><use xlink:href="#iconRef" /></svg></button>
                   <button v-else-if="canImport(mark)" class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.import || '导入'" @click.stop="importMark(mark)"><svg><use xlink:href="#iconDownload" /></svg></button>
                   <button v-if="canDelete(mark)" class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.delete || '删除'" @click.stop="deleteMark(mark)"><svg><use xlink:href="#iconTrashcan" /></svg></button>
                 </div>
@@ -164,14 +164,13 @@ const {
   getEditStyleOptions,
   editColor,
   editStyle,
-  markTagOptions,
-  toggleEditTag,
+  markTagGroups,
+  toggleEditTags,
   saveEdit,
   mainText,
   copyMark,
   canDelete,
   canEdit,
-  isBookmark,
   openBlock,
   onBlockEnter,
   hideFloat,
@@ -212,7 +211,7 @@ const getMarkStyleOptions = (mark: any) => (mark?.type === 'highlight' || mark?.
 .sr-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .sr-actions-end{justify-content:flex-end}
 .sr-section-line{padding-top:12px;border-top:1px solid var(--b3-border-color)}
-.sr-card{--sr-gap:4px;--sr-line:19px;display:flex;gap:var(--sr-gap);padding:6px;margin-bottom:6px;border:1px solid color-mix(in srgb,var(--b3-border-color) 92%,transparent);border-radius:8px;background:linear-gradient(180deg,color-mix(in srgb,var(--b3-theme-background) 96%,white),var(--b3-theme-background));color:var(--b3-theme-on-surface);position:relative;transform:none!important;box-shadow:none!important;transition:border-color .15s}
+.sr-card{--sr-gap:4px;--sr-line:19px;display:flex;gap:var(--sr-gap);padding:6px;margin-bottom:6px;border:1px solid color-mix(in srgb,var(--b3-border-color) 92%,transparent);border-radius:8px;background:linear-gradient(180deg,color-mix(in srgb,var(--b3-theme-background) 96%,white),var(--b3-theme-background));color:var(--b3-theme-on-surface);position:relative;transform:none!important;box-shadow:none!important;transition:border-color .15s;content-visibility:auto;contain-intrinsic-size:96px}
 .sr-card:hover{border-color:var(--b3-theme-primary);transform:none!important;box-shadow:none!important}
 .sr-card-drag{cursor:grab}
 .sr-card.is-dragging{opacity:.45}

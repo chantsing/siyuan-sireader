@@ -175,7 +175,7 @@ const renderTocItem = (item: TOCItem, level: number, parentKey: string, bookmark
   const exportAction = item.href
     ? `<span class="b3-list-item__action b3-tooltips b3-tooltips__nw" data-act="export" aria-label="${esc(props.i18n?.export || '导出')}"><svg><use xlink:href="#lucide-send"></use></svg></span>`
     : ''
-  const bookmarkAction = item.href && !isEmbedPdfMode.value
+  const bookmarkAction = item.href
     ? `<span class="b3-list-item__action b3-tooltips b3-tooltips__nw" data-act="bookmark" aria-label="${hasBookmark ? '移除书签' : '添加书签'}"><svg><use xlink:href="#iconBookmark"></use></svg></span>`
     : ''
   const hideActionClass = hasBookmark ? '' : ' b3-list-item--hide-action'
@@ -299,15 +299,15 @@ const openTocMenu = (event: MouseEvent, href: string, label: string) => {
 
 const toggleBookmark = async (href: string, label: string) => {
   const marks = activeReader.value?.marks || (activeView.value as any)?.marks
-  if (!marks || !activeView.value) return showMessage('书签功能未初始化', 2000, 'error')
+  if (!marks?.toggleBookmark || !activeView.value) return showMsg('书签功能未初始化', 'error')
   try {
-    await activeView.value.goTo(href)
+    await goToLocation(href)
     await new Promise(resolve => setTimeout(resolve, 200))
-    const added = await marks.toggleBookmark(undefined, undefined, label)
-    showMessage(added ? '已添加书签' : '已移除书签', 1500, 'info')
+    const added = await marks.toggleBookmark(href, label)
+    showMsg(added ? '已添加书签' : '已移除书签')
     scheduleRender()
   } catch (error: any) {
-    showMessage(error.message || '操作失败', 2000, 'error')
+    showMsg(error.message || '操作失败', 'error')
   }
 }
 
@@ -421,5 +421,5 @@ onUnmounted(() => {
 .bs-tree-view :deep(.bs-tree-children){padding:0;margin:0}
 .bs-grid{display:grid;gap:6px;overflow:auto;scrollbar-gutter:stable;align-content:start;padding:8px 0 8px 8px;box-sizing:border-box;grid-template-columns:repeat(auto-fill,minmax(92px,1fr))}
 .bs-grid .b3-list{margin:0}
-.bs-grid-item{position:relative;min-width:0;cursor:pointer}
+.bs-grid-item{position:relative;min-width:0;cursor:pointer;content-visibility:auto;contain-intrinsic-size:150px}
 </style>

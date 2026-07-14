@@ -27,7 +27,7 @@
           v-else
           :time="formatDateTime(state.currentMark?.timestamp || Date.now())"
           :tags="displayTags"
-          :tag-options="panelTagOptions"
+          :tag-groups="panelTagGroups"
           :selected-tags="displayTags"
           :tag-input="state.tags"
           :editing="state.isEditing"
@@ -36,6 +36,7 @@
           :chapter="state.isEditing ? '' : (state.currentMark?.chapter || (state.currentMark?.page ? `第${state.currentMark.page}页` : ''))"
           :note="state.note"
           :mark-color="currentMarkColor"
+          :kind="state.currentMark?.type === 'note' ? 'note' : state.currentMark?.type === 'bookmark' ? 'bookmark' : 'highlight'"
           :color-value="state.color"
           :color-options="state.isEditing ? colorOptions : []"
           :style-value="state.style"
@@ -44,7 +45,7 @@
           @update:note="state.note = $event"
           @update:color-value="state.color = $event"
           @update:style-value="setMarkStyle"
-          @toggle-tag="togglePanelTag"
+          @toggle-tags="togglePanelTags"
           @go="goToMark"
           @edit="handleEdit"
           @cancel="handleCancel"
@@ -72,7 +73,7 @@ import { COLORS, STYLES } from '@/core/MarkManager'
 import { hideFloat, openBlock, showFloat } from '@/utils/copy'
 import { jump } from '@/utils/jump'
 import { isMobile } from '@/utils/mobile'
-import MarkCard, { collectMarkTags, formatMarkTags, getMarkTags, parseMarkTags } from './MarkCard.vue'
+import MarkCard, { collectMarkTagGroups, formatMarkTags, getMarkTags, parseMarkTags, toggleMarkTags } from './MarkCard.vue'
 import Translate from './Translate.vue'
 
 interface MarkSelection {
@@ -145,11 +146,8 @@ const markStyleOptions = computed(() => textStyleOptions.value)
 const colorMap = Object.fromEntries(COLORS.map(color => [color.color, color.bg]))
 const currentMarkColor = computed(() => colorMap[state.color] || state.color || '#e0e0e0')
 const displayTags = computed(() => state.isEditing ? parseMarkTags(state.tags) : getMarkTags(state.currentMark))
-const panelTagOptions = computed(() => collectMarkTags(props.manager, displayTags.value))
-const togglePanelTag = (tag: string) => {
-  const tags = displayTags.value
-  state.tags = formatMarkTags(tags.includes(tag) ? tags.filter(item => item !== tag) : [...tags, tag])
-}
+const panelTagGroups = computed(() => collectMarkTagGroups(props.manager, displayTags.value))
+const togglePanelTags = (tags: string[]) => state.tags = formatMarkTags(toggleMarkTags(displayTags.value, tags))
 const setMarkStyle = (style: string) => {
   state.style = style as MarkStyle
 }
@@ -438,6 +436,7 @@ const handleSave = async () => {
     if (!pos) return showMessage('无法获取位置信息', 2000, 'error')
     const tags = parseMarkTags(state.tags)
     await (state.note.trim() ? props.manager.addNote(pos, state.note.trim(), ...args.slice(1), tags) : props.manager.addHighlight(...args, tags))
+    await (await import('@/composables/useSetting')).collectAnnotationTagPresets(tags).catch(() => {})
     closeAll()
   } catch {
     showMessage(props.i18n?.saveError || '保存失败', 2000, 'error')

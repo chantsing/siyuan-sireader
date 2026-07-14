@@ -28,9 +28,14 @@ export const buildEmbedPdfTheme = (theme = '', el?: Element, customTheme?: ReadT
   const readTheme = theme === 'custom' ? customTheme : PRESET_THEMES[theme]
   const bg = readTheme?.bg ? cssVarValue(readTheme.bg, el) : cssVar('--b3-theme-background', '#f3f4f6', el)
   const color = readTheme?.color ? cssVarValue(readTheme.color, el) : cssVar('--b3-theme-on-surface', '#111827', el)
-  const surface = cssVar('--b3-theme-surface', bg, el)
-  const surfaceAlt = cssVar('--b3-theme-background-light', bg, el)
-  const primary = cssVar('--b3-theme-primary', '#3b82f6', el)
+  const surface = bg
+  const surfaceAlt = surface
+  const border = cssVar('--b3-border-color', '#d1d5db', el)
+  const hover = cssVar('--b3-list-hover', surfaceAlt, el)
+  const primaryBase = cssVar('--b3-theme-primary', '#3b82f6', el)
+  const primary = preference === 'dark' ? cssVar('--b3-theme-primary-light', primaryBase, el) : primaryBase
+  const primaryLight = preference === 'dark' ? hover : cssVar('--b3-theme-primary-lightest', hover, el)
+  const muted = preference === 'dark' ? color : cssVar('--b3-theme-on-surface-variant', '#6b7280', el)
   const colors = {
     background: {
       app: bg,
@@ -42,19 +47,28 @@ export const buildEmbedPdfTheme = (theme = '', el?: Element, customTheme?: ReadT
     },
     foreground: {
       primary: color,
-      secondary: cssVar('--b3-theme-on-surface-variant', '#374151', el),
-      muted: cssVar('--b3-theme-on-surface-variant', '#6b7280', el),
-      disabled: cssVar('--b3-theme-on-surface-light', '#9ca3af', el),
+      secondary: muted,
+      muted,
+      disabled: muted,
       onAccent: cssVar('--b3-theme-on-primary', '#ffffff', el),
     },
-    border: { default: cssVar('--b3-border-color', '#d1d5db', el), subtle: cssVar('--b3-border-color', '#e5e7eb', el), strong: primary },
+    border: { default: border, subtle: border, strong: primary },
     accent: {
       primary,
       primaryHover: primary,
       primaryActive: primary,
-      primaryLight: cssVar('--b3-theme-primary-lightest', surfaceAlt, el),
+      primaryLight,
       primaryForeground: cssVar('--b3-theme-on-primary', '#ffffff', el),
     },
+    interactive: {
+      hover,
+      active: primaryLight,
+      selected: primaryLight,
+      focus: primary,
+      focusRing: primaryLight,
+    },
+    scrollbar: { track: surfaceAlt, thumb: border, thumbHover: primary },
+    tooltip: { background: surface, foreground: color },
   }
   return { preference, light: colors, dark: colors }
 }

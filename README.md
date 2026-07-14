@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support highlights, ink, shapes, forms, stamps, signatures, images, screenshots, search, printing, export, and backlinks, with annotation notes, dictionary, translation, themes, and bookshelf management.
 
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,46 @@ Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support high
 ---
 
 ## 📝 Latest Updates
+
+### v2.1.0 (2026.7.15)
+
+### Added
+
+- Added grouped annotation tag preset settings. Annotation tag editing now shows tags by preset group, and group titles can toggle the whole group with one click.
+- Added bookshelf item visibility settings, allowing progress, status, rating, and last-read information to be hidden as needed.
+- Added a WeRead top-bar button visibility switch, allowing the WeRead top-bar entry to be hidden from settings.
+- Supports editing and deleting bookmarks in the annotation sidebar.
+- Supports adding and removing bookmarks in PDF outlines.
+- Supports automatically matching original reading data and annotation data after a removed book is imported again.
+- Supports recognizing renamed local books by book fingerprint.
+- Added "Import Annotations" to the PDF book context menu, supporting JSON, XFDF, Markdown, and TXT annotation export imports, compatible with text/JSON-like exports from common readers such as Zotero, BookxNote, Reeden, and Boox.
+
+### Improved
+
+- Improved ungrouped annotation tag collection. Newly saved non-preset tags are automatically appended to "Ungrouped" to avoid mixing them into other preset groups.
+- Improved link-format and annotation-tag preset setting display, unifying them into a single-row setting structure and reducing overlap.
+- Improved interface setting structure by reusing unified config item rendering for bookshelf and WeRead entry switches.
+- Improved data matching after removed books are imported again, automatically restoring original reading data and annotation data.
+- Improved permanent-delete confirmation text, clearly indicating that annotation data will be deleted.
+- Improved PDF annotation migration by converting old data to the EmbedPDF standard annotation format.
+- Improved PDF data storage by saving annotations, bookmarks, and reading progress together in each book's JSON data file.
+- Improved legacy `.bin` data migration by cleaning old files after successful migration and retaining unsuccessful data for later compatibility fixes.
+- Improved PDF annotation migration performance and stability, avoiding repeated migration on every open.
+- Improved PDF search display by reusing EmbedPDF's native search layer to highlight matched content, avoiding misalignment and lag from custom search rendering.
+- Improved PDF sidebar and comment panel theme mapping. Reader theme background and text colors now sync to the EmbedPDF UI, improving overly dark content in dark themes.
+- Improved scrolling performance on the annotation page, bookshelf, online book search, TOC thumbnails, and WeRead lists by using browser-native offscreen rendering to reduce lag from large card lists.
+- Improved bookshelf batch import. Large local files are no longer fully read ahead of time, and the import flow now uses lighter sequential writes to reduce lag and stuck "importing" states.
+- Improved bookshelf import entry wording, unifying it as "Local Import" and "SiYuan Import". Local import includes file import and link import.
+- Improved book removal semantics. "Remove" cleans plugin-managed book files and covers while preserving reading/annotation data; only "Delete Permanently" deletes reading/annotation data.
+- Improved PDF annotation save compatibility by automatically filling missing or abnormal `rect`, `segmentRects`, `vertices`, `linePoints`, `inkList`, and other fields, avoiding annotation rendering crashes caused by old or abnormal data.
+
+### Fixed
+
+- Fixed PDF shape annotations possibly failing to save when `custom` is empty.
+- Fixed EmbedPDF rendering errors caused by missing annotation array fields after adding PDF notes or importing old annotations.
+- Fixed PDF built-in links being added to the annotation page as annotations.
+- Fixed the template preset dropdown still showing "Select" after selecting a preset.
+- Fixed copy template presets and hints still showing the deprecated "screenshot" variable, unifying them to the actually supported "image" variable.
 
 ### v2.0.0 (2026.7.13)
 

@@ -6,7 +6,7 @@ import { bookshelfManager } from '@/core/bookshelf'
 import { copyMark as copyMarkUtil, hideFloat, openBlock, showFloat } from '@/utils/copy'
 import { jump } from '@/utils/jump'
 import { hideMarkPreview } from '@/utils/markPreview'
-import { collectMarkTags, formatMarkTags, getMarkTags, parseMarkTags } from '@/components/MarkCard.vue'
+import { collectMarkTagGroups, formatMarkTags, getMarkTags, parseMarkTags, toggleMarkTags } from '@/components/MarkCard.vue'
 
 type MarkSort = 'time' | 'date' | 'chapter' | 'page' | 'custom'
 type MarkType = 'highlight' | 'note' | 'bookmark'
@@ -42,7 +42,7 @@ const TYPE_CYCLE: Array<{ value: MarkType | null; label: string; icon: string }>
 ]
 
 const COLOR_BUCKETS = [
-  { value: 'yellow', label: '黄色', aliases: ['yellow', '#ffeb3b'] },
+  { value: 'yellow', label: '黄色', aliases: ['yellow', '#ffeb3b', '#ffcd45'] },
   { value: 'red', label: '红色', aliases: ['red', '#ff0000'] },
   { value: 'green', label: '绿色', aliases: ['green', '#00aa00'] },
   { value: 'blue', label: '蓝色', aliases: ['blue', '#0066ff', '#00bcd4'] },
@@ -56,7 +56,6 @@ const PDF_STYLES = ['highlight', 'strikeout', 'underline', 'squiggly'] as const
 const ORDER_MAX = Number.MAX_SAFE_INTEGER
 const createFilter = (): FilterState => ({ types: [], colors: [], textStyles: [], tags: [], note: 'all', sort: 'time' })
 const isTextMark = (item: any) => item?.type === 'highlight' || item?.type === 'note'
-const isBookmark = (item: any) => item?.type === 'bookmark'
 const getKey = (item: any) => item?.id || item?.groupId || item?.cfi || `${item?.type}-${item?.page || item?.section || 0}`
 const getType = (item: any): MarkType => item?.type === 'note' ? 'note' : item?.type === 'bookmark' ? 'bookmark' : 'highlight'
 const rawColor = (item: any) => item?.color || item?.paths?.find((path: any) => path?.color)?.color || ''
@@ -170,7 +169,7 @@ export const useReaderMarks = (i18n?: any, context?: any) => {
       { key: 'note', label: '附加条件', options: NOTE_OPTIONS.map(opt => ({ ...opt, count: opt.value === 'all' ? source.length : countBy(item => !!item.note?.trim()) })) },
     ] as Array<{ key: MarkFilterKey; label: string; options: Array<{ value: string; label: string; count: number }> }>
   })
-  const markTagOptions = computed(() => collectMarkTags(allEntries.value))
+  const markTagGroups = computed(() => collectMarkTagGroups(allEntries.value, editTagList.value))
 
   const emptyText = computed(() => keyword.value ? (i18n?.notFound || '未找到标注') : (i18n?.empty || '暂无标注'))
   const isCollapsed = (key: string) => !!collapsed.value[key]
@@ -208,9 +207,9 @@ export const useReaderMarks = (i18n?: any, context?: any) => {
   const mainText = (item: any) => {
     return item.text || item.title || '无内容'
   }
-  const canEdit = (item: any) => !readOnly.value && !isBookmark(item) && (!isPdfMode.value || !!marks.value?.updateMark)
-  const canDelete = (item: any) => !readOnly.value && !isBookmark(item) && (!isPdfMode.value || !!marks.value?.deleteMark)
-  const canImport = (item: any) => !readOnly.value && !isBookmark(item)
+  const canEdit = (_item: any) => !readOnly.value && !!marks.value?.updateMark
+  const canDelete = (_item: any) => !readOnly.value && !!marks.value?.deleteMark
+  const canImport = (_item: any) => !readOnly.value && !!marks.value?.updateMark
   const pendingImportMarks = computed(() => allEntries.value.filter(item => canImport(item) && !item.blockId))
   const pendingImportCount = computed(() => pendingImportMarks.value.length)
   const showMsg = (msg: string, type: 'info' | 'error' = 'info') => showMessage(msg, type === 'error' ? 3000 : 1500, type)
@@ -218,7 +217,7 @@ export const useReaderMarks = (i18n?: any, context?: any) => {
   const startEdit = (item: any) => {
     if (readOnly.value) return
     editingId.value = getKey(item)
-    editText.value = item.text || ''
+    editText.value = item.text || item.title || ''
     editNote.value = item.note || ''
     editTags.value = formatMarkTags(item.tags)
     editColor.value = rawColor(item) || item.color || 'yellow'
@@ -227,10 +226,7 @@ export const useReaderMarks = (i18n?: any, context?: any) => {
   const cancelEdit = () => editingId.value = ''
   const editTagList = computed(() => parseMarkTags(editTags.value))
   const setEditTags = (tags: string[]) => editTags.value = formatMarkTags(tags)
-  const toggleEditTag = (tag: string) => {
-    const tags = editTagList.value
-    setEditTags(tags.includes(tag) ? tags.filter(item => item !== tag) : [...tags, tag])
-  }
+  const toggleEditTags = (tags: string[]) => setEditTags(toggleMarkTags(editTagList.value, tags))
   const getUrl = () => getContext()?.bookUrl || (window as any).__currentBookUrl || ''
 
   const saveEdit = async (item: any) => {
@@ -238,6 +234,7 @@ export const useReaderMarks = (i18n?: any, context?: any) => {
     try {
       const updates: any = { color: editColor.value, note: editNote.value.trim() || undefined, tags: parseMarkTags(editTags.value) }
       updates.text = editText.value.trim()
+      if (item.title != null) updates.title = updates.text
       updates.style = editStyle.value
       const { saveMarkEdit } = await import('@/utils/copy')
       await saveMarkEdit(item, updates, { marks: marks.value, bookUrl: getUrl(), isPdf: isPdfMode.value, reader: activeReader.value })
@@ -374,15 +371,14 @@ export const useReaderMarks = (i18n?: any, context?: any) => {
     getEditStyleOptions,
     editColor,
     editStyle,
-    markTagOptions,
-    toggleEditTag,
+    markTagGroups,
+    toggleEditTags,
     isPdfMode,
     saveEdit,
     mainText,
     copyMark,
     canEdit,
     canDelete,
-    isBookmark,
     openBlock,
     onBlockEnter,
     hideFloat,

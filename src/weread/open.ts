@@ -61,7 +61,7 @@ export const registerWeread = (plugin: Plugin) => {
     destroy() { ;(this as any)._app?.unmount() },
   })
 
-  plugin.addTopBar({ icon: '<svg><use xlink:href="#iconWeread"/></svg>', title: TITLE, callback: openWereadTab })
+  const topBar = plugin.addTopBar({ icon: '<svg><use xlink:href="#iconWeread"/></svg>', title: TITLE, callback: openWereadTab })
   plugin.addCommand({ langKey: 'openWeread', langText: `打开${TITLE}`, hotkey: '', callback: openWereadTab })
-  return openWereadTab
+  return { openWereadTab, topBar }
 }

@@ -10,7 +10,8 @@ import { computed, createApp, nextTick, onBeforeUnmount, ref, shallowRef, watch 
 import { PDFViewer, type EmbedPdfContainer, type PluginRegistry } from '@embedpdf/vue-pdf-viewer'
 import { Dialog, showMessage } from 'siyuan'
 import { bookshelfManager } from '@/core/bookshelf'
-import { migrateLegacyPdfAnnotationsToEmbedPdf, readEmbedPdfAnnotations, readEmbedPdfProgress, writeEmbedPdfAnnotations, writeEmbedPdfProgress } from '@/core/bookStore'
+import { readEmbedPdfAnnotations, readEmbedPdfProgress, writeEmbedPdfAnnotations, writeEmbedPdfProgress } from '@/core/bookStore'
+import { alignLegacyPdfAnnotations, needsLegacyPdfTextAlign } from '@/core/dataMigration'
 import { createTooltip, showTooltip } from '@/core/MarkManager'
 import { copyMark } from '@/utils/copy'
 import { buildEmbedPdfTheme, embedPdfThemePreference } from '@/utils/embedPdfTheme'
@@ -18,7 +19,8 @@ import { addMissingPdfMenuItemsAfterFirst, getPdfSelectionMark, pdfAnnotationNot
 import { type ReaderSettings, type ReadTheme } from '@/composables/useSetting'
 import Translate from './Translate.vue'
 
-const props = defineProps<{ source: File | string | null; settings?: ReaderSettings; theme?: string; customTheme?: ReadTheme; bookUrl?: string; i18n?: any }>()
+const props = defineProps<{ source: File | string | null; settings?: ReaderSettings; theme?: string; customTheme?: ReadTheme; bookUrl?: string; storageKey?: string; i18n?: any }>()
+const storageKey = () => props.storageKey || props.bookUrl || ''
 const emit = defineEmits<{ ready: [registry: PluginRegistry] }>()
 const documentSource = shallowRef<any>(null)
 const rootRef = ref<HTMLElement | null>(null)
@@ -38,12 +40,13 @@ let cleanupAnnotationEvents: (() => void) | null = null
 let cleanupScrollEvents: (() => void) | null = null
 let cleanupCaptureEvents: (() => void) | null = null
 let cleanupTooltipEvents: (() => void) | null = null
+let cleanupMigrationEvents: (() => void) | null = null
 let themeObserver: MutationObserver | null = null
 let copyNextCapture = false
 let lastCaptureBlob: Blob | null = null
 
 const PDF_PAGE_THEME_STYLE = `
-  div[style*="transform-origin"][style*="background-color"]{background:var(--ep-background-app)!important}
+  :host([data-sireader-page-mode="dark"]) div[style*="mix-blend-mode"][style*="background-color"]{mix-blend-mode:screen!important}
   :host([data-sireader-page-mode="dark"]) img[src^="blob:"]{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.92)}
 `
 const getCapability = <T = any>(registry: PluginRegistry, pluginId: string): T | null =>
@@ -365,13 +368,25 @@ const setupPdfTooltip = () => {
   }
 }
 
+const setupPdfMigration = () => {
+  cleanupMigrationEvents?.()
+  const onMigration = (event: Event) => {
+    const detail = (event as CustomEvent).detail || {}
+    if (detail.url && detail.url !== storageKey()) return
+    if (detail.phase !== 'progress' && detail.phase !== 'done') return
+    showMessage(detail.phase === 'done' ? '标注迁移完成' : `正在迁移标注 ${detail.done || 0}/${detail.total || 0}`, 1200)
+  }
+  window.addEventListener('sireader:pdf-migration', onMigration as EventListener)
+  cleanupMigrationEvents = () => window.removeEventListener('sireader:pdf-migration', onMigration as EventListener)
+}
+
 const saveAnnotations = async (registry: PluginRegistry) => {
-  if (!props.bookUrl) return
+  if (!storageKey()) return
   const annotation = getCapability<any>(registry, 'annotation')?.forDocument(documentId)
   if (!annotation?.exportAnnotations) return
   const items = await annotation.exportAnnotations().toPromise().catch(() => null)
   if (!items) return
-  await writeEmbedPdfAnnotations(props.bookUrl, items)
+  await writeEmbedPdfAnnotations(storageKey(), items)
   window.dispatchEvent(new Event('sireader:marks-updated'))
 }
 
@@ -388,7 +403,7 @@ const toProgress = (page: { pageNumber: number; totalPages: number }) => ({ ...p
 const saveProgress = async (page: { pageNumber: number; totalPages: number }) => {
   if (!props.bookUrl) return
   const progress = toProgress(page)
-  await writeEmbedPdfProgress(props.bookUrl, progress)
+  await writeEmbedPdfProgress(storageKey(), progress)
   const percent = progress.totalPages ? Math.round(progress.pageNumber / progress.totalPages * 100) : 0
   await bookshelfManager.updateProgress(props.bookUrl, percent, progress.pageNumber, `#page-${progress.pageNumber}`)
 }
@@ -411,6 +426,7 @@ const handleInit = (container: EmbedPdfContainer) => {
 const handleReady = async (registry: PluginRegistry) => {
   activeRegistry = registry
   emit('ready', registry)
+  setupPdfMigration()
   cleanupDocumentEvents?.()
   cleanupAnnotationEvents?.()
   cleanupScrollEvents?.()
@@ -418,7 +434,7 @@ const handleReady = async (registry: PluginRegistry) => {
   const scroll = getCapability<any>(registry, 'scroll')
   if (props.bookUrl && scroll?.forDocument) {
     let restored = false
-    const savedProgress = readEmbedPdfProgress(props.bookUrl).catch(() => null)
+    const savedProgress = readEmbedPdfProgress(storageKey()).catch(() => null)
     const restore = async () => {
       if (restored) return
       const saved = await savedProgress
@@ -441,6 +457,7 @@ const handleReady = async (registry: PluginRegistry) => {
     cleanupScrollEvents = () => { offPage?.(); offLayout?.() }
   }
   const documents = getCapability<any>(registry, 'document-manager')
+  const getPageHeights = () => (documents?.getDocumentState(documentId)?.document?.pages || []).map((page: any) => Number(page?.size?.height || 0))
   activeAnnotationScope = getCapability<any>(registry, 'annotation')?.forDocument(documentId) || null
   activeScrollScope = scroll?.forDocument?.(documentId) || null
   setupPdfCommands(registry)
@@ -450,11 +467,12 @@ const handleReady = async (registry: PluginRegistry) => {
     if (annotationsLoaded) return
     annotationsLoaded = true
     const annotation = activeAnnotationScope
-    if (!props.bookUrl || !annotation?.importAnnotations) return
-    const migrated = await migrateLegacyPdfAnnotationsToEmbedPdf(props.bookUrl).catch(() => null)
-    if (migrated?.length) showMessage((props.i18n?.pdfMigrated || 'Migrated {count} PDF annotations').replace('{count}', migrated.length), 1800, 'info')
-    const stored = await readEmbedPdfAnnotations(props.bookUrl).catch(() => null)
-    if (stored?.length) annotation.importAnnotations(stored)
+    if (!storageKey() || !annotation?.importAnnotations) return
+    const pageHeights = getPageHeights()
+    const stored = await readEmbedPdfAnnotations(storageKey(), pageHeights).catch(() => null)
+    const aligned = stored?.length && needsLegacyPdfTextAlign(stored) ? await alignLegacyPdfAnnotations(stored, registry, documents, documentId) : stored
+    if (aligned !== stored && aligned?.length) await writeEmbedPdfAnnotations(storageKey(), aligned)
+    if (aligned?.length) annotation.importAnnotations(aligned)
     window.dispatchEvent(new Event('sireader:marks-updated'))
     refreshPdfTooltipAnnotations()
     const offEvent = annotation.onAnnotationEvent?.(() => { queueAnnotationSave(registry); refreshPdfTooltipAnnotations() })
@@ -528,6 +546,7 @@ onBeforeUnmount(() => {
   cleanupScrollEvents?.()
   cleanupCaptureEvents?.()
   cleanupTooltipEvents?.()
+  cleanupMigrationEvents?.()
   themeObserver?.disconnect()
   activeAnnotationScope = null
   activeScrollScope = null
@@ -538,7 +557,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.embed-pdf-reader{width:100%;height:100%;display:block;background:var(--b3-theme-background)}
+.embed-pdf-reader{position:relative;width:100%;height:100%;display:block;background:var(--b3-theme-background)}
 .embed-pdf-reader :deep(> *){width:100%;height:100%}
 .embed-pdf-reader__loading{height:100%;display:flex;align-items:center;justify-content:center;color:var(--b3-theme-on-surface)}
 </style>
