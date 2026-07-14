@@ -463,8 +463,8 @@ onUnmounted(() => window.removeEventListener('sireaderSettingsUpdated', syncAnno
                     <option v-for="opt in (field.options || [])" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                   </select>
                   <label v-else-if="field.type === 'checkbox'" class="fn__flex-center"><input :checked="field.value" type="checkbox" class="b3-switch" @change="field.set(($event.target as HTMLInputElement).checked)"></label>
-                  <textarea v-else-if="field.type === 'textarea'" :value="field.value" class="b3-text-field sr-textarea-control" rows="1" @input="field.set(($event.target as HTMLTextAreaElement).value)"></textarea>
                 </div>
+                <textarea v-if="field.type === 'textarea'" :value="field.value" class="b3-text-field sr-textarea-control" rows="4" @input="field.set(($event.target as HTMLTextAreaElement).value)"></textarea>
                 <template v-if="field.type === 'search'">
                   <SettingRows v-if="field.docs?.length" :rows="docRows(field)" :i18n="i18n" />
                   <div>
@@ -523,7 +523,7 @@ onUnmounted(() => window.removeEventListener('sireaderSettingsUpdated', syncAnno
 .bs-tree :deep(.b3-list-item__text),.bs-tree :deep(.b3-text-field){min-width:0}
 .bs-tree :deep(.b3-list-item__meta){min-width:0;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bs-tree :deep(.b3-text-field){width:100%;max-width:100%;box-sizing:border-box}
-.sr-textarea-control{width:220px;max-width:45%;height:28px;min-height:28px;resize:vertical}
+.sr-textarea-control{width:100%;min-height:96px;margin-top:6px;resize:vertical}
 .bs-tree :deep(ul.b3-list.b3-list--background){border:1px solid var(--bs-tree-border);border-radius:var(--b3-border-radius)}
 .bs-tree :deep(.sr-section-title > svg.b3-list-item__graphic){width:14px;height:14px;flex:0 0 14px;color:var(--b3-theme-on-surface);opacity:.86;stroke-width:1.8;shape-rendering:geometricPrecision}
 .bs-tree :deep(.sr-section-title:hover > svg.b3-list-item__graphic){color:inherit;opacity:1}
