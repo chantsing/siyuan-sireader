@@ -70,10 +70,10 @@ import DockShell from './ui/DockShell.vue'
 import { gotoEPUB, initJump, pdfPageFromCfi } from '@/utils/jump'
 import { copyMark as copyMarkUtil } from '@/utils/copy'
 import { taskToPromise } from '@/utils/embedPdfActions'
-import { createKeyboardHandler, setupEpubKeyboard } from '@/utils/keyboard'
+import { isUserEmbedPdfAnnotation } from '@/core/dataMigration'
+import { createKeyboardHandler, setupEpubKeyboard, shouldHandleReaderKeydown } from '@/utils/keyboard'
 import { getTTSController } from '@/services/TTSPlayer'
 import { useLicense } from '@/composables/useLicense'
-import { isUserEmbedPdfAnnotation } from '@/core/dataMigration'
 const props = defineProps<{ file?: File; plugin: Plugin; settings?: ReaderSettings; url?: string; blockId?: string; bookInfo?: any; onReaderReady?: (r: FoliateReader) => void; i18n?: any }>()
 const i18n = computed(() => props.i18n || {})
 const { can, showUpgrade } = useLicense(i18n.value)
@@ -170,16 +170,17 @@ const hasSearchResults=computed(()=>searchResults.value.length>0)
 const searchCount=computed(()=>searchResults.value.length?`${searchResults.value.length}`:'0')
 const browserSource=(path='')=>path.startsWith('/data/public/')?path.replace('/data/public/','/public/'):path.startsWith('/public/')||path.startsWith('/assets/')||/^https?:\/\//.test(path)?path:path.startsWith('public/')||path.startsWith('assets/')?`/${path}`:''
 const PDF_MARKUP_TYPES:Record<string,number>={highlight:9,underline:10,squiggly:11,strikeout:12}
-const embedPdfStyle=(type:number,custom?:any)=>custom?.style||Object.entries(PDF_MARKUP_TYPES).find(([,value])=>value===type)?.[0]||'highlight'
+const PDF_REDACT_TYPE=28
 const embedPdfColor=(color='')=>(COLORS.find(item=>item.color===color)?.bg||color).toLowerCase()
-const embedPdfMarkColor=(a:any)=>[a.strokeColor,a.color,a.fontColor,a.backgroundColor].map(embedPdfColor).find(color=>color&&color!=='transparent')||'#ffcd45'
-const compact=(value:Record<string,any>)=>Object.fromEntries(Object.entries(value).filter(([,v])=>v!==undefined))
+const embedPdfStyle=(type:number,custom?:any)=>type===PDF_REDACT_TYPE?'redaction':custom?.style||Object.entries(PDF_MARKUP_TYPES).find(([,value])=>value===type)?.[0]||'highlight'
 const embedPdfMark=(item:any)=>{
-  const a=item?.annotation||item, page=(a.pageIndex??0)+1
-  const bookmark=a.custom?.type==='bookmark', text=a.custom?.title||a.custom?.text||a.contents||i18n.value.annotation||i18n.value.mark||'Annotation'
-  return Object.assign(item,{id:a.id,type:bookmark?'bookmark':a.type===1||a.type===3?'note':'highlight',format:'pdf',page,cfi:`#page-${page}`,title:bookmark?text:a.custom?.title,text:bookmark?text:a.custom?.text||a.contents||text,note:bookmark?'':a.custom?.note||a.contents||'',tags:a.custom?.tags||[],blockId:a.custom?.blockId,color:embedPdfMarkColor(a),style:embedPdfStyle(a.type,a.custom),timestamp:new Date(a.created||a.modified||Date.now()).getTime(),chapter:bookmark?'':a.custom?.chapter||`${i18n.value.page||'Page '}${page}${i18n.value.pageSuffix||''}`,customOrder:a.custom?.customOrder})
+  const a=item?.annotation||item, page=(a.pageIndex??0)+1, bookmark=a.custom?.type==='bookmark', redaction=a.type===PDF_REDACT_TYPE
+  const text=a.custom?.title||a.custom?.text||a.contents||(redaction?'遮蔽':i18n.value.annotation||i18n.value.mark||'Annotation')
+  const color=[a.strokeColor,a.color,a.fontColor,a.backgroundColor].map(embedPdfColor).find(c=>c&&c!=='transparent')||'#ffcd45'
+  return Object.assign(item,{id:a.id,type:bookmark?'bookmark':redaction?'redaction':a.type===1||a.type===3?'note':'highlight',format:'pdf',page,cfi:`#page-${page}`,title:bookmark?text:a.custom?.title,text:bookmark?text:a.custom?.text||a.contents||text,note:bookmark||redaction?'':a.custom?.note||a.contents||'',tags:a.custom?.tags||[],blockId:a.custom?.blockId,color,style:embedPdfStyle(a.type,a.custom),timestamp:new Date(a.created||a.modified||Date.now()).getTime(),chapter:bookmark?'':a.custom?.chapter||`${i18n.value.page||'Page '}${page}${i18n.value.pageSuffix||''}`,customOrder:a.custom?.customOrder})
 }
 const uniquePdfItems=(items:any[]=[])=>[...new Map(items.map((item:any)=>[(item.annotation||item)?.id,item]).filter(([id])=>id)).values()]
+const compact=(value:Record<string,any>)=>Object.fromEntries(Object.entries(value).filter(([,v])=>v!==undefined))
 const loadEmbedPdfMarks=async()=>{
   if(!embedPdfAnnotations.value)return
   embedPdfMarks.value=uniquePdfItems(await embedPdfAnnotations.value.exportAnnotations().toPromise().catch(()=>[])).filter(isUserEmbedPdfAnnotation).map(embedPdfMark)
@@ -353,7 +354,7 @@ const handleGoto=(e:CustomEvent)=>{
 const handleUndo=()=>markManager.value?.undo?.()
 const refreshEmbedPdfMarks=()=>{if(isEmbedPdfMode.value)void loadEmbedPdfMarks()}
 const keyboardHandler=createKeyboardHandler({handlePrev,handleNext,handleUndo})
-const handleKeydown=(e:KeyboardEvent)=>isThisActiveReader()&&keyboardHandler(e)
+const handleKeydown=(e:KeyboardEvent)=>shouldHandleReaderKeydown(isEmbedPdfMode.value,isThisActiveReader())&&keyboardHandler(e)
 const events=[
   ['sireaderSettingsUpdated',handleSettingsUpdate],
   ['sireader:goto',handleGoto],

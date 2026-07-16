@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support highlights, ink, shapes, forms, stamps, signatures, images, screenshots, search, printing, export, and backlinks, with annotation notes, dictionary, translation, themes, and bookshelf management.
 
-[![Version](https://img.shields.io/badge/version-2.1.1-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-2.1.2-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,34 @@ Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support high
 ---
 
 ## 📝 Latest Updates
+
+### v2.1.2 (2026.7.17)
+
+### Added
+
+- Added bookshelf import group presets, allowing books to be imported directly into a specified manual group.
+- Added an all-library annotation page view: the sidebar now keeps the annotation entry visible, shows all-library annotations folded by book hierarchy when no book is open, loads annotations for each expanded book on demand, supports all-library search, filtering, time/date/chapter/page/name sorting, and reduces initial loading and folded-state sorting overhead with large annotation sets.
+- Added PDF answer holes: creates black `Normal` blend-mode covers through EmbedPDF native highlight annotations, reveals content on hover, and can be deleted from the annotation outline.
+
+### Improved
+
+- Added PDF redaction/blackout usage notes: create pending redaction marks first, hover to preview the fill effect, then apply redaction after confirming the result.
+- Improved bookshelf group management, supporting group order adjustment in the add-content and organize-bookshelf panels, with added hints for quick actions and group operations.
+
+### Notes
+
+- Cross-page PDF drag selection continuing after pointer release is a known upstream issue in EmbedPDF 2.14.4. See official issue [#668](https://github.com/embedpdf/embed-pdf-viewer/issues/668). EmbedPDF currently has no public API to end selection while keeping the selected range, so SiReader does not add outer event patches and will wait for an upstream fix or version update.
+- PDF redaction/blackout follows EmbedPDF Redaction's two-step flow: first create pending redaction marks, then apply/commit to permanently remove content. Official references: [EmbedPDF Redaction Plugin](https://www.embedpdf.com/docs/react/headless/plugins/plugin-redaction) and [Adobe Acrobat redaction](https://helpx.adobe.com/acrobat/desktop/protect-documents/redact-pdfs/redact.html). "Hole/mask" for answer hiding is not destructive redaction; it is a removable black highlight annotation.
+- The `Guest` name and avatar in the PDF comment sidebar come from EmbedPDF annotation comment UI's default author display, not from SiReader multi-user comments. EmbedPDF documents `annotation.annotationAuthor` for the default author name (see [EmbedPDF Annotation Plugin](https://www.embedpdf.com/docs/vue/viewer/plugins/plugin-annotation)), but it is not stable in the current SiReader viewer path, so no outer replacement is added for now.
+
+### Fixed
+
+- Fixed the outer PDF reader keyboard handler intercepting EmbedPDF native command shortcuts; PDF mode now lets EmbedPDF handle shortcuts itself.
+- Fixed custom dark PDF themes not switching to dark page mode correctly; custom theme backgrounds now participate in EmbedPDF light/dark detection.
+- Fixed missing bookshelf cover indexes causing some book covers not to display, and automatically backfills covers from existing complete records.
+- Fixed local/remote import possibly getting stuck on "importing" when uploading book files and covers together, now writing through the SiYuan standard file API sequentially.
+- Fixed books matched by smart group rules being hidden from the home page; smart groups no longer affect book ownership.
+- Fixed the bookshelf context menu remaining visible after switching pages or opening overlays.
 
 ### v2.1.1 (2026.7.15)
 

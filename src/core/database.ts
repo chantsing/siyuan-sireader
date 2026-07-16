@@ -223,7 +223,7 @@ export class ReaderDatabase {
       url: book.url,
       title: book.title,
       author: book.author || '',
-      cover: '',
+      cover: book.cover || '',
       format: book.format,
       path: '',
       size: Number(book.size || 0),
@@ -290,10 +290,12 @@ export class ReaderDatabase {
 
   private async hydrateBook(book: Book) {
     const record = await this.readBookRecord(book)
-    return {
+    const full = {
       ...this.mergeRecordBook(book, record?.book),
       annotationCount: record?.annotations?.length || 0,
     }
+    if (!book.cover && full.cover) this.persistBookIndex(full)
+    return full
   }
 
   private async countRecordAnnotations(books: Book[]) {

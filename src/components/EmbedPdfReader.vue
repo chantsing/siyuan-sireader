@@ -48,11 +48,13 @@ let lastCaptureBlob: Blob | null = null
 const PDF_PAGE_THEME_STYLE = `
   :host([data-sireader-page-mode="dark"]) div[style*="mix-blend-mode"][style*="background-color"]{mix-blend-mode:screen!important}
   :host([data-sireader-page-mode="dark"]) img[src^="blob:"]{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.92)}
+  div[style*="background: rgb(0, 0, 0)"][style*="cursor: pointer"]:hover,
+  div[style*="background: #000000"][style*="cursor: pointer"]:hover{opacity:.08!important}
 `
 const getCapability = <T = any>(registry: PluginRegistry, pluginId: string): T | null =>
   (registry.getPlugin(pluginId) as any)?.provides?.() || null
 const pdfTheme = () => buildEmbedPdfTheme(props.theme, rootRef.value || undefined, props.customTheme)
-const pdfThemePreference = () => embedPdfThemePreference(props.theme, rootRef.value || undefined)
+const pdfThemePreference = () => embedPdfThemePreference(props.theme, rootRef.value || undefined, props.customTheme)
 const ensurePageThemeStyle = () => {
   const shadow = (activeContainer as any)?.shadowRoot as ShadowRoot | undefined
   if (!shadow || shadow.querySelector('style[data-sireader-page-theme]')) return
@@ -146,6 +148,27 @@ const sendPdfMark = async (mark: any, docId: string, registry: PluginRegistry) =
     i18n: props.i18n,
   })
 }
+const createPdfHoleFromSelection = async (registry: PluginRegistry) => {
+  const selection = getCapability<any>(registry, 'selection')?.forDocument(documentId)
+  const formatted = selection?.getFormattedSelection?.() || []
+  for (const item of formatted) {
+    if (!item?.rect || !item.segmentRects?.length) continue
+    activeAnnotationScope?.createAnnotation?.(item.pageIndex, {
+      id: `hole-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      type: 9,
+      pageIndex: item.pageIndex,
+      rect: item.rect,
+      segmentRects: item.segmentRects,
+      color: '#000000',
+      strokeColor: '#000000',
+      opacity: 1,
+      blendMode: 0,
+    })
+  }
+  selection?.clear?.()
+  queueAnnotationSave(registry)
+  refreshPdfTooltipAnnotations()
+}
 const updateSelectedPdfBlockId = (registry: PluginRegistry) => async (item: any, blockId: string) => {
   const annotation = item?.annotation || selectedPdfAnnotation()
   if (!annotation || !activeAnnotationScope?.updateAnnotation) return
@@ -201,6 +224,7 @@ const openPdfQuickSendMenu = (type: 'selection' | 'annotation', registry: Plugin
   const commandId = `sireader:send-${type}-menu`
   getCapability<any>(registry, 'ui')?.forDocument(documentId)?.openMenu?.(menuId, commandId, commandId)
 }
+const pdfSelectedMark = (registry: PluginRegistry) => getPdfSelectionMark(getCapability<any>(registry, 'selection')?.forDocument(documentId))
 const setupPdfCommands = (registry: PluginRegistry) => {
   const commands = getCapability<any>(registry, 'commands')
   const ui = getCapability<any>(registry, 'ui')
@@ -247,13 +271,23 @@ const setupPdfCommands = (registry: PluginRegistry) => {
     categories: ['selection', 'sireader-send'],
     action: () => openPdfQuickSendMenu('selection', registry),
   })
+  commands?.registerCommand?.({
+    id: 'sireader:create-hole',
+    label: '挖空',
+    icon: 'square',
+    action: () => void createPdfHoleFromSelection(registry),
+  })
+  ;[
+    ['dict', props.i18n?.dict || '词典', 'book', async (mark: any) => (await import('@/utils/dictionary')).openDict(mark.text, innerWidth / 2, innerHeight / 2, mark)],
+    ['translate', props.i18n?.translate || '翻译', 'text', (mark: any) => openPdfTranslate(mark.text)],
+  ].forEach(([id, label, icon, run]: any) => commands?.registerCommand?.({ id: `sireader:${id}-selection`, label, icon, action: async () => { const mark = await pdfSelectedMark(registry); if (mark?.text) run(mark) } }))
   docs.forEach((doc: any, index: number) => commands?.registerCommand?.({
     id: `sireader:send-selection:${index}`,
     label: doc.name || props.i18n?.sendTo || 'Send to',
     icon: 'fileImport',
     categories: ['selection', 'sireader-send'],
     action: async () => {
-      const mark = await getPdfSelectionMark(getCapability<any>(registry, 'selection')?.forDocument(documentId))
+      const mark = await pdfSelectedMark(registry)
       if (mark) await sendPdfMark(mark, doc.id, registry)
       getCapability<any>(registry, 'selection')?.forDocument(documentId)?.clear?.()
       getCapability<any>(registry, 'ui')?.forDocument(documentId)?.closeMenu?.('sireader-pdf-send-selection')
@@ -307,13 +341,16 @@ const setupPdfCommands = (registry: PluginRegistry) => {
     ] as any)
   }
   if (selectionMenu) {
-    const items = selectionMenu.items.filter((item: any) => !['sireader-send-selection-list', 'sireader-send-selection-divider', 'sireader-send-selection-menu'].includes(item.id))
-    selectionMenu.items = docs.length
-      ? addMissingPdfMenuItemsAfterFirst(items, [
+    const items = selectionMenu.items.filter((item: any) => !['sireader-create-mask', 'sireader-create-hole', 'sireader-dict-selection', 'sireader-translate-selection', 'sireader-send-selection-list', 'sireader-send-selection-divider', 'sireader-send-selection-menu'].includes(item.id))
+    selectionMenu.items = addMissingPdfMenuItemsAfterFirst(items, [
+      { type: 'command-button', id: 'sireader-create-hole', commandId: 'sireader:create-hole', variant: 'icon-text' },
+      { type: 'command-button', id: 'sireader-dict-selection', commandId: 'sireader:dict-selection', variant: 'icon' },
+      { type: 'command-button', id: 'sireader-translate-selection', commandId: 'sireader:translate-selection', variant: 'icon' },
+      ...(docs.length ? [
         { type: 'divider', id: 'sireader-send-selection-divider', categories: ['selection', 'sireader-send'] },
         { type: 'command-button', id: 'sireader-send-selection-menu', commandId: 'sireader:send-selection-menu', variant: 'icon-text', categories: ['selection', 'sireader-send'] },
-      ] as any)
-      : items
+      ] : []),
+    ] as any)
   }
   const sendMenu = (type: 'selection' | 'annotation') => ({
     id: `sireader-pdf-send-${type}`,
@@ -322,6 +359,7 @@ const setupPdfCommands = (registry: PluginRegistry) => {
   })
   const sendMenus = { 'sireader-pdf-send-annotation': sendMenu('annotation'), 'sireader-pdf-send-selection': sendMenu('selection') }
   ui.mergeSchema?.({
+    selectionMenus: schema.selectionMenus,
     menus: documentMenu ? {
       ...schema.menus,
       ...sendMenus,
@@ -520,6 +558,7 @@ const config = computed(() => ({
   stamp: { manifests: [{ url: '/plugins/siyuan-sireader/assets/default-stamps/{locale}/manifest.json', fallbackLocale: 'zh-CN' }] },
   permissions: { enforceDocumentPermissions: true },
   capture: { imageType: 'image/png', scale: 2, withAnnotations: true },
+  redaction: { useAnnotationMode: true, drawBlackBoxes: true },
   i18n: {
     defaultLocale: 'zh-CN',
     fallbackLocale: 'en',
@@ -527,7 +566,7 @@ const config = computed(() => ({
   theme: pdfTheme(),
 }))
 
-watch(() => [props.theme, props.customTheme], () => nextTick(applyPdfTheme), { deep: true })
+watch(() => [props.theme, props.customTheme?.color, props.customTheme?.bg, props.customTheme?.bgImg], () => nextTick(applyPdfTheme))
 watch(() => props.settings?.quickSendDocs, () => activeRegistry && setupPdfCommands(activeRegistry), { deep: true })
 themeObserver = new MutationObserver(() => requestAnimationFrame(applyPdfTheme))
 ;[document.documentElement, document.body].forEach(el => themeObserver?.observe(el, { attributes: true, attributeFilter: ['class', 'style', 'data-theme-mode'] }))

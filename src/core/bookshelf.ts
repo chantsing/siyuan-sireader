@@ -289,14 +289,22 @@ export class BookshelfManager {
   getAllTags = async () => this.useDb(db => db.getAllTags());
   
   // ===== 分组管理 =====
-  private writeGroups = async (groups: GroupConfig[]) => { await this.useDb(db => db.saveGroups(groups)); this.notify() }
+  private sortGroups = (groups: GroupConfig[]) => groups.map((group, i) => ({ ...group, order: Number.isFinite(group.order) ? group.order : i })).sort((a, b) => a.order - b.order)
+  private writeGroups = async (groups: GroupConfig[]) => { await this.useDb(db => db.saveGroups(groups.map((group, order) => ({ ...group, order })))); this.notify() }
   private matchGroup = (book: any, group: GroupConfig) => bookInGroup(book, group)
-  getGroups = async () => this.useDb(db => db.getGroups());
+  getGroups = async () => this.useDb(db => db.getGroups()).then(this.sortGroups);
   saveGroups = async (groups: GroupConfig[]) => this.writeGroups(groups);
   async upsertGroup(group: GroupConfig) {
     const groups = await this.getGroups(), index = groups.findIndex(item => item.id === group.id)
     await this.writeGroups(index > -1 ? groups.map(item => item.id === group.id ? { ...group } : item) : [...groups, group])
     return { created: index < 0 }
+  }
+  async moveGroup(gid: string, offset: -1 | 1) {
+    const groups = await this.getGroups(), from = groups.findIndex(group => group.id === gid), to = from + offset
+    if (from < 0 || to < 0 || to >= groups.length) return false
+    ;[groups[from], groups[to]] = [groups[to], groups[from]]
+    await this.writeGroups(groups)
+    return true
   }
   createGroup = async (name: string, type: 'folder' | 'smart' = 'folder') => {
     const groups = await this.getGroups(), newGroup: GroupConfig = { id: 'group_' + Date.now(), name, order: groups.length, type }
@@ -397,7 +405,8 @@ export class BookshelfManager {
     const { file: source, format, meta, title } = await this.prepareLocalBook(file, parsedMeta)
     const fingerprint = await fileFingerprint(source), dataId = await dataIdFromFingerprint(fingerprint)
     const url=`${format}://${source.name.replace(/\.[^.]+$/,'')}_${source.size}`
-    const [path, cover] = await Promise.all([saveBookFile(source, url), saveOptionalCover(meta.coverBlob, url)])
+    const path = await saveBookFile(source, url)
+    const cover = await saveOptionalCover(meta.coverBlob, url)
     return this.savePreparedBook({ url, path, format, size: source.size, meta, name: title, cover, dataId, fingerprint })
   }
 

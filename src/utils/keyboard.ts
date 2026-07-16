@@ -5,6 +5,8 @@ export interface KeyboardHandlers {
   handleUndo?: () => void
 }
 
+export const shouldHandleReaderKeydown = (isPdfMode: boolean, isActiveReader: boolean) => isActiveReader && !isPdfMode
+
 export const createKeyboardHandler = (handlers: KeyboardHandlers) => {
   return (e: KeyboardEvent) => {
     const t = e.target as HTMLElement

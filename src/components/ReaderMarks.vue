@@ -16,14 +16,14 @@
         <div v-if="item.isGroup" class="sr-card sr-group" @click="toggleGroup(item.key)">
           <span class="sr-bar" :class="{ collapsed: isCollapsed(item.key) }"></span>
           <div class="sr-group-content">
-            <span class="sr-group-title">{{ item.key }}</span>
-            <span class="sr-group-count">{{ item.items.length }}</span>
+            <span class="sr-group-title">{{ item.title || item.key }}</span>
+            <span class="sr-group-count">{{ item.count ?? item.items.length }}</span>
           </div>
         </div>
         <template v-for="(mark, index) in getMarkItems(item)" :key="mark?.id || index">
           <div
             class="sr-card"
-            :class="{ 'sr-card-edit': isEditing(mark), 'sr-card-drag': canDragMarks, 'is-dragging': dragState.from === getDragKey(mark), 'is-drag-over': dragState.over === getDragKey(mark) }"
+            :class="{ 'sr-card-edit': isEditing(mark), 'sr-card-drag': canDragMarks, 'sr-card-child': mark.bookUrl, 'is-dragging': dragState.from === getDragKey(mark), 'is-drag-over': dragState.over === getDragKey(mark) }"
             :draggable="canDragMarks"
             @dragstart="startMarkDrag($event, mark)"
             @dragenter.prevent="dragState.over = getDragKey(mark)"
@@ -217,8 +217,10 @@ const getMarkStyleOptions = (mark: any) => (mark?.type === 'highlight' || mark?.
 .sr-card.is-dragging{opacity:.45}
 .sr-card.is-drag-over{border-color:var(--b3-theme-primary);box-shadow:0 0 0 1px var(--b3-theme-primary) inset}
 .sr-group{align-items:center;cursor:pointer;border-radius:10px;background:transparent}
+.sr-card-child{margin-left:14px}
 .sr-group-content{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:1;min-width:0}
 .sr-group-title,.sr-group-count{font-size:15px;line-height:1.35;font-weight:600}
+.sr-group-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sr-group-count{opacity:.6}
 .sr-bar{width:4px;border-radius:999px;background:var(--b3-theme-primary);flex-shrink:0}
 .sr-bar.collapsed{opacity:.4}

@@ -163,6 +163,30 @@ The tooltip content is built from:
 
 Keep this path small. Avoid timers, global mousemove logging, selected-annotation fallbacks, or distance-based guessing; those make hover unstable or show the wrong note.
 
+## PDF Redaction Usage
+
+References:
+
+- EmbedPDF Redaction Plugin: https://www.embedpdf.com/docs/react/headless/plugins/plugin-redaction
+- EmbedPDF Annotation Plugin: https://www.embedpdf.com/docs/vue/viewer/plugins/plugin-annotation
+- EmbedPDF cross-page selection issue: https://github.com/embedpdf/embed-pdf-viewer/issues/668
+- Adobe Acrobat redaction behavior: https://helpx.adobe.com/acrobat/desktop/protect-documents/redact-pdfs/redact.html
+
+EmbedPDF redaction is a two-step workflow:
+
+- pending redactions mark content before the destructive apply/commit step
+- committed redactions remove the content and may draw black boxes, depending on EmbedPDF behavior/config
+
+SiReader uses EmbedPDF redaction annotation mode. Pending redactions are stored as `REDACT` annotations, show in the normal annotation list as "遮蔽", and can be deleted there before apply/commit.
+
+Correct usage: create pending redactions first, hover them to preview the filled redaction result, then delete or apply when the result is confirmed. Before commit, seeing only a border is expected because the original PDF content has not been removed yet. After commit, redaction remains destructive and cannot restore the original content.
+
+Answer holes are non-destructive EmbedPDF highlight annotations. The PDF selection menu creates a normal `HIGHLIGHT` annotation with black color, full opacity, and `Normal` blend mode, so EmbedPDF's own renderer covers the selected text. Hovering the black highlight lowers its opacity to reveal the original content. They stay in the normal annotation list and can be deleted there. Do not use SiReader-owned overlay layers, hidden annotations, `custom.type = "mask"`, or PDF redaction for this feature.
+
+Cross-page text selection is tracked as an upstream EmbedPDF 2.14.4 issue: when a drag crosses a page boundary, `pointerup` may not end text selection. EmbedPDF currently exposes `clear()` but no public API to end selection while keeping the selected range and menu visible, so SiReader should not add outer pointer-event patches for this.
+
+The `Guest` name and avatar shown in EmbedPDF's comment UI are annotation-author UI, not a SiReader multi-user comment feature. EmbedPDF documents `annotation.annotationAuthor` for the default annotation author, but it does not reliably replace that comment sidebar display in the current SiReader viewer path, so keep the default instead of adding a SiReader-side author/avatar patch.
+
 ## PDF Actions And Menus
 
 PDF reader actions should reuse shared TypeScript helpers and keep [`src/components/EmbedPdfReader.vue`](../src/components/EmbedPdfReader.vue) as thin EmbedPDF glue.
@@ -182,6 +206,8 @@ Quick send uses EmbedPDF's native UI model:
 - valid quick-send documents must have an `id`; the PDF menu only shows up to five
 
 Do not build custom floating quick-send menus. EmbedPDF `selectionMenus` do not expose a stable submenu item shape; use `menus + openMenu()` instead.
+
+Keyboard shortcuts should stay on EmbedPDF's native commands path. If SiReader adds shortcuts for PDF-only actions, register them through EmbedPDF command `shortcuts` instead of adding a SiReader-owned PDF `keydown` listener. The outer reader keyboard handler should not consume keys while the active reader is EmbedPDF.
 
 Screenshot copy uses EmbedPDF capture state:
 
@@ -228,7 +254,7 @@ EmbedPDF's `theme` config is used for viewer UI chrome only. It does not reliabl
 
 The current implementation lives in:
 
-- [`src/utils/embedPdfTheme.ts`](../src/utils/embedPdfTheme.ts): maps SiReader theme/custom theme to EmbedPDF UI theme preference and the small set of UI colors used by sidebars, comments, controls, scrollbars, and tooltips
+- [`src/utils/embedPdfTheme.ts`](../src/utils/embedPdfTheme.ts): maps SiReader theme/custom theme to EmbedPDF UI theme preference and the small set of UI colors used by sidebars, comments, controls, scrollbars, and tooltips. Custom theme background participates in the light/dark preference decision.
 - [`src/components/EmbedPdfReader.vue`](../src/components/EmbedPdfReader.vue): calls `setTheme()`, sets `data-sireader-page-mode`, and injects one small `style[data-sireader-page-theme]` into EmbedPDF's shadow root
 
 For EmbedPDF UI chrome, keep `background.surface` and `surfaceAlt` aligned with the reader theme background instead of SiYuan's app `--b3-theme-surface`; otherwise dark SiYuan panels can make PDF sidebars and comments too dark when the reader theme itself is lighter or custom. In dark-like reader themes, secondary/muted text should remain readable against that reader background.
@@ -250,7 +276,9 @@ If EmbedPDF does not expose a stable capability, SiReader leaves that PDF featur
 - Keep PDF backlinks as `sireader://open?...&cfi=%23page-N&id=...`.
 - Keep PDF click navigation on EmbedPDF page anchors, not EPUB CFI navigation.
 - Keep PDF search on EmbedPDF native search/highlight; do not add a custom PDF search renderer.
+- Keep PDF keyboard shortcuts on EmbedPDF native commands/`shortcuts`; do not add an outer PDF keydown layer.
 - Keep PDF page theme support to default/light and dark inversion only.
+- Keep custom theme background in the PDF light/dark preference decision.
 - Keep EmbedPDF UI theme mapping small; use the reader background for sidebars/comments and avoid unused full-token color maps.
 - Keep the PDF theme shadow style injected once with `data-sireader-page-theme`.
 - Keep PDF tooltip tied to EmbedPDF rendered pointer hit areas and annotation overlap.

@@ -16,15 +16,16 @@ const isDarkColor = (color = '') => {
   return !!parts && (parts[0] * 299 + parts[1] * 587 + parts[2] * 114) / 1000 < 128
 }
 
-export const embedPdfThemePreference = (theme = '', el?: Element): ThemePreference => {
+export const embedPdfThemePreference = (theme = '', el?: Element, customTheme?: ReadTheme): ThemePreference => {
   if (darkThemes.has(theme)) return 'dark'
   if (['default', 'almond', 'autumn', 'green', 'blue'].includes(theme)) return 'light'
+  if (theme === 'custom' && customTheme?.bg) return isDarkColor(cssVarValue(customTheme.bg, el)) ? 'dark' : 'light'
   const mode = [root().dataset.themeMode, root().className, document.body?.className].join(' ')
   return /dark/i.test(mode) || isDarkColor(cssVar('--b3-theme-background', '#ffffff', el)) ? 'dark' : 'light'
 }
 
 export const buildEmbedPdfTheme = (theme = '', el?: Element, customTheme?: ReadTheme): ThemeConfig => {
-  const preference = embedPdfThemePreference(theme, el)
+  const preference = embedPdfThemePreference(theme, el, customTheme)
   const readTheme = theme === 'custom' ? customTheme : PRESET_THEMES[theme]
   const bg = readTheme?.bg ? cssVarValue(readTheme.bg, el) : cssVar('--b3-theme-background', '#f3f4f6', el)
   const color = readTheme?.color ? cssVarValue(readTheme.color, el) : cssVar('--b3-theme-on-surface', '#111827', el)

@@ -1,14 +1,15 @@
 ﻿import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { showMessage } from 'siyuan'
-import { COLORS, STYLES, getColorMap } from '@/core/MarkManager'
+import { COLORS, STYLES, getColorMap, listAnnotations } from '@/core/MarkManager'
 import { useReaderState } from '@/core/epub/state'
 import { bookshelfManager } from '@/core/bookshelf'
+import { pdfMarkFromAnnotation } from '@/utils/embedPdfActions'
 import { copyMark as copyMarkUtil, hideFloat, openBlock, showFloat } from '@/utils/copy'
 import { jump } from '@/utils/jump'
 import { hideMarkPreview } from '@/utils/markPreview'
 import { collectMarkTagGroups, formatMarkTags, getMarkTags, parseMarkTags, toggleMarkTags } from '@/components/MarkCard.vue'
 
-type MarkSort = 'time' | 'date' | 'chapter' | 'page' | 'custom'
+type MarkSort = 'time' | 'date' | 'chapter' | 'page' | 'name' | 'custom'
 type MarkType = 'highlight' | 'note' | 'bookmark'
 type MarkFilterKey = 'types' | 'colors' | 'textStyles' | 'tags' | 'note'
 type MarkNoteFilter = 'all' | 'with-note'
@@ -19,6 +20,7 @@ export const MARK_SORT_OPTIONS = [
   { value: 'date', label: '日期' },
   { value: 'chapter', label: '章节' },
   { value: 'page', label: '页码' },
+  { value: 'name', label: '名称' },
   { value: 'custom', label: '自定义' },
 ] as const
 
@@ -81,10 +83,15 @@ export const useReaderMarks = (i18n?: any, context?: any) => {
   const editColor = ref('yellow')
   const editStyle = ref('highlight')
   const colors = getColorMap()
+  const libraryBooks = ref<any[]>([])
+  const libraryMarks = ref<Record<string, any[]>>({})
+  const loadingBooks = ref<Record<string, true>>({})
+  let librarySearchTask: Promise<void> | null = null
 
   const marks = computed(() => activeReader.value?.marks || (activeView.value as any)?.marks)
+  const isLibraryMode = computed(() => !marks.value)
   const isPdfMode = computed(() => !!(activeView.value as any)?.isPdf)
-  const readOnly = computed(() => !!getContext()?.readOnlyMarks)
+  const readOnly = computed(() => !!getContext()?.readOnlyMarks || isLibraryMode.value)
   const markSort = computed(() => markFilter.value.sort)
   const searchPlaceholder = '搜索标注、笔记、书签、墨迹、形状'
   const getEditColorOptions = () => isPdfMode.value && marks.value?.updateMark
@@ -97,14 +104,46 @@ export const useReaderMarks = (i18n?: any, context?: any) => {
   const allEntries = computed(() => {
     refreshKey.value
     const source = marks.value
-    if (!source) return []
+    if (!source) return Object.values(libraryMarks.value).flat()
     const annotations = source.getAnnotations?.() || []
     const bookmarks = source.getBookmarks?.() || []
     return [...bookmarks, ...annotations]
   })
+  const mapStoredMark = (book: any, item: any, items: any[]) => {
+    if (book.format === 'pdf') {
+      const annotation = item?.annotation || item?.object || item
+      return { ...pdfMarkFromAnnotation(annotation, items.map((x: any) => x?.annotation || x?.object || x)), bookUrl: book.url, bookTitle: book.title, color: annotation.color, style: annotation.type, timestamp: annotation.updated || annotation.created || Date.now() }
+    }
+    const data = item?.data || {}
+    return { id: item.id, type: item.type, format: data.format || book.format, cfi: data.cfi || item.loc, section: data.section, page: data.page, text: item.text, note: item.note, tags: item.tags || [], color: item.color, style: data.style, timestamp: item.created, blockId: item.block, chapter: item.chapter, title: data.title, image: data.image, progress: data.progress, customOrder: data.customOrder, bookUrl: book.url, bookTitle: book.title }
+  }
+  const loadLibraryBooks = async () => {
+    const books = await bookshelfManager.getBooks()
+    libraryBooks.value = books
+    collapsed.value = { ...collapsed.value, ...Object.fromEntries(books.map((book: any) => [book.url, true])) }
+    if (hasLibraryScan.value) void loadAllBookMarks()
+  }
+  const loadBookMarks = async (book: any) => {
+    if (!book?.url || libraryMarks.value[book.url] || loadingBooks.value[book.url]) return
+    loadingBooks.value = { ...loadingBooks.value, [book.url]: true }
+    try {
+      const items = await listAnnotations(book.url)
+      libraryMarks.value = { ...libraryMarks.value, [book.url]: items.map(item => mapStoredMark(book, item, items)) }
+    } finally {
+      const { [book.url]: _, ...rest } = loadingBooks.value
+      loadingBooks.value = rest
+    }
+  }
+  const loadAllBookMarks = () => librarySearchTask ||= (async () => {
+    if (!hasLibraryScan.value) return
+    for (const book of libraryBooks.value) await loadBookMarks(book)
+  })().finally(() => { librarySearchTask = null })
+  const scanLibrary = () => { if (isLibraryMode.value && hasLibraryScan.value) void loadAllBookMarks() }
 
   const searchText = (item: any) => [item?.title, item?.text, item?.note, ...getMarkTags(item), item?.chapter, item?.key, item?.page && `page ${item.page}`].filter(Boolean).join(' ').toLowerCase()
   const hasActiveFilters = computed(() => !!(markFilter.value.types.length || markFilter.value.colors.length || markFilter.value.textStyles.length || markFilter.value.tags.length || markFilter.value.note !== 'all' || markFilter.value.sort !== 'time' || markReverse.value))
+  const hasLibraryContentFilter = computed(() => !!(keyword.value.trim() || markFilter.value.types.length || markFilter.value.colors.length || markFilter.value.textStyles.length || markFilter.value.tags.length || markFilter.value.note !== 'all'))
+  const hasLibraryScan = computed(() => hasLibraryContentFilter.value || hasActiveFilters.value)
   const filterLabel = computed(() => hasActiveFilters.value ? '筛选中' : '筛选')
   const typeMode = computed(() => TYPE_CYCLE.find(item => item.value === (markFilter.value.types.length === 1 ? markFilter.value.types[0] : null)) || TYPE_CYCLE[0])
   const toolbarMenuAction = computed(() => ({ id: 'type', icon: typeMode.value.icon, label: typeMode.value.label, tooltipDir: 'sw', active: !!typeMode.value.value }))
@@ -128,7 +167,7 @@ export const useReaderMarks = (i18n?: any, context?: any) => {
   const filtered = computed(() => allEntries.value.filter(matchFilter))
   const isCustomSort = computed(() => markSort.value === 'custom')
   const canDragMarks = computed(() => !readOnly.value && !isPdfMode.value && isCustomSort.value && !keyword.value)
-  const isGroupedMode = computed(() => !['time', 'custom'].includes(markSort.value))
+  const isGroupedMode = computed(() => !['time', 'name', 'custom'].includes(markSort.value))
   const reverseList = <T,>(items: T[]) => markReverse.value ? [...items].reverse() : items
   const isPageSort = (sort: MarkSort) => sort === 'page' || (sort === 'chapter' && isPdfMode.value)
   const groupKey = (item: any, sort: MarkSort) => {
@@ -136,11 +175,37 @@ export const useReaderMarks = (i18n?: any, context?: any) => {
     if (sort === 'chapter') return item.chapter || '未分类'
     return new Date(item.timestamp || 0).toISOString().slice(0, 10)
   }
+  const isItemPageSort = (sort: MarkSort, item: any) => sort === 'page' || (sort === 'chapter' && (isPdfMode.value || item.format === 'pdf'))
+  const compareMarks = (a: any, b: any) => {
+    if (isCustomSort.value) return (a.customOrder ?? ORDER_MAX) - (b.customOrder ?? ORDER_MAX) || (b.timestamp || 0) - (a.timestamp || 0)
+    if (markSort.value === 'name') return mainText(a).localeCompare(mainText(b)) || (b.timestamp || 0) - (a.timestamp || 0)
+    if (isItemPageSort(markSort.value, a) || isItemPageSort(markSort.value, b)) return (a.page || 0) - (b.page || 0) || (b.timestamp || 0) - (a.timestamp || 0)
+    if (markSort.value === 'chapter') return (a.chapter || '').localeCompare(b.chapter || '') || (b.timestamp || 0) - (a.timestamp || 0)
+    if (markSort.value === 'date') return groupKey(a, 'date').localeCompare(groupKey(b, 'date')) || (b.timestamp || 0) - (a.timestamp || 0)
+    return (b.timestamp || 0) - (a.timestamp || 0) || (a.page || 0) - (b.page || 0)
+  }
+  const sortMarks = (items: any[]) => [...items].sort((a: any, b: any) => compareMarks(a, b) * (markReverse.value ? -1 : 1))
 
   const list = computed(() => {
+    if (isLibraryMode.value) {
+      const q = keyword.value.toLowerCase()
+      const dir = markReverse.value ? -1 : 1
+      const match = (item: any, book: any) => matchFilter(item) && (!q || searchText(item).includes(q) || `${book.title} ${book.author}`.toLowerCase().includes(q))
+      return libraryBooks.value.map((book, index) => {
+        const loaded = libraryMarks.value[book.url]
+        const matched = (loaded || []).filter(item => match(item, book))
+        const first = matched.reduce((best, item) => !best || compareMarks(item, best) * dir < 0 ? item : best, null)
+        const items = (!isCollapsed(book.url) || keyword.value) ? sortMarks(matched) : []
+        return { key: book.url, title: book.title || book.url, count: loadingBooks.value[book.url] ? '...' : loaded ? matched.length : '', items, first, isGroup: true, isBookGroup: true, book, loading: !!loadingBooks.value[book.url], index }
+      }).filter(group => !hasLibraryContentFilter.value || group.loading || group.first || `${group.book.title} ${group.book.author}`.toLowerCase().includes(q))
+        .sort((a, b) => markSort.value === 'name'
+          ? `${a.book.title}`.localeCompare(`${b.book.title}`) * dir
+          : a.first && b.first ? compareMarks(a.first, b.first) * dir : a.first ? -1 : b.first ? 1 : a.index - b.index)
+    }
     let items = filtered.value.filter(item => !keyword.value || searchText(item).includes(keyword.value.toLowerCase()))
     if (markSort.value === 'time') return reverseList(items.sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0) || (a.page || 0) - (b.page || 0)))
     if (isCustomSort.value) return reverseList(items.sort((a: any, b: any) => (a.customOrder ?? ORDER_MAX) - (b.customOrder ?? ORDER_MAX) || (b.timestamp || 0) - (a.timestamp || 0)))
+    if (markSort.value === 'name') return sortMarks(items)
     items = [...items].sort((a: any, b: any) => {
       if (isPageSort(markSort.value)) return (a.page || 0) - (b.page || 0) || (b.timestamp || 0) - (a.timestamp || 0)
       const ak = groupKey(a, markSort.value)
@@ -171,10 +236,14 @@ export const useReaderMarks = (i18n?: any, context?: any) => {
   })
   const markTagGroups = computed(() => collectMarkTagGroups(allEntries.value, editTagList.value))
 
-  const emptyText = computed(() => keyword.value ? (i18n?.notFound || '未找到标注') : (i18n?.empty || '暂无标注'))
+  const emptyText = computed(() => isLibraryMode.value && !libraryBooks.value.length ? '暂无书籍' : keyword.value ? (i18n?.notFound || '未找到标注') : (i18n?.empty || '暂无标注'))
   const isCollapsed = (key: string) => !!collapsed.value[key]
-  const getMarkItems = (item: any) => item?.isGroup ? (isCollapsed(item.key) ? [] : item.items) : [item]
-  const toggleGroup = (key: string) => isCollapsed(key) ? (({ [key]: _, ...rest }) => { collapsed.value = rest })(collapsed.value) : collapsed.value = { ...collapsed.value, [key]: true }
+  const getMarkItems = (item: any) => item?.isGroup ? (isCollapsed(item.key) && !keyword.value ? [] : item.items) : [item]
+  const toggleGroup = (key: string) => {
+    const item = list.value.find((row: any) => row.key === key)
+    if (item?.isBookGroup) void loadBookMarks(item.book)
+    return isCollapsed(key) ? (({ [key]: _, ...rest }) => { collapsed.value = rest })(collapsed.value) : collapsed.value = { ...collapsed.value, [key]: true }
+  }
   const toggleGroups = () => collapsed.value = markAllExpanded.value ? Object.fromEntries(markGroupKeys.value.map(key => [key, true])) : {}
 
   const getDragKey = (item: any) => item.groupId || item.id || `${item.type}-${item.page || item.section || 0}`
@@ -250,7 +319,7 @@ export const useReaderMarks = (i18n?: any, context?: any) => {
   const getCopySettings = () => activeView.value?.isOnlineContext
     ? { ...(activeView.value?.settings || {}), noteInsertTarget: 'clipboard' }
     : activeView.value?.settings
-  const copyMark = (item: any) => copyMarkUtil(item, { bookUrl: getUrl(), isPdf: isPdfMode.value, reader: activeReader.value, settings: getCopySettings(), showMsg })
+  const copyMark = (item: any) => copyMarkUtil(item, { bookUrl: item.bookUrl || getUrl(), isPdf: item.format === 'pdf' || isPdfMode.value, reader: activeReader.value, settings: getCopySettings(), showMsg })
   const importMark = async (item: any) => {
     if (readOnly.value) return
     const { importMark: doImport } = await import('@/utils/copy')
@@ -292,7 +361,13 @@ export const useReaderMarks = (i18n?: any, context?: any) => {
     }
   }
 
-  const goTo = (item: any) => jump(item, activeView.value, activeReader.value, marks.value)
+  const goTo = async (item: any) => {
+    if (!isLibraryMode.value || !item.bookUrl) return jump(item, activeView.value, activeReader.value, marks.value)
+    const book = await bookshelfManager.getBook(item.bookUrl)
+    if (!book) return showMsg('书籍不存在', 'error')
+    const [{ openOrActivateBook }, { settingsManager }, { usePlugin }] = await Promise.all([import('@/utils/bookOpen'), import('@/composables/useSetting'), import('@/main')])
+    await openOrActivateBook(usePlugin(), book, await settingsManager.get(), () => window.dispatchEvent(new CustomEvent('sireader:goto', { detail: { cfi: item.cfi, id: item.id, bookUrl: item.bookUrl } })))
+  }
   const onBlockEnter = (event: MouseEvent, id: string) => showFloat(id, event.target as HTMLElement)
   const onMarkEnter = (_event: MouseEvent, _item: any) => {
     return
@@ -300,6 +375,11 @@ export const useReaderMarks = (i18n?: any, context?: any) => {
   const onMarkLeave = () => hideMarkPreview()
 
   const refresh = () => refreshKey.value++
+  const refreshLibrary = () => {
+    if (!isLibraryMode.value) return refresh()
+    libraryMarks.value = {}
+    void loadLibraryBooks()
+  }
 
   const isMarkFilterActive = (key: MarkFilterKey, value: string) => key === 'note' ? markFilter.value.note === value : markFilter.value[key].includes(value)
   const toggleMarkFilterItem = (key: MarkFilterKey, value: string) => key === 'note' ? markFilter.value.note = value as MarkNoteFilter : toggleArray(markFilter.value[key], value)
@@ -318,6 +398,7 @@ export const useReaderMarks = (i18n?: any, context?: any) => {
   }
 
   const loadState = async () => {
+    if (isLibraryMode.value) return
     const book = await bookshelfManager.getBook(getUrl())
     const state = (book as any)?.markPanelState
     if (!book) return
@@ -325,19 +406,25 @@ export const useReaderMarks = (i18n?: any, context?: any) => {
     markReverse.value = !!state?.reverse
   }
   const saveState = async () => {
+    if (isLibraryMode.value) return
     const url = getUrl()
     if (!url) return
     await bookshelfManager.updateBook(url, { markPanelState: { filter: markFilter.value, reverse: markReverse.value } })
   }
 
-  watch(list, () => {}, { immediate: true })
-  watch(markReverse, saveState)
-  watch(markFilter, saveState, { deep: true })
+  watch(markReverse, () => { saveState(); scanLibrary() })
+  watch(markFilter, () => { saveState(); scanLibrary() }, { deep: true })
+  watch(keyword, scanLibrary)
+  watch(isLibraryMode, value => value ? void loadLibraryBooks() : void loadState(), { immediate: true })
   onMounted(() => {
-    window.addEventListener('sireader:marks-updated', refresh)
+    window.addEventListener('sireader:marks-updated', refreshLibrary)
+    window.addEventListener('sireader:bookshelf-updated', refreshLibrary)
     setTimeout(loadState, 120)
   })
-  onUnmounted(() => window.removeEventListener('sireader:marks-updated', refresh))
+  onUnmounted(() => {
+    window.removeEventListener('sireader:marks-updated', refreshLibrary)
+    window.removeEventListener('sireader:bookshelf-updated', refreshLibrary)
+  })
 
   return {
     MARK_SORT_OPTIONS,

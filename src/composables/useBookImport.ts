@@ -181,7 +181,8 @@ export const importRemoteBook = async (request: RemoteDownloadRequest) => {
     ? new File([file], `${normalizeBookTitle(info.title) || 'book'}.${format}`, { type: file.type || 'application/octet-stream' })
     : file
   const fingerprint = await fileFingerprint(source), dataId = await dataIdFromFingerprint(fingerprint)
-  const [path, cover] = await Promise.all([saveBookFile(source, request.url), downloadCover(request.coverUrl, request.url)])
+  const path = await saveBookFile(source, request.url)
+  const cover = await downloadCover(request.coverUrl, request.url)
   await bookshelfManager.addBook({ url: request.url, title: normalizeBookTitle(info?.title || source.name.replace(/\.[^.]+$/, '')) || info?.title || source.name, author: info?.author || '未知作者', cover, format, path, size: source.size, tags: importTags(info), metadata: remoteMetadata(info), dataId, fingerprint })
 }
 

@@ -198,12 +198,13 @@ const props = withDefaults(defineProps<{
   getGroupCoverUrls: (group: GroupConfig) => string[]
   getProgress: (book: Book) => string
   currentGroup?: string | null
+  currentGroupIsSmart?: boolean
   selecting?: boolean
   selectedUrls?: string[]
   dense?: boolean
   showGroupMeta?: boolean
   hiddenItems?: string[]
-}>(), { gridStyle: () => ({}), groupCounts: () => ({}), currentGroup: null, dense: false, showGroupMeta: true })
+}>(), { gridStyle: () => ({}), groupCounts: () => ({}), currentGroup: null, currentGroupIsSmart: false, dense: false, showGroupMeta: true })
 
 const emit = defineEmits<{
   'select-group': [id: string]
@@ -231,7 +232,7 @@ const dragTargetGroupId = ref('')
 const dragHomeActive = ref(false)
 
 const booksForGroup = (group: GroupConfig, books: Book[]) => books.filter(book => bookInGroup(book, group))
-const groupedBook = (book: Book, groups: GroupItem[]) => groups.some(g => bookInGroup(book, g.data))
+const groupedBook = (book: Book, groups: GroupItem[]) => groups.some(g => g.data.type === 'folder' && bookInGroup(book, g.data))
 
 const compactTree = computed<CompactNode[]>(() => {
   const groups = props.items.filter(isGroup)
@@ -291,7 +292,7 @@ const isGroupDropTarget = (row: CompactRow | Item) => {
   return !!groupId && dragTargetGroupId.value === groupId
 }
 const canDropToGroup = (groupId: string) => !draggedBookGroups.value.includes(groupId)
-const showHomeDrop = computed(() => !!draggedBookUrl.value && !!draggedBookGroups.value.length)
+const showHomeDrop = computed(() => !props.currentGroupIsSmart && !!draggedBookUrl.value && !!draggedBookGroups.value.length)
 const resetDragState = () => {
   draggedBookUrl.value = ''
   draggedBookGroups.value = []
@@ -331,14 +332,14 @@ const handleGroupDrop = (row: CompactRow | Item, event: DragEvent) => {
   emit('move-book-group', url, groupId)
 }
 const handleRootDragOver = (event: DragEvent) => {
-  if (!dragBookUrl(event) || !props.currentGroup) return
+  if (!dragBookUrl(event) || !props.currentGroup || props.currentGroupIsSmart) return
   event.preventDefault()
   dragTargetGroupId.value = ''
   event.dataTransfer && (event.dataTransfer.dropEffect = 'move')
 }
 const handleRootDrop = (event: DragEvent) => {
   const url = dragBookUrl(event)
-  if (!url || !props.currentGroup) return
+  if (!url || !props.currentGroup || props.currentGroupIsSmart) return
   event.preventDefault()
   resetDragState()
   emit('move-book-home', url)

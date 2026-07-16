@@ -55,7 +55,7 @@ const SettingsDock = defineComponent({
     const activeTab = ref('bookshelf')
     const model = ref(props.modelValue)
     const navItems = computed(() => (model.value.navItems?.length ? model.value.navItems : SETTINGS_TABS).filter((item: any) => !['dictionary', 'weread'].includes(item.id)).sort((a: any, b: any) => a.order - b.order))
-    const tabs = computed(() => navItems.value.filter((item: any) => item.enabled && (item.id === 'appearance' || item.id === 'bookshelf' || item.id === 'search' || canShowToc.value)).map((item: any) => ({ id: item.id, icon: item.icon, tip: props.i18n?.[item.tip] || item.tip })))
+    const tabs = computed(() => navItems.value.filter((item: any) => item.enabled && (item.id !== 'toc' || canShowToc.value)).map((item: any) => ({ id: item.id, icon: item.icon, tip: props.i18n?.[item.tip] || item.tip })))
     const tooltipDir = computed(() => ({ left: 'e', right: 'w', top: 's', bottom: 'n' }[model.value.navPosition] || 'n'))
     const handleUpdate = (value: any) => {
       model.value = value
@@ -66,7 +66,7 @@ const SettingsDock = defineComponent({
       activeTab.value = 'appearance'
       setTimeout(() => (window as any)._openLicenseContent?.(), 50)
     }
-    watch(canShowToc, show => !show && ['toc', 'mark'].includes(activeTab.value) && (activeTab.value = 'bookshelf'), { immediate: true })
+    watch(canShowToc, show => !show && activeTab.value === 'toc' && (activeTab.value = 'bookshelf'), { immediate: true })
     watch(tabs, list => list.length && !list.some((t: any) => t.id === activeTab.value) && (activeTab.value = list[0].id), { immediate: true })
     onMounted(() => { ;(window as any)._openLicense = openLicense })
     onUnmounted(() => { if ((window as any)._openLicense === openLicense) delete (window as any)._openLicense })

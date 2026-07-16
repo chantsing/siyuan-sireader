@@ -1,5 +1,33 @@
 # 思阅 SiReader - 更新日志
 
+## v2.1.2（2026.7.17）
+
+### 新增
+
+- 新增书架导入分组预设，导入书籍时可直接指定导入到手动分组。
+- 新增标注页全库视图：侧栏固定显示标注入口，未打开书籍时按书籍层级折叠展示全库标注；展开书籍时按需加载该书标注，支持全库搜索、筛选、时间/日期/章节/页码/名称排序，并减少大量标注下的初始加载和折叠状态排序开销。
+- 新增 PDF 挖空：通过 EmbedPDF 原生高亮注解创建黑色 Normal 混合模式遮挡，鼠标悬停时显示内容，可在标注目录中删除。
+- 
+### 优化
+
+- 补充 PDF 遮蔽/涂黑工具使用说明：先创建待遮蔽标记，鼠标悬停可预览填充效果，确认后再应用遮蔽。
+- 优化书架分组管理，支持在添加内容和整理书架面板中调整分组顺序，并为快捷操作和分组操作补充提示说明。
+
+### 说明
+
+- PDF 跨页拖选后松开仍继续选择是 EmbedPDF 2.14.4 上游已知问题，见官方 issue [#668](https://github.com/embedpdf/embed-pdf-viewer/issues/668)。当前 EmbedPDF 没有“结束选择但保留选区”的公开 API，SiReader 不做外层事件补丁，等待上游修复或版本更新。
+- PDF 遮蔽/涂黑遵循 EmbedPDF Redaction 的两步流程：先创建待应用的 redaction 标记，再 apply/commit 永久移除内容。官方说明见 [EmbedPDF Redaction Plugin](https://www.embedpdf.com/docs/react/headless/plugins/plugin-redaction) 和 [Adobe Acrobat redaction](https://helpx.adobe.com/acrobat/desktop/protect-documents/redact-pdfs/redact.html)。用于答案遮挡的“挖空/遮罩”不是破坏性 redaction，而是可删除的黑色高亮注解。
+- PDF 评论侧栏中的 `Guest` 和头像来自 EmbedPDF 注解评论 UI 的默认作者展示，不是 SiReader 的多人评论功能。EmbedPDF 官方说明可通过 `annotation.annotationAuthor` 配置默认作者名（见 [EmbedPDF Annotation Plugin](https://www.embedpdf.com/docs/vue/viewer/plugins/plugin-annotation)），但当前 SiReader 使用的 viewer 中该展示未稳定生效，因此暂不做外层替换。
+
+### 修复
+
+- 修复 PDF 阅读器外层键盘处理拦截 EmbedPDF 原生命令快捷键的问题，PDF 模式下交由 EmbedPDF 自身处理快捷键。
+- 修复 PDF 自定义暗色主题未正确切换暗色页面模式的问题，自定义主题背景会参与 EmbedPDF 明暗主题判断。
+- 修复书架封面索引缺失导致部分书籍封面不显示的问题，并自动回填已有完整记录中的封面。
+- 修复本地/远程导入同时上传书籍文件和封面时可能卡在“导入中”的问题，改为顺序写入思源标准文件 API。
+- 修复智能分组命中的书籍被首页隐藏的问题，智能分组不再影响书籍归属。
+- 修复书架右键菜单在切换页面或打开弹层后仍残留显示的问题。
+
 ## v2.1.1（2026.7.15）
 
 ### 新增
