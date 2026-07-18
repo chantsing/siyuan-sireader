@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support highlights, ink, shapes, forms, stamps, signatures, images, screenshots, search, printing, export, and backlinks, with annotation notes, dictionary, translation, themes, and bookshelf management.
 
-[![Version](https://img.shields.io/badge/version-2.1.2-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-2.1.4-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,36 @@ Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support high
 ---
 
 ## 📝 Latest Updates
+
+### v2.1.4 (2026.7.18)
+
+### Added
+
+- Added a bottom PDF outline button, allowing the outline to be opened quickly from the bottom page controls.
+- Added a bottom PDF top-toolbar toggle, making it easy to show or hide the top toolbar while reading.
+- Added PDF outline positioning, automatically highlighting the current outline item while turning pages.
+- Added one-click PDF annotation hiding on the annotation page for a cleaner original-document view.
+- Added mobile PDF double-tap zoom, allowing the current page to be enlarged quickly in two-page reading.
+- Added a bottom mobile PDF close button for smoother phone reading.
+
+### Improved
+
+- Improved PDF native annotation loading by waiting for EmbedPDF native annotations before filling in missing local items, avoiding duplicate imports of the same annotation batch during opening.
+- Improved PDF annotation save triggering: the native annotation `loaded` event now only refreshes the list and no longer triggers full-document annotation export and write.
+- Improved PDF annotation sidebar reading and rendering by preferring EmbedPDF's lightweight `getAnnotations()` and rendering large annotation sets in batches, reducing freezes from thousands of simultaneous cards.
+- Improved PDF annotation tooltips and scroll pre-rendering by caching only annotations with notes/replies and reducing off-screen rendering pressure in high-density annotated documents.
+- Greatly improved PDF opening speed, with smoother mobile loading and page turning.
+- Improved bookshelf import: local import opens the file picker directly, and link import supports local paths, `file://`, remote direct links, and SiYuan links.
+- Supported importing NAS direct links, with backlinks continuing to open and jump to the corresponding location.
+- Local files can choose "Copy Import" or "Link Import"; remote links and SiYuan links only show "Link Import" to avoid confusion.
+- The add window now closes automatically after successful import, and batch operations exit batch selection after success.
+- PDFs now remember the last selected zoom mode, such as fit width or fit view, and reuse it on later opens.
+- PDF opening now prioritizes native outlines/bookmarks for faster chapter navigation.
+- PDF shape annotations can include region images when copying backlinks or quick-sending, reuse the template "image" variable, and generate shorter image resource names.
+
+### Fixed
+
+- Fixed backlinks from link-imported books failing to open, inaccurate PDF jumps, and hover previews missing surrounding context.
 
 ### v2.1.2 (2026.7.17)
 

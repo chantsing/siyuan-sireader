@@ -10,72 +10,72 @@
     @click="showOrganize = false"
     @toolbar-action="handleToolbarAction"
   >
-    <div class="sr-list" :class="{ 'is-empty': !list.length }">
+    <div class="sr-list" :class="{ 'is-empty': !list.length }" @scroll.passive="handleMarkListScroll">
       <div v-if="!list.length" class="sr-empty">{{ emptyText }}</div>
-      <template v-else v-for="(item, i) in list" :key="item.key || item.groupId || item.id || item.page || i">
-        <div v-if="item.isGroup" class="sr-card sr-group" @click="toggleGroup(item.key)">
-          <span class="sr-bar" :class="{ collapsed: isCollapsed(item.key) }"></span>
+      <template v-else v-for="row in visibleMarkRows.rows" :key="row.key">
+        <div v-if="row.type === 'group'" class="sr-card sr-group" @click="toggleGroup(row.item.key)">
+          <span class="sr-bar" :class="{ collapsed: isCollapsed(row.item.key) }"></span>
           <div class="sr-group-content">
-            <span class="sr-group-title">{{ item.title || item.key }}</span>
-            <span class="sr-group-count">{{ item.count ?? item.items.length }}</span>
+            <span class="sr-group-title">{{ row.item.title || row.item.key }}</span>
+            <span class="sr-group-count">{{ row.item.count ?? row.item.items?.length ?? 0 }}</span>
           </div>
         </div>
-        <template v-for="(mark, index) in getMarkItems(item)" :key="mark?.id || index">
-          <div
-            class="sr-card"
-            :class="{ 'sr-card-edit': isEditing(mark), 'sr-card-drag': canDragMarks, 'sr-card-child': mark.bookUrl, 'is-dragging': dragState.from === getDragKey(mark), 'is-drag-over': dragState.over === getDragKey(mark) }"
-            :draggable="canDragMarks"
-            @dragstart="startMarkDrag($event, mark)"
-            @dragenter.prevent="dragState.over = getDragKey(mark)"
-            @dragover.prevent
-            @drop.prevent="dropMark(mark)"
-            @dragend="endMarkDrag()"
-            @mouseenter="onMarkEnter($event, mark)"
-            @mouseleave="onMarkLeave"
+        <div
+          v-else
+          class="sr-card"
+          :class="{ 'sr-card-edit': isEditing(row.mark), 'sr-card-drag': canDragMarks, 'sr-card-child': row.mark.bookUrl, 'is-dragging': dragState.from === getDragKey(row.mark), 'is-drag-over': dragState.over === getDragKey(row.mark) }"
+          :draggable="canDragMarks"
+          @dragstart="startMarkDrag($event, row.mark)"
+          @dragenter.prevent="dragState.over = getDragKey(row.mark)"
+          @dragover.prevent
+          @drop.prevent="dropMark(row.mark)"
+          @dragend="endMarkDrag()"
+          @mouseenter="onMarkEnter($event, row.mark)"
+          @mouseleave="onMarkLeave"
+        >
+          <MarkCard
+            :time="formatDateTime(row.mark.timestamp || Date.now())"
+            :i18n="props.i18n"
+            :tags="getMarkTags(row.mark)"
+            :tag-groups="markTagGroups"
+            :selected-tags="editTagList"
+            :tag-input="editTags"
+            :editing="isEditing(row.mark)"
+            :editable="canEdit(row.mark)"
+            :text="isEditing(row.mark) ? editText : mainText(row.mark)"
+            :chapter="getMarkChapter(row.mark)"
+            :note="isEditing(row.mark) ? editNote : row.mark.note"
+            :mark-color="getBarColor(row.mark)"
+            :color-value="editColor"
+            :color-options="isEditing(row.mark) && showEditOptions(row.mark) ? getEditColorOptions() : []"
+            :style-value="editStyle"
+            :style-options="isEditing(row.mark) ? getMarkStyleOptions(row.mark) : []"
+            :kind="row.mark.type === 'note' ? 'note' : row.mark.type === 'bookmark' ? 'bookmark' : 'highlight'"
+            @update:tag-input="editTags = $event"
+            @update:note="editNote = $event"
+            @update:color-value="editColor = $event"
+            @update:style-value="editStyle = $event"
+            @toggle-tags="toggleEditTags"
+            @go="goTo(row.mark)"
+            @edit="startEdit(row.mark)"
+            @cancel="cancelEdit"
+            @save="saveEdit(row.mark)"
           >
-            <MarkCard
-              :time="formatDateTime(mark.timestamp || Date.now())"
-              :i18n="props.i18n"
-              :tags="getMarkTags(mark)"
-              :tag-groups="markTagGroups"
-              :selected-tags="editTagList"
-              :tag-input="editTags"
-              :editing="isEditing(mark)"
-              :editable="canEdit(mark)"
-              :text="isEditing(mark) ? editText : mainText(mark)"
-              :chapter="getMarkChapter(mark)"
-              :note="isEditing(mark) ? editNote : mark.note"
-              :mark-color="getBarColor(mark)"
-              :color-value="editColor"
-              :color-options="isEditing(mark) && showEditOptions(mark) ? getEditColorOptions() : []"
-              :style-value="editStyle"
-              :style-options="isEditing(mark) ? getMarkStyleOptions(mark) : []"
-              :kind="mark.type === 'note' ? 'note' : mark.type === 'bookmark' ? 'bookmark' : 'highlight'"
-              @update:tag-input="editTags = $event"
-              @update:note="editNote = $event"
-              @update:color-value="editColor = $event"
-              @update:style-value="editStyle = $event"
-              @toggle-tags="toggleEditTags"
-              @go="goTo(mark)"
-              @edit="startEdit(mark)"
-              @cancel="cancelEdit"
-              @save="saveEdit(mark)"
-            >
-              <template #actions>
-                <div class="sr-head-actions">
-                  <button class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.copy || '复制'" @click.stop="copyMark(mark)"><svg><use xlink:href="#iconCopy" /></svg></button>
-                  <button v-if="mark.blockId && mark.type !== 'bookmark'" class="b3-tooltips b3-tooltips__nw" aria-label="打开块" @click.stop="openBlock(mark.blockId)" @mouseenter="onBlockEnter($event, mark.blockId)" @mouseleave="hideFloat"><svg><use xlink:href="#iconRef" /></svg></button>
-                  <button v-else-if="canImport(mark)" class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.import || '导入'" @click.stop="importMark(mark)"><svg><use xlink:href="#iconDownload" /></svg></button>
-                  <button v-if="canDelete(mark)" class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.delete || '删除'" @click.stop="deleteMark(mark)"><svg><use xlink:href="#iconTrashcan" /></svg></button>
-                </div>
-              </template>
-              <template #extra>
-                <img v-if="mark.image" class="sr-image-preview" :src="mark.image" :alt="mainText(mark)" @click.stop="goTo(mark)">
-              </template>
-            </MarkCard>
-          </div>
-        </template>
+            <template #actions>
+              <div class="sr-head-actions">
+                <button class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.copy || '复制'" @click.stop="copyMark(row.mark)"><svg><use xlink:href="#iconCopy" /></svg></button>
+                <button v-if="row.mark.blockId && row.mark.type !== 'bookmark'" class="b3-tooltips b3-tooltips__nw" aria-label="打开块" @click.stop="openBlock(row.mark.blockId)" @mouseenter="onBlockEnter($event, row.mark.blockId)" @mouseleave="hideFloat"><svg><use xlink:href="#iconRef" /></svg></button>
+                <button v-else-if="canImport(row.mark)" class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.import || '导入'" @click.stop="importMark(row.mark)"><svg><use xlink:href="#iconDownload" /></svg></button>
+                <button v-if="canDelete(row.mark)" class="b3-tooltips b3-tooltips__nw" :aria-label="props.i18n?.delete || '删除'" @click.stop="deleteMark(row.mark)"><svg><use xlink:href="#iconTrashcan" /></svg></button>
+              </div>
+            </template>
+            <template #extra>
+              <img v-if="row.mark.image" class="sr-image-preview" :src="row.mark.image" :alt="mainText(row.mark)" @click.stop="goTo(row.mark)">
+            </template>
+          </MarkCard>
+        </div>
       </template>
+      <button v-if="visibleMarkRows.hasMore" class="sr-more" type="button" @click="loadMoreMarks">加载更多</button>
     </div>
 
     <template #overlay>
@@ -126,6 +126,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed, ref, watch } from 'vue'
 import MarkCard from './MarkCard.vue'
 import DockShell from './ui/DockShell.vue'
 import { useReaderMarks } from '@/composables/useReaderMarks'
@@ -189,6 +190,31 @@ const {
   getMarkTags,
   goTo,
 } = useReaderMarks(props.i18n, () => props.context)
+const MARK_RENDER_STEP = 120
+const markRenderLimit = ref(MARK_RENDER_STEP)
+const rowKey = (item: any, fallback: string) => String(item?.key || item?.groupId || item?.id || item?.page || fallback)
+const visibleMarkRows = computed(() => {
+  const rows: any[] = []
+  let total = 0, visible = 0
+  list.value.forEach((item: any, itemIndex: number) => {
+    if (item?.isGroup) rows.push({ type: 'group', key: `g-${rowKey(item, `${itemIndex}`)}`, item })
+    const marks = getMarkItems(item)
+    total += marks.length
+    marks.slice(0, Math.max(0, markRenderLimit.value - visible)).forEach((mark: any, index: number) => {
+      rows.push({ type: 'mark', key: `m-${rowKey(mark, `${itemIndex}-${index}`)}`, mark })
+      visible++
+    })
+  })
+  return { rows, hasMore: visible < total }
+})
+const loadMoreMarks = () => {
+  if (visibleMarkRows.value.hasMore) markRenderLimit.value += MARK_RENDER_STEP
+}
+const handleMarkListScroll = (event: Event) => {
+  const el = event.currentTarget as HTMLElement
+  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 240) loadMoreMarks()
+}
+watch(list, () => { markRenderLimit.value = MARK_RENDER_STEP })
 const formatDateTime = (ts: number) => new Date(ts).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 const getMarkChapter = (mark: any) => isEditing(mark) ? '' : [mark?.chapter || (mark?.page ? `第${mark.page}页` : '')].filter(Boolean).join(' ')
 const getMarkStyleOptions = (mark: any) => (mark?.type === 'highlight' || mark?.type === 'note' || !mark?.type) ? getEditStyleOptions() : []
@@ -228,6 +254,8 @@ const getMarkStyleOptions = (mark: any) => (mark?.type === 'highlight' || mark?.
 .sr-head-actions button{display:flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;border:none;background:transparent;border-radius:4px;line-height:1;cursor:pointer;color:var(--b3-theme-on-surface-variant)}
 .sr-head-actions button:hover{background:var(--b3-list-hover);color:var(--b3-theme-primary)}
 .sr-head-actions svg{width:14px;height:14px}
+.sr-more{display:block;width:100%;margin:4px 0 8px;padding:6px;border:1px solid var(--b3-border-color);border-radius:8px;background:var(--b3-theme-background);color:var(--b3-theme-on-surface-variant);font-size:12px;cursor:pointer}
+.sr-more:hover{border-color:var(--b3-theme-primary);color:var(--b3-theme-primary)}
 .sr-preview{width:100%;background:var(--b3-theme-background)}
 .sr-image-preview{display:block;max-width:100%;max-height:180px;object-fit:contain;border-radius:6px;background:var(--b3-theme-background);cursor:pointer}
 .fade-enter-active,.fade-leave-active{transition:opacity .2s}

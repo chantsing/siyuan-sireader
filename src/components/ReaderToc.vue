@@ -56,7 +56,7 @@ import { getTocChapterText } from '@/core/epub/chapterText'
 import { exportBookLink } from '@/utils/copy'
 import { bookmarkToc } from '@/utils/embedPdfActions'
 import { bookshelfManager } from '@/core/bookshelf'
-import { jump } from '@/utils/jump'
+import { jump, pdfPageFromCfi } from '@/utils/jump'
 import type { TOCItem } from '@/core/epub/types'
 
 const props = withDefaults(defineProps<{ mode?: 'toc'; i18n?: any; context?: any }>(), {
@@ -86,7 +86,7 @@ const searchPlaceholder = computed(() => '搜索目录...')
 const tocLabel = (item: TOCItem) => item.label || (item as any).title || ''
 const tocKey = (item: TOCItem, parentKey = 'root') => item.href || `${parentKey}/${tocLabel(item)}`
 const goToLocation = async (location: string | number) => {
-  const page = typeof location === 'string' ? location.match(/^#page-(\d+)$/)?.[1] : ''
+  const page = typeof location === 'string' ? pdfPageFromCfi(location) : 0
   return activeView.value?.goTo(page ? Number(page) : location)
 }
 const getUrl = () => props.context?.bookUrl || (window as any).__currentBookUrl
@@ -154,6 +154,14 @@ let initFrame = 0
 
 const hasCurrentDescendant = (items: TOCItem[] | undefined, href: string): boolean =>
   !!items?.some(item => item.href === href || hasCurrentDescendant(item.subitems, href))
+const pdfHrefAt = (page: number) => {
+  let href = `#page-${page}`, best = 0
+  walkToc(tocSource.value, item => {
+    const itemPage = pdfPageFromCfi(item.href)
+    if (itemPage && itemPage <= page && itemPage >= best) (best = itemPage, href = item.href!)
+  })
+  return href
+}
 
 const ensureExpandedState = (items: TOCItem[], href = '') => {
   let changed = false
@@ -205,6 +213,7 @@ const renderToc = () => {
   ensureExpandedState(visibleToc.value, currentHref.value)
   const bookmarks = getBookmarkTitles()
   tocRef.value.innerHTML = visibleToc.value.map(item => `<ul class="b3-list b3-list--background">${renderTocItem(item, 0, 'root', bookmarks)}</ul>`).join('')
+  tocRef.value.querySelector('.b3-list-item--focus')?.scrollIntoView({ block: 'nearest' })
 }
 
 const scheduleRender = () => {
@@ -226,7 +235,10 @@ const initToc = () => {
   if (props.mode !== 'toc') return
   cleanupToc()
   const view = activeView.value
-  if (isEmbedPdfMode.value) return renderToc()
+  if (isEmbedPdfMode.value) {
+    currentHref.value = pdfHrefAt(view?.getCurrentPage?.() || 1)
+    return renderToc()
+  }
   if (!view?.book?.toc?.length) {
     if (isPdfMode.value) showThumbnail.value = true
     return
@@ -397,10 +409,19 @@ watch(keyword, () => props.mode === 'toc' && scheduleRender())
 
 const onMarks = () => props.mode === 'toc' && scheduleRender()
 const onSwitch = () => props.mode === 'toc' && (isEmbedPdfMode.value ? void loadPdfBookmarks() : scheduleInit())
+const onPdfPage = (event: Event) => {
+  const { bookUrl, page } = (event as CustomEvent).detail || {}
+  if (props.mode !== 'toc' || !isEmbedPdfMode.value || (bookUrl && bookUrl !== getUrl())) return
+  const href = pdfHrefAt(page || 1)
+  if (href === currentHref.value) return
+  currentHref.value = href
+  scheduleRender()
+}
 
 onMounted(() => {
   window.addEventListener('sireader:marks-updated', onMarks)
   window.addEventListener('sireader:tab-switched', onSwitch)
+  window.addEventListener('sireader:pdf-page', onPdfPage)
 })
 
 onUnmounted(() => {
@@ -410,6 +431,7 @@ onUnmounted(() => {
   thumbObs?.disconnect()
   window.removeEventListener('sireader:marks-updated', onMarks)
   window.removeEventListener('sireader:tab-switched', onSwitch)
+  window.removeEventListener('sireader:pdf-page', onPdfPage)
 })
 </script>
 

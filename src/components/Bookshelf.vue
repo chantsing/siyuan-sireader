@@ -39,18 +39,17 @@
 
         <div class="sr-modal__body">
           <template v-if="modalMode === 'manage'">
-            <div class="sr-form-item"><span class="ft__secondary">快捷操作</span><div class="sr-grid2"><button class="b3-button b3-button--outline" type="button" title="从电脑选择 EPUB、PDF 等电子书文件，导入后由插件托管文件和封面。" @click="importMode = 'file'; pickAndParseFiles()">本地导入</button><button class="b3-button b3-button--outline" type="button" title="浏览或搜索思源同步盘中的电子书，并复制到书架托管目录。" @click="importMode = 'cloud'">思盘导入</button><button class="b3-button b3-button--outline" type="button" title="创建普通文件夹分组。书籍加入后会从首页独立书籍区移出，属于实际归类。" @click="startEditGroup()">手动分组</button><button class="b3-button b3-button--outline" type="button" title="创建按标签、格式、状态、评分等条件动态显示的分组。智能分组不移动书籍归属，也不会把书从首页隐藏。" @click="startEditGroup(undefined, 'smart')">智能分组</button></div></div>
+            <div class="sr-form-item"><span class="ft__secondary">快捷操作</span><div class="sr-grid2"><button class="b3-button b3-button--outline" type="button" title="从电脑选择 EPUB、PDF 等电子书文件，导入后由插件托管文件和封面。" @click="openLocalImport">本地导入</button><button class="b3-button b3-button--outline" type="button" title="浏览或搜索思源同步盘中的电子书，并添加到书架。" @click="setImportMode('cloud')">思盘导入</button><button class="b3-button b3-button--outline" type="button" title="创建普通文件夹分组。书籍加入后会从首页独立书籍区移出，属于实际归类。" @click="startEditGroup()">手动分组</button><button class="b3-button b3-button--outline" type="button" title="创建按标签、格式、状态、评分等条件动态显示的分组。智能分组不移动书籍归属，也不会把书从首页隐藏。" @click="startEditGroup(undefined, 'smart')">智能分组</button></div></div>
 
-            <template v-if="importMode === 'file'">
+            <template v-if="!editingGroup && importMode === 'link'">
               <div class="sr-form-item">
-                <span class="ft__secondary">本地导入</span>
-                <div class="sr-row"><button class="b3-button b3-button--outline" type="button" @click="pickAndParseFiles" :disabled="importParsing || importing">选择文件</button></div>
-                <textarea class="b3-text-field fn__block sr-textarea" v-model="importDraft" placeholder="链接导入，每行一个本地路径或链接" />
-                <div class="sr-row"><button class="b3-button b3-button--outline" type="button" @click="parseImportUrls" :disabled="!importDraft.trim() || importParsing">{{ importParsing ? '解析中...' : '解析链接' }}</button></div>
+                <span class="ft__secondary">输入链接</span>
+                <textarea class="b3-text-field fn__block sr-textarea" v-model="importDraft" placeholder="每行一个本地路径、file 链接、网络直链或思盘链接" />
+                <div class="sr-row"><button class="b3-button b3-button--outline sr-grow" type="button" @click="parseImportUrls" :disabled="!importDraft.trim() || importParsing">{{ importParsing ? '解析中...' : '解析链接' }}</button></div>
               </div>
             </template>
 
-            <template v-if="importMode === 'cloud'">
+            <template v-if="!editingGroup && importMode === 'cloud'">
               <div class="sr-form-item">
                 <span class="ft__secondary">思盘导入</span>
                 <div class="sr-row"><input v-model.trim="cloudInput" class="b3-text-field sr-grow" placeholder="输入思盘路径" @keyup.enter="openCloudInput" /><button class="b3-button b3-button--outline" type="button" :disabled="cloudLoading || !cloudInput" @click="openCloudInput">输入</button></div>
@@ -61,14 +60,14 @@
               </div>
             </template>
 
-            <div v-if="importHasItems" class="sr-form-item">
-              <span class="ft__secondary">待导入项目</span>
+            <div v-if="!editingGroup && importHasItems" class="sr-form-item">
+              <span class="ft__secondary">待导入</span>
               <div class="sr-row"><button class="sr-chip" :class="{ 'is-active': importAllSelected }" type="button" @click="importAllSelected = !importAllSelected">{{ importAllSelected ? '取消全选' : '全选导入' }}</button><span>{{ importSelectedCount }} / {{ importItems.length }}</span><span v-if="importParsing">{{ importProgress }}%</span></div>
               <View :items="importDisplayItems" mode="list" :status-map="STATUS_MAP" :get-cover-url="getCoverUrl" :get-progress="getProgress" @toggle-import="toggleImportItem" />
             </div>
 
-            <div v-if="importHasItems || folderGroups.length" class="sr-form-item">
-              <span class="ft__secondary">导入后应用</span>
+            <div v-if="!editingGroup && importHasItems" class="sr-form-item">
+              <span class="ft__secondary">导入设置</span>
               <input v-model="importBulkTags" class="b3-text-field sr-input" placeholder="添加标签，用逗号分隔" />
               <div v-if="allTags.length" class="sr-chips"><button v-for="t in allTags.slice(0, 10)" :key="t.tag" class="sr-chip" type="button" :class="{ 'is-active': importTagList.includes(t.tag) }" @click="toggleImportTag(t.tag)">#{{ t.tag }}</button></div>
               <template v-for="row in importApplyRows" :key="row.key"><span class="sr-muted">{{ row.label }}</span><div class="sr-chips"><button v-for="item in row.items" :key="item.key" class="sr-chip" type="button" :class="{ 'is-active': item.active }" @click="item.click">{{ item.label }}</button></div></template>
@@ -97,9 +96,9 @@
 
           <template v-if="modalMode === 'manage'">
             <div class="sr-row sr-actions-end sr-section-line">
-              <button class="b3-button b3-button--outline" type="button" @click="closePopups">取消</button>
-              <button v-if="importHasItems && importMode === 'file'" class="b3-button b3-button--outline" type="button" @click="confirmImport('file')" :disabled="!importSelectedCount || importParsing || importing">文件导入</button>
-              <button v-if="importHasItems && (importMode !== 'file' || importLinkSelectedCount)" class="b3-button b3-button--outline" type="button" @click="confirmImport('link')" :disabled="!importSelectedCount || importParsing || importing">链接导入</button>
+              <button class="b3-button b3-button--outline" type="button" title="关闭面板，不导入当前待导入项目。" @click="closePopups">取消</button>
+              <button v-if="!editingGroup && importHasItems && importMode === 'file'" class="b3-button b3-button--outline" type="button" title="复制文件到插件托管目录，适合希望书籍随插件数据一起管理的本地文件。" @click="confirmImport('file')" :disabled="!importSelectedCount || importParsing || importing">复制导入</button>
+              <button v-if="!editingGroup && importHasItems" class="b3-button b3-button--outline" type="button" title="保留原始路径或链接添加到书架，支持 file 链接、本地路径、网络直链和思盘链接。" @click="confirmImport('link')" :disabled="!importLinkSelectedCount || importParsing || importing">链接导入</button>
             </div>
           </template>
 
@@ -172,7 +171,7 @@ import { useBookImport } from '@/composables/useBookImport'
 import { useLicense } from '@/composables/useLicense'
 import { importPdfAnnotationsForBook } from '@/core/pdfAnnotationImport'
 
-type ImportMode = 'file' | 'cloud'
+type ImportMode = 'file' | 'link' | 'cloud'
 type GroupType = 'folder' | 'smart'
 
 const props = defineProps<{ i18n?: any; coverSize?: number; hiddenItems?: string[] }>()
@@ -189,7 +188,7 @@ const batchMode = ref<'rate' | 'status' | 'tags' | 'groups' | null>(null)
 const selecting = ref(false), selectedBookUrls = ref<string[]>([]), groupCounts = ref<Record<string, number>>({})
 const editingBook = ref<string | null>(null), editingGroup = ref<GroupConfig | null>(null)
 const confirmDelete = ref<{ type: 'group' | 'book'; id: string; item: any; phase?: 'delete' } | { type: 'batch'; id: string; count: number; urls: string[]; phase?: 'delete' } | null>(null)
-const modalMode = ref<BookshelfModalMode>(null), panelBook = ref<Book | null>(null), importMode = ref<ImportMode>('file')
+const modalMode = ref<BookshelfModalMode>(null), panelBook = ref<Book | null>(null), importMode = ref<ImportMode>('link')
 const importBulkTags = ref(''), importBulkStatus = ref<BookStatus | ''>(''), importBulkRating = ref(0), importBulkGroups = ref<string[]>([])
 const batchTags = ref(''), batchGroups = ref<string[]>([])
 const batchTagAction = ref<'add' | 'remove' | 'set'>('add'), batchGroupAction = ref<'add' | 'remove' | 'set'>('add')
@@ -275,6 +274,7 @@ const setGroup = (id: string | null, close = false) => { closeMenu(); currentGro
 const clearConfirmDelete = () => { confirmDelete.value = null }
 const confirmGroupDelete = (group: GroupConfig) => { modalMode.value = 'manage'; confirmDelete.value = { type: 'group', id: group.id, item: group } }
 const confirmBatchRemove = () => { if (selectedCount.value) confirmDelete.value = { type: 'batch', id: 'batch', count: selectedCount.value, urls: [...selectedBookUrls.value] } }
+const setImportMode = (mode: ImportMode) => { editingGroup.value = null; resetImport(); importMode.value = mode }
 const groupRowActions = (g: GroupConfig) => {
   const i = groups.value.findIndex(item => item.id === g.id)
   return [i > 0 && { label: '上移', icon: '#iconUp', click: () => moveGroup(g, -1 as const) }, i < groups.value.length - 1 && { label: '下移', icon: '#iconDown', click: () => moveGroup(g, 1 as const) }, { label: '打开分组', icon: '#iconFolder', click: () => setGroup(g.id, true) }, { label: '编辑分组', icon: '#iconEdit', click: () => startEditGroup(g) }, { label: '删除分组', icon: '#lucide-trash-2', warn: true, click: () => confirmGroupDelete(g) }].filter(Boolean) as any[]
@@ -285,7 +285,7 @@ const handleToolbarAction = (id: string) => {
   else if (id === 'view') viewMode.value = getNextViewMode(viewMode.value)
   else if (id === 'select') toggleSelecting()
   else if (id === 'organize') modalMode.value = 'organize'
-  else if (id === 'manage') { modalMode.value = 'manage'; importMode.value = 'file' }
+  else if (id === 'manage') { modalMode.value = 'manage'; setImportMode('link') }
 }
 const getCoverUrl = (book: Book) => bookshelfManager.getCoverUrl(book)
 const getGroupCoverUrls = (group: GroupConfig) => books.value.filter(book => bookInGroup(book, group)).map(getCoverUrl).filter(Boolean).slice(0, 4)
@@ -427,9 +427,9 @@ const removeBatchBooks = async (deleteData = false) => {
   if (confirmDelete.value?.type !== 'batch') return
   const res = await bookshelfManager.removeBooks(confirmDelete.value.urls, deleteData)
   clearConfirmDelete()
-  batchMode.value = null
   await refresh()
   showResult(res.success, res.failed, deleteData ? `已彻底删除 ${res.success} 本` : `已移除并删除托管文件 ${res.success} 本`)
+  if (!res.failed) exitSelection()
 }
 const confirmDeleteAction = async (deleteData = false) => {
   const target = confirmDelete.value
@@ -438,6 +438,7 @@ const confirmDeleteAction = async (deleteData = false) => {
   if (target.type === 'group') return deleteGroup(target.item)
   return removeBatchBooks(deleteData)
 }
+const openLocalImport = async () => { setImportMode('file'); await pickAndParseFiles() }
 const parseImportUrls = async () => { try { await parseDraftUrls() } catch (e) { showMessage(e instanceof Error ? e.message : '解析失败', 2000, 'error') } }
 const listCloud = async (path = '/') => {
   cloudLoading.value = true; cloudError.value = ''
@@ -468,7 +469,7 @@ const confirmImport = async (mode: 'file' | 'link') => {
   await loadBooks()
   allTags.value = await bookshelfManager.getAllTags()
   showResult(res.success, res.failed, `导入${res.success}本`, `成功${res.success}本，失败${res.failed}本`, 3000)
-  if (!res.failed) resetImport()
+  if (!res.failed) closePopups()
 }
 const toggleImportItem = (item: { selected: boolean; error: string; loading: boolean }) => { if (!item.error && !item.loading) item.selected = !item.selected }
 const openBookPanel = async (mode: 'detail' | 'edit', book: Book) => { closeMenu(); panelBook.value = await bookshelfManager.getBook(book.url) || book; if (mode === 'edit') { if (!can.value('book-edit')) return showUpgrade('书籍编辑'); editingBook.value = panelBook.value.url; resetEditForm(); assignEditForm(panelBook.value) } modalMode.value = mode }
@@ -496,7 +497,7 @@ const batchOp = async (op: 'rate' | 'status' | 'remove' | 'tags' | 'groups', val
   if (!can.value('batch-operation')) return showUpgrade('批量操作')
   const urls = selectedBookUrls.value
   if (!urls.length) return
-  const done = async (res: any, action: string) => { batchMode.value = null; await refresh(); allTags.value = await bookshelfManager.getAllTags(); showResult(res.success, res.failed, `${action} ${res.success} 本`) }
+  const done = async (res: any, action: string) => { batchMode.value = null; await refresh(); allTags.value = await bookshelfManager.getAllTags(); showResult(res.success, res.failed, `${action} ${res.success} 本`); if (!res.failed) exitSelection() }
   if (op === 'remove') return confirmBatchRemove()
   if (op === 'rate') return done(await bookshelfManager.batchUpdateRating(urls, Number(value || 0)), value ? '已评分' : '已清除')
   if (op === 'status') return done(await bookshelfManager.batchUpdateStatus(urls, value as BookStatus), '已更新')
@@ -514,6 +515,7 @@ const batchClearList = async (kind: 'tags' | 'groups', text: string, ok: string)
   await refresh()
   if (kind === 'tags') allTags.value = await bookshelfManager.getAllTags()
   showResult(res.success, res.failed, `${ok} ${res.success} 本`)
+  if (!res.failed) exitSelection()
 }
 const editFields = computed(() => buildEditFields())
 const groupFields = computed(() => buildGroupFields(editingGroup.value, allTags.value))

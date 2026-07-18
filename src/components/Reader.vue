@@ -3,7 +3,7 @@
     <ReaderSplash v-if="showOpeningSplash" ref="readerSplashRef" :book-info="props.bookInfo" :file-name="props.file?.name" status="opening" />
     <div v-if="loading" class="reader-loading"><div class="spinner"></div><div>{{ error || 'Loading...' }}</div></div>
     <div v-if="showToc&&!loading" class="reader-overlay" @click="closePanels"/>
-    <EmbedPdfReader v-if="isEmbedPdfMode" :source="embedPdfSource" :book-url="currentBookUrl" :storage-key="props.bookInfo?.dataId || currentBookUrl" :settings="currentSettings" :theme="currentSettings?.theme" :custom-theme="currentSettings?.customTheme" :i18n="i18n" class="viewer-container" @ready="handleEmbedPdfReady"/>
+    <EmbedPdfReader v-if="isEmbedPdfMode" :source="embedPdfSource" :book-url="currentBookUrl" :storage-key="props.bookInfo?.dataId || currentBookUrl" :settings="currentSettings" :theme="currentSettings?.theme" :custom-theme="currentSettings?.customTheme" :hide-annotations="embedPdfAnnotationsHidden" :i18n="i18n" class="viewer-container" @ready="handleEmbedPdfReady"/>
     <div v-else ref="viewerContainerRef" class="viewer-container"></div>
     <Transition name="toc-popup">
       <div v-if="showToc&&!loading" class="reader-toc-popup" @click.stop>
@@ -32,7 +32,7 @@
           </button>
         </div>
       </div>
-      <div v-if="!isEmbedPdfMode || isMobile()" class="reader-toolbar" :class="{'is-visible':toolbarVisible}">
+      <div v-if="!isEmbedPdfMode" class="reader-toolbar" :class="{'is-visible':toolbarVisible}">
         <button v-if="!isEmbedPdfMode" class="toolbar-btn b3-tooltips b3-tooltips__n" @click.stop="handlePrev" :aria-label="i18n.prevChapter||'上一章'"><svg><use xlink:href="#iconLeft"/></svg></button>
                 <button v-if="!isEmbedPdfMode" class="toolbar-btn b3-tooltips b3-tooltips__n" @click.stop="handleNext" :aria-label="i18n.nextChapter||'下一章'"><svg><use xlink:href="#iconRight"/></svg></button>
         <button v-if="!isEmbedPdfMode" class="toolbar-btn b3-tooltips b3-tooltips__n" @click.stop="openToc" :aria-label="i18n.toc||'目录'"><svg><use xlink:href="#iconList"/></svg></button>
@@ -144,7 +144,9 @@ const embedPdfSource = ref<File | string | null>(null)
 const embedPdfPages = ref<any>(null)
 const embedPdfAnnotations = ref<any>(null)
 const embedPdfMarks = ref<any[]>([])
+const embedPdfAnnotationsHidden = ref(false)
 const currentView = ref<any>(null)
+let cleanupEmbedPdfEvents: (()=>void) | null = null
 const showSearch = ref(false)
 const showToc = ref(false)
 const showQuickMark = ref(false)
@@ -181,9 +183,10 @@ const embedPdfMark=(item:any)=>{
 }
 const uniquePdfItems=(items:any[]=[])=>[...new Map(items.map((item:any)=>[(item.annotation||item)?.id,item]).filter(([id])=>id)).values()]
 const compact=(value:Record<string,any>)=>Object.fromEntries(Object.entries(value).filter(([,v])=>v!==undefined))
+const readEmbedPdfMarkItems=async(scope:any)=>scope?.getAnnotations?.()?.map((item:any)=>({annotation:item.object})).filter((item:any)=>item.annotation)||await scope?.exportAnnotations?.().toPromise().catch(()=>[])||[]
 const loadEmbedPdfMarks=async()=>{
   if(!embedPdfAnnotations.value)return
-  embedPdfMarks.value=uniquePdfItems(await embedPdfAnnotations.value.exportAnnotations().toPromise().catch(()=>[])).filter(isUserEmbedPdfAnnotation).map(embedPdfMark)
+  embedPdfMarks.value=uniquePdfItems(await readEmbedPdfMarkItems(embedPdfAnnotations.value)).filter(isUserEmbedPdfAnnotation).map(embedPdfMark)
 }
 const updateEmbedPdfMark=async(item:any,updates:any)=>{
   const a=item.annotation||item
@@ -210,14 +213,21 @@ const initEmbedPdfMode=async(loadSource:()=>Promise<File|string|null>)=>{
   if(!file)throw new Error('PDF file is missing')
   embedPdfSource.value=file
   embedPdfMarks.value=[]
+  embedPdfAnnotationsHidden.value=false
   markManager.value=null
-  currentView.value={engine:'embedpdf',isPdf:true,marks:{getAnnotations:()=>embedPdfMarks.value.filter((item:any)=>item.type!=='bookmark'),getBookmarks:()=>embedPdfMarks.value.filter((item:any)=>item.type==='bookmark'),updateMark:updateEmbedPdfMark,deleteMark:deleteEmbedPdfMark,toggleBookmark:toggleEmbedPdfBookmark},goTo:(page:any)=>embedPdfPages.value?.scrollToPage({pageNumber:Number(page)||1,behavior:'smooth'}),cleanup:()=>{embedPdfSource.value=null;embedPdfPages.value=null;embedPdfAnnotations.value=null;embedPdfMarks.value=[]}}
+  currentView.value={engine:'embedpdf',isPdf:true,annotationsHidden:embedPdfAnnotationsHidden,marks:{getAnnotations:()=>embedPdfMarks.value.filter((item:any)=>item.type!=='bookmark'),getBookmarks:()=>embedPdfMarks.value.filter((item:any)=>item.type==='bookmark'),updateMark:updateEmbedPdfMark,deleteMark:deleteEmbedPdfMark,toggleBookmark:toggleEmbedPdfBookmark},goTo:(page:any)=>embedPdfPages.value?.scrollToPage({pageNumber:Number(page)||1,behavior:'smooth'}),getCurrentPage:()=>embedPdfPages.value?.getCurrentPage?.()||1,toggleAnnotationsHidden:()=>embedPdfAnnotationsHidden.value=!embedPdfAnnotationsHidden.value,cleanup:()=>{cleanupEmbedPdfEvents?.();cleanupEmbedPdfEvents=null;embedPdfSource.value=null;embedPdfPages.value=null;embedPdfAnnotations.value=null;embedPdfMarks.value=[];embedPdfAnnotationsHidden.value=false}}
   setActiveReader(currentView.value,null,getSettings())
 }
 const handleEmbedPdfReady=(registry:any)=>{
   const documentId='sireader-document'
-  embedPdfPages.value=registry.getPlugin('scroll').provides().forDocument(documentId)
+  const scroll=registry.getPlugin('scroll').provides()
+  embedPdfPages.value=scroll.forDocument(documentId)
   embedPdfAnnotations.value=registry.getPlugin('annotation').provides().forDocument(documentId)
+  const emitPage=(page:number)=>window.dispatchEvent(new CustomEvent('sireader:pdf-page',{detail:{bookUrl:getBookUrl(),page}}))
+  const offPage=scroll.onPageChange?.((event:any)=>event.documentId===documentId&&emitPage(event.pageNumber))
+  cleanupEmbedPdfEvents?.()
+  cleanupEmbedPdfEvents=()=>offPage?.()
+  emitPage(embedPdfPages.value?.getCurrentPage?.()||1)
   const pageTextCache=new Map<number,Promise<string>>()
   currentView.value.getPageText=(page:number)=>{
     const pageNumber=Number(page)||1
@@ -348,7 +358,10 @@ const handleGoto=(e:CustomEvent)=>{
   if(bookUrl&&bookUrl!==currentBookUrl.value)return
   if(!cfi)return
   const pdfPage=pdfPageFromCfi(cfi)
-  if(isEmbedPdfMode.value&&pdfPage)return void currentView.value?.goTo?.(pdfPage)
+  if(isEmbedPdfMode.value&&pdfPage){
+    if(id) embedPdfAnnotations.value?.selectAnnotation?.(pdfPage-1,id)
+    return void currentView.value?.goTo?.(pdfPage)
+  }
   gotoEPUB(cfi,id,reader,markManager.value)
 }
 const handleUndo=()=>markManager.value?.undo?.()
@@ -360,6 +373,7 @@ const events=[
   ['sireader:goto',handleGoto],
   ['sireader:marks-updated',refreshEmbedPdfMarks],
   ['sireader:close-reader-panels',closePanels],
+  ['sireader:togglePdfToc',activeOnly(openToc)],
   ['sireader:toggleBookmark',activeOnly(toggleBookmark)],
   ['sireader:quickNote',async()=>{try{if(isEmbedPdfMode.value||!currentView.value||!containerRef.value?.isConnected||!isThisActiveReader())return;const { openNoteTargetFloat } = await import('@/utils/copy');await openNoteTargetFloat(getBookUrl(),getSettings(),containerRef.value!)}catch(e:any){showMessage(e?.message||'Failed',2000,'error')}}],
   ['sireader:prevPage',activeOnly(handlePrev)],

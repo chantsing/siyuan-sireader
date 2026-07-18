@@ -26,19 +26,14 @@ const shouldSyncOnAdd = async () => !!(await getGlobalSettings())?.annotationSyn
 const shouldSyncOnDelete = async () => !!(await getGlobalSettings())?.annotationSyncOnDelete
 const getBoundDocId = async (bookUrl: string) => (await getShelfBook(bookUrl))?.bindDocId || ''
 const getInsertedBlockId = (result: any) => result?.[0]?.doOperations?.[0]?.id || result?.[0]?.id || result?.doOperations?.[0]?.id || ''
-const uploadCanvas = async (canvas: HTMLCanvasElement, name: string) => {
-  const blob = await fetch(canvas.toDataURL('image/png')).then(r => r.blob())
-  const file = new File([blob], name, { type: 'image/png' })
-  const res = await (await import('@/api')).upload('/assets/', [file])
-  return res.succMap?.[file.name] ? `![](${res.succMap[file.name]})` : ''
-}
-const imageSrcToMarkdown = async (src: string, name = 'epub_image') => {
+const imageSrcToMarkdown = async (src: string | Blob, name = 'mark') => {
   if (!src) return ''
   try {
-    const blob = await fetch(src).then(r => r.blob()), file = new File([blob], `${name}.${blob.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png'}`, { type: blob.type || 'image/png' })
+    const blob = typeof src === 'string' ? await fetch(src).then(r => r.blob()) : src
+    const file = new File([blob], `${name}.${blob.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png'}`, { type: blob.type || 'image/png' })
     const res = await (await import('@/api')).upload('/assets/', [file])
-    return res.succMap?.[file.name] ? `![](${res.succMap[file.name]})` : `![](${src})`
-  } catch { return `![](${src})` }
+    return res.succMap?.[file.name] ? `![](${res.succMap[file.name]})` : (typeof src === 'string' ? `![](${src})` : '')
+  } catch { return typeof src === 'string' ? `![](${src})` : '' }
 }
 
 const resolveExportMeta = async (ctx: ExportCtx | any) => {
@@ -100,7 +95,7 @@ export const copyMark = async (item: any, ctx: { bookUrl: string; bookInfo?: any
   const chapter = item.chapter || getChapterName({ cfi, page, isPdf, toc, location: reader?.getLocation?.() }) || '📍'
   let img = ''
   if (item.image || item.src) {
-    img = await imageSrcToMarkdown(item.image || item.src || '', `epub_image_${item.id || Date.now()}`)
+    img = await imageSrcToMarkdown(item.image || item.src || '', 'mark')
   }
   await exportBookLink({ chapter, cfi, text: item.text || '', note: item.note || '', image: img, id: item.id || '' }, ctx)
 }

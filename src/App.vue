@@ -220,7 +220,7 @@ const handleEbookLink = async (e: MouseEvent) => {
     const book = await bookshelfManager.getBook(parsed.bookUrl)
     if (!book) return showMessage('书籍不存在', 3000, 'error')
     return openOrActivateBook(plugin, book, settings.value, () =>
-      window.dispatchEvent(new CustomEvent('sireader:goto', { detail: { cfi: parsed.cfi, id: parsed.id } }))
+      window.dispatchEvent(new CustomEvent('sireader:goto', { detail: { cfi: parsed.cfi, id: parsed.id, bookUrl: book.url } }))
     )
   }
 

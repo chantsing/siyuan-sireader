@@ -102,6 +102,10 @@ export const cloudNodesToItems = (nodes: SiyuanCloudNode[]) => nodes.map((r, i) 
   : { type: 'book' as const, data: { url: r.path, title: r.name.replace(/\.[^.]+$/, ''), author: r.size ? `${(r.size / 1024 / 1024).toFixed(1)} MB` : '-', cover: '', format: (r.name.split('.').pop()?.toLowerCase() === 'azw' ? 'azw3' : r.name.split('.').pop()?.toLowerCase()) as BookFormat, path: r.path, size: r.size || 0, status: 'unread' as BookStatus, progress: 0, time: 0, chapter: 0, total: 0, pos: {}, rating: 0, meta: {}, tags: [], groups: r.parent === '/' ? [] : [r.parent], read: 0, added: 0, finished: 0 } }
 )
 export const normalizeBookList = (items: any[] = []) => Array.from(new Set(items.map(item => String(item || '').trim()).filter(Boolean)))
+const safeDecode = (url = '') => { try { return decodeURI(url) } catch { return url } }
+const safeEncode = (url = '') => { try { return encodeURI(safeDecode(url)) } catch { return url } }
+export const bookUrlCandidates = (url = '') => Array.from(new Set([url, normalizeSiyuanCloudUrl(url), safeDecode(url), safeEncode(url)].filter(Boolean)))
+export const sameBookUrl = (a = '', b = '') => { const set = new Set(bookUrlCandidates(b)); return bookUrlCandidates(a).some(url => set.has(url)) }
 export const applyBookArrayPatch = (current: string[] = [], patch?: BookArrayPatch) => {
   if (!patch) return current
   const base = patch.set ? normalizeBookList(patch.set) : normalizeBookList(current)
@@ -184,7 +188,7 @@ export class BookshelfManager {
   async init() { if (this.ready) return; await getDatabase(); this.ready = true; }
   async reload() { await (await getDatabase()).reload(); this.ready = true; }
   async getBooks() { return this.useDb(db => db.getBooks()); }
-  async getBook(url: string) { return this.useDb(db => db.getBook(url)); }
+  async getBook(url: string) { return this.useDb(async db => { for (const key of bookUrlCandidates(url)) { const book = await db.getBook(key); if (book) return book } return null }); }
   async getSetting<T = any>(key: string, fallback?: T) { const value = await this.useDb(db => db.getSetting<T>(key)); return (value ?? fallback) as T; }
   async saveSetting(key: string, value: any) { await this.useDb(db => db.saveSetting(key, value)); }
   async flush() { await this.useDb(db => db.cleanup()); }

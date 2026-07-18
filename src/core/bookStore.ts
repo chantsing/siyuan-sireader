@@ -261,7 +261,7 @@ const writeEmbedPdfRecord = async (url: string, patch: Partial<BookRecord>) => {
 export const readEmbedPdfAnnotations = async (url: string, pageHeights: number[] = []): Promise<any[] | null> => {
   const record = await migratePdfRecordFor(url, pageHeights)
   if (!record) return null
-  return record.annotations.length ? (needsLegacyPdfTextAlign(record.annotations) ? record.annotations : normalizeEmbedPdfAnnotations(record.annotations)) : null
+  return record.annotations.length ? (record.migration?.pdfAnnotations === PDF_MIGRATION_VERSION || needsLegacyPdfTextAlign(record.annotations) ? record.annotations : normalizeEmbedPdfAnnotations(record.annotations)) : null
 }
 export const writeEmbedPdfAnnotations = (url: string, annotations: any[]) => writeEmbedPdfRecord(url, { annotations: normalizeEmbedPdfAnnotations(annotations) })
 export const readEmbedPdfProgress = async (url: string): Promise<EmbedPdfProgress | null> => {

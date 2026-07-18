@@ -1,5 +1,6 @@
 ﻿import { createTooltip, hideTooltip, showTooltip } from '@/core/MarkManager'
 
+import { sameBookUrl } from '@/core/bookshelf'
 import { pdfPageFromCfi } from '@/utils/jump'
 
 type PreviewContext = {
@@ -296,8 +297,8 @@ const getActiveContext = (bookUrl: string): PreviewContext => {
   const view = (window as any).__sireader_active_view
   const reader = (window as any).__sireader_active_reader
   const currentBook = (window as any).__currentBookUrl
-  if (!view || currentBook !== bookUrl) return { bookUrl }
-  return { bookUrl, isPdf: !!view?.isPdf, reader, view }
+  if (!view || !sameBookUrl(currentBook, bookUrl)) return { bookUrl }
+  return { bookUrl: currentBook || bookUrl, isPdf: !!view?.isPdf, reader, view }
 }
 
 const fromAnnotation = (annotation: any, book?: any) => {
@@ -378,18 +379,19 @@ export const showLinkedMarkPreview = (parsed: { bookUrl: string; cfi: string; id
     try {
       const { bookshelfManager } = await import('@/core/bookshelf')
       const book = await bookshelfManager.getBook(parsed.bookUrl).catch(() => null)
+      const bookUrl = book?.url || parsed.bookUrl
       let mark: any = null
       if (pdfPageFromCfi(parsed.cfi)) {
-        const stored = await (await import('@/core/bookStore')).readEmbedPdfAnnotations(parsed.bookUrl).catch(() => []) || []
+        const stored = await (await import('@/core/bookStore')).readEmbedPdfAnnotations(book?.dataId || bookUrl).catch(() => []) || []
         mark = embedPdfTransferMark(stored, parsed, book)
       } else {
-        const annotations = await (await (await import('@/core/database')).getDatabase()).getAnnotations(parsed.bookUrl)
+        const annotations = await (await (await import('@/core/database')).getDatabase()).getAnnotations(bookUrl)
         const annotation = annotations.find((item: any) => parsed.id ? item.id === parsed.id : item.loc === parsed.cfi || item.data?.cfi === parsed.cfi)
         mark = annotation && fromAnnotation(annotation, book)
       }
       if (!mark || activeKey !== `link:${parsed.bookUrl}:${parsed.id || parsed.cfi}`) return scheduleHide()
-      const activeCtx = getActiveContext(parsed.bookUrl)
-      const ctx = { ...activeCtx, bookUrl: parsed.bookUrl, book, isPdf: activeCtx.isPdf || mark.format === 'pdf' || !!mark.page }
+      const activeCtx = getActiveContext(bookUrl)
+      const ctx = { ...activeCtx, bookUrl, book, isPdf: activeCtx.isPdf || mark.format === 'pdf' || !!mark.page }
       tip.innerHTML = await buildPreview(mark, ctx)
       showTooltip(tip, rect.right + 8, rect.top)
     } catch {

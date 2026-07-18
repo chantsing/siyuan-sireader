@@ -1,5 +1,5 @@
-<template>
-  <div v-if="documentSource" ref="rootRef" class="embed-pdf-reader">
+﻿<template>
+  <div v-if="documentSource && pdfWasmUrl" ref="rootRef" class="embed-pdf-reader">
     <PDFViewer :config="config" @init="handleInit" @ready="handleReady" />
   </div>
   <div v-else class="embed-pdf-reader__loading">{{ props.i18n?.loading || 'Loading...' }}</div>
@@ -15,16 +15,23 @@ import { alignLegacyPdfAnnotations, needsLegacyPdfTextAlign } from '@/core/dataM
 import { createTooltip, showTooltip } from '@/core/MarkManager'
 import { copyMark } from '@/utils/copy'
 import { buildEmbedPdfTheme, embedPdfThemePreference } from '@/utils/embedPdfTheme'
-import { addMissingPdfMenuItemsAfterFirst, getPdfSelectionMark, pdfAnnotationNote, pdfAnnotationText, pdfAnnotationWithReplies, pdfMarkFromAnnotation, pdfSelectionFromAnnotation, sendPdfMarkToDoc, writeBlobToClipboard } from '@/utils/embedPdfActions'
-import { type ReaderSettings, type ReadTheme } from '@/composables/useSetting'
+import { addMissingPdfMenuItemsAfterFirst, getPdfSelectionMark, pdfAnnotationNote, pdfAnnotationText, pdfAnnotationWithReplies, pdfMarkFromAnnotation, pdfSelectionFromAnnotation, sendPdfMarkToDoc, taskToPromise, writeBlobToClipboard } from '@/utils/embedPdfActions'
+import { settingsManager, type ReaderSettings, type ReadTheme } from '@/composables/useSetting'
+import { isMobile } from '@/utils/mobile'
 import Translate from './Translate.vue'
 
-const props = defineProps<{ source: File | string | null; settings?: ReaderSettings; theme?: string; customTheme?: ReadTheme; bookUrl?: string; storageKey?: string; i18n?: any }>()
+const props = defineProps<{ source: File | string | null; settings?: ReaderSettings; theme?: string; customTheme?: ReadTheme; bookUrl?: string; storageKey?: string; hideAnnotations?: boolean; i18n?: any }>()
 const storageKey = () => props.storageKey || props.bookUrl || ''
 const emit = defineEmits<{ ready: [registry: PluginRegistry] }>()
 const documentSource = shallowRef<any>(null)
+const pdfWasmUrl = ref('')
 const rootRef = ref<HTMLElement | null>(null)
 const documentId = 'sireader-document'
+const PDF_WASM_URL = '/plugins/siyuan-sireader/assets/pdfium.wasm'
+let pdfWasmPromise: Promise<string> | undefined
+const preparePdfWasmUrl = async () => {
+  pdfWasmUrl.value ||= await (pdfWasmPromise ||= fetch(PDF_WASM_URL).then(res => res.blob()).then(URL.createObjectURL))
+}
 let annotationSaveTimer: any = null
 let progressSaveTimer: any = null
 let pendingProgress: { pageNumber: number; totalPages: number } | null = null
@@ -35,26 +42,36 @@ let activeScrollScope: any = null
 let pdfTooltip: HTMLElement | null = null
 let pdfTooltipAnnotations: any[] = []
 let currentPdfTooltipId = ''
+let pdfTooltipFrame = 0
 let cleanupDocumentEvents: (() => void) | null = null
 let cleanupAnnotationEvents: (() => void) | null = null
 let cleanupScrollEvents: (() => void) | null = null
+let cleanupZoomEvents: (() => void) | null = null
 let cleanupCaptureEvents: (() => void) | null = null
 let cleanupTooltipEvents: (() => void) | null = null
 let cleanupMigrationEvents: (() => void) | null = null
-let themeObserver: MutationObserver | null = null
+let cleanupPdfDoubleTapZoom: (() => void) | null = null
+let pdfZoomRestore: any = null
 let copyNextCapture = false
 let lastCaptureBlob: Blob | null = null
+let zoomSaveTimer: any = null
 
 const PDF_PAGE_THEME_STYLE = `
   :host([data-sireader-page-mode="dark"]) div[style*="mix-blend-mode"][style*="background-color"]{mix-blend-mode:screen!important}
   :host([data-sireader-page-mode="dark"]) img[src^="blob:"]{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.92)}
+  :host([data-sireader-hide-annotations]) :is([data-no-interaction],input[type="file"] ~ *){display:none!important}
   div[style*="background: rgb(0, 0, 0)"][style*="cursor: pointer"]:hover,
   div[style*="background: #000000"][style*="cursor: pointer"]:hover{opacity:.08!important}
 `
+const pdfIcon = (body: string) => `<svg viewBox="0 0 24 24" style="width:16px;height:16px" fill="none" stroke="currentColor" stroke-width="2">${body}</svg>`
+const PDF_BOTTOM_ICONS = { toc: pdfIcon('<path d="M4 7h16M4 12h16M4 17h16"/>'), show: pdfIcon('<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>'), hide: pdfIcon('<path d="m2 2 20 20M10.6 10.6a2 2 0 0 0 2.8 2.8M7.4 7.4C3.8 9.2 2 12 2 12s3 7 10 7c1.6 0 3-.4 4.2-1M14.1 5.2C13.4 5.1 12.7 5 12 5 5 5 2 12 2 12c.8 1.8 2 3.3 3.5 4.4M17.7 17.7C20.5 15.9 22 12 22 12s-3-7-10-7"/>'), close: pdfIcon('<path d="M18 6 6 18M6 6l12 12"/>') }
 const getCapability = <T = any>(registry: PluginRegistry, pluginId: string): T | null =>
   (registry.getPlugin(pluginId) as any)?.provides?.() || null
+const pdfShadowRoot = () => rootRef.value?.querySelector('embedpdf-container')?.shadowRoot || null
 const pdfTheme = () => buildEmbedPdfTheme(props.theme, rootRef.value || undefined, props.customTheme)
 const pdfThemePreference = () => embedPdfThemePreference(props.theme, rootRef.value || undefined, props.customTheme)
+const normalizePdfZoomLevel = (value: unknown) => value === 'automatic' || value === 'fit-page' || value === 'fit-width' || (typeof value === 'number' && Number.isFinite(value) && value > 0) ? value : undefined
+const pdfZoomLevel = () => normalizePdfZoomLevel(props.settings?.pdfZoomLevel) || 'automatic'
 const ensurePageThemeStyle = () => {
   const shadow = (activeContainer as any)?.shadowRoot as ShadowRoot | undefined
   if (!shadow || shadow.querySelector('style[data-sireader-page-theme]')) return
@@ -63,9 +80,14 @@ const ensurePageThemeStyle = () => {
   style.textContent = PDF_PAGE_THEME_STYLE
   shadow.appendChild(style)
 }
+const syncPdfAnnotationsHidden = (hidden: boolean) => {
+  ;(activeContainer as any)?.toggleAttribute?.('data-sireader-hide-annotations', hidden)
+  if (hidden) hidePdfTooltip()
+}
 const applyPdfTheme = () => {
   activeContainer?.setTheme(pdfTheme())
   activeContainer?.setAttribute('data-sireader-page-mode', pdfThemePreference())
+  syncPdfAnnotationsHidden(!!props.hideAnnotations)
   ensurePageThemeStyle()
 }
 const escapeHtml = (text = '') => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -96,7 +118,7 @@ const showPdfTooltip = (item: any, x: number, y: number) => {
   showTooltip(tip, x + 12, y + 12)
 }
 const pdfShadowElementFromPoint = (x: number, y: number) =>
-  rootRef.value?.querySelector('embedpdf-container')?.shadowRoot?.elementFromPoint(x, y) as HTMLElement | null
+  pdfShadowRoot()?.elementFromPoint(x, y) as HTMLElement | null
 const pdfPointerElement = (x: number, y: number) => {
   let el = pdfShadowElementFromPoint(x, y)
   for (; el; el = el.parentElement) if (getComputedStyle(el).cursor === 'pointer') return el
@@ -135,10 +157,17 @@ const pdfAnnotationFromPoint = (x: number, y: number) => {
   return best?.item || null
 }
 const refreshPdfTooltipAnnotations = () => {
-  pdfTooltipAnnotations = activeAnnotationScope?.getAnnotations?.().map((item: any) => item.object).filter(Boolean) || []
+  const all = activeAnnotationScope?.getAnnotations?.()?.map((item: any) => item.object).filter(Boolean) || []
+  const replyParents = new Set(all.map((item: any) => item?.inReplyToId).filter(Boolean))
+  pdfTooltipAnnotations = all.filter((item: any) => item?.contents || item?.custom?.note || item?.inReplyToId || replyParents.has(item?.id))
 }
 const selectedPdfAnnotation = () => activeAnnotationScope?.getSelectedAnnotation?.()?.object
 const selectedPdfText = (annotation = selectedPdfAnnotation()) => annotation ? pdfSelectionFromAnnotation(annotation).text : ''
+const capturePdfAnnotationImage = (registry: PluginRegistry, annotation: any) =>
+  annotation?.rect && [4, 5, 6, 8, 15].includes(Number(annotation.type))
+    ? taskToPromise<Blob>(getCapability<any>(registry, 'render')?.forDocument(documentId)?.renderPageRect?.({ pageIndex: annotation.pageIndex, rect: annotation.rect, options: { imageType: 'image/png', scaleFactor: 2, withAnnotations: true } })).catch(() => null)
+    : null
+const pdfMarkWithImage = async (registry: PluginRegistry, annotation: any) => ({ ...pdfMarkFromAnnotation(annotation, pdfTooltipAnnotations), image: await capturePdfAnnotationImage(registry, annotation) })
 const quickDocs = () => ((props.settings ? props.settings.quickSendDocs : (window as any).__sireader_settings?.quickSendDocs) || []).filter((doc: any) => doc?.id).slice(0, 5)
 const sendPdfMark = async (mark: any, docId: string, registry: PluginRegistry) => {
   await sendPdfMarkToDoc(mark, docId, {
@@ -177,7 +206,7 @@ const updateSelectedPdfBlockId = (registry: PluginRegistry) => async (item: any,
   queueAnnotationSave(registry)
 }
 const queueCaptureCopyButton = () => {
-  const shadow = rootRef.value?.querySelector('embedpdf-container')?.shadowRoot
+  const shadow = pdfShadowRoot()
   if (!shadow) return
   const add = () => {
     if (shadow.querySelector('[data-sireader-copy-capture]')) return true
@@ -201,6 +230,87 @@ const queueCaptureCopyButton = () => {
   observer.observe(shadow, { childList: true, subtree: true })
   setTimeout(() => observer.disconnect(), 3000)
 }
+const setupPdfBottomButtons = (registry: PluginRegistry) => {
+  const shadow = pdfShadowRoot()
+  if (!shadow) return
+  let toolbarHidden = true
+  const labelToolbar = () => toolbarHidden ? '显示顶部工具栏' : '隐藏顶部工具栏'
+  const paint = (button: HTMLButtonElement, label: string, icon: string) => {
+    button.title = button.ariaLabel = label
+    button.innerHTML = icon
+  }
+  const add = () => {
+    const bar = shadow.querySelector('[data-overlay-id="page-controls"] .pointer-events-auto > div') as HTMLElement | null
+    const base = bar?.querySelector('button:last-of-type') as HTMLButtonElement | null
+    if (!bar || !base) return false
+    const mk = (key: string, label: string, icon: string, click: (button: HTMLButtonElement) => void) => {
+      if (shadow.querySelector(`[data-${key}]`)) return true
+      const button = base.cloneNode(false) as HTMLButtonElement
+      button.setAttribute(`data-${key}`, 'true')
+      button.type = 'button'
+      button.disabled = false
+      button.classList.add('b3-tooltips', 'b3-tooltips__n')
+      paint(button, label, icon)
+      button.onclick = event => { event.preventDefault(); event.stopPropagation(); click(button) }
+      bar.appendChild(button)
+      return true
+    }
+    const toggleToolbar = (button: HTMLButtonElement) => {
+      const ui = getCapability<any>(registry, 'ui')?.forDocument(documentId)
+      toolbarHidden ? ui?.setActiveToolbar?.('top', 'main', 'main-toolbar') : ui?.closeToolbarSlot?.('top', 'main')
+      toolbarHidden = !toolbarHidden
+      paint(button, labelToolbar(), toolbarHidden ? PDF_BOTTOM_ICONS.show : PDF_BOTTOM_ICONS.hide)
+    }
+    return (
+      mk('sireader-pdf-toc', props.i18n?.toc || '目录', PDF_BOTTOM_ICONS.toc, () => window.dispatchEvent(new Event('sireader:togglePdfToc'))) &&
+      mk('sireader-pdf-toolbar', labelToolbar(), PDF_BOTTOM_ICONS.show, toggleToolbar) &&
+      (!isMobile() || mk('sireader-pdf-close', '关闭', PDF_BOTTOM_ICONS.close, () => window.dispatchEvent(new CustomEvent('reader:mobile-close'))))
+    )
+  }
+  if (add()) return
+  const observer = new MutationObserver(() => add() && observer.disconnect())
+  observer.observe(shadow, { childList: true, subtree: true })
+  setTimeout(() => observer.disconnect(), 3000)
+}
+const setupPdfDoubleTapZoom = (registry: PluginRegistry) => {
+  if (!isMobile()) return
+  const zoom = getCapability<any>(registry, 'zoom')?.forDocument(documentId)
+  const scroll = getCapability<any>(registry, 'scroll')?.forDocument(documentId)
+  const viewport = getCapability<any>(registry, 'viewport')?.forDocument?.(documentId)
+  const documents = getCapability<any>(registry, 'document-manager')
+  const shadow = pdfShadowRoot()
+  if (!shadow || !zoom || !scroll) return
+  let last = { t: 0, x: 0, y: 0 }
+  const zoomAt = (clientX: number, clientY: number) => {
+    const vp = viewport?.getMetrics?.()
+    const box = rootRef.value?.getBoundingClientRect()
+    const x = clientX - (vp?.relativePosition?.x ?? box?.left ?? 0)
+    const y = clientY - (vp?.relativePosition?.y ?? box?.top ?? 0)
+    const hit = scroll.getMetrics(vp).pageVisibilityMetrics.find((m: any) => x >= m.viewportX && x <= m.viewportX + m.scaled.visibleWidth && y >= m.viewportY && y <= m.viewportY + m.scaled.visibleHeight)
+    if (!hit) return
+    if (pdfZoomRestore) {
+      zoom.requestZoom?.(pdfZoomRestore, { vx: (vp?.clientWidth || box?.width || innerWidth) / 2, vy: (vp?.clientHeight || box?.height || innerHeight) / 2 })
+      pdfZoomRestore = null
+      return
+    }
+    const page = documents?.getDocumentState(documentId)?.document?.pages?.[hit.pageNumber - 1]
+    if (!page?.size) return
+    pdfZoomRestore = zoom.getState?.().zoomLevel
+    const half = page.size.width > page.size.height
+    zoom.zoomToArea(hit.pageNumber - 1, { origin: { x: half && x > hit.viewportX + hit.scaled.visibleWidth / 2 ? page.size.width / 2 : 0, y: 0 }, size: { width: half ? page.size.width / 2 : page.size.width, height: page.size.height } })
+  }
+  const onPointerUp = (event: PointerEvent) => {
+    if (event.isPrimary === false) return
+    const now = performance.now(), dx = event.clientX - last.x, dy = event.clientY - last.y
+    if (now - last.t > 300 || dx * dx + dy * dy > 324) return void (last = { t: now, x: event.clientX, y: event.clientY })
+    last.t = 0
+    event.preventDefault()
+    event.stopPropagation()
+    zoomAt(event.clientX, event.clientY)
+  }
+  shadow.addEventListener('pointerup', onPointerUp, true)
+  cleanupPdfDoubleTapZoom = () => shadow.removeEventListener('pointerup', onPointerUp, true)
+}
 const copyCaptureBlob = async (blob: Blob) => {
   await writeBlobToClipboard(blob)
   showMessage(props.i18n?.copied || '已复制', 1200)
@@ -219,25 +329,28 @@ const openPdfTranslate = (text: string) => {
   app = createApp(Translate, { text })
   app.mount(dialog.element.querySelector('.sireader-pdf-translate') as HTMLElement)
 }
-const openPdfQuickSendMenu = (type: 'selection' | 'annotation', registry: PluginRegistry) => {
-  const menuId = `sireader-pdf-send-${type}`
-  const commandId = `sireader:send-${type}-menu`
-  getCapability<any>(registry, 'ui')?.forDocument(documentId)?.openMenu?.(menuId, commandId, commandId)
-}
-const pdfSelectedMark = (registry: PluginRegistry) => getPdfSelectionMark(getCapability<any>(registry, 'selection')?.forDocument(documentId))
 const setupPdfCommands = (registry: PluginRegistry) => {
   const commands = getCapability<any>(registry, 'commands')
   const ui = getCapability<any>(registry, 'ui')
+  const uiDoc = ui?.forDocument(documentId)
+  const selection = getCapability<any>(registry, 'selection')?.forDocument(documentId)
+  const capture = getCapability<any>(registry, 'capture')?.forDocument(documentId)
   const docs = quickDocs()
+  const selectedMark = () => getPdfSelectionMark(selection)
+  const openSendMenu = (type: 'selection' | 'annotation') => {
+    const commandId = `sireader:send-${type}-menu`
+    uiDoc?.openMenu?.(`sireader-pdf-send-${type}`, commandId, commandId)
+  }
   commands?.registerCommand?.({
     id: 'sireader:copy-annotation-link',
     label: '复制回链',
     icon: 'copy',
     categories: ['annotation', 'sireader-copy-link'],
-    action: () => {
+    action: async () => {
       const selected = selectedPdfAnnotation()
       if (!selected) return
-      void copyMark(pdfMarkFromAnnotation(selected, pdfTooltipAnnotations), { bookUrl: props.bookUrl || '', isPdf: true, showMsg: (msg: string, type?: string) => showMessage(msg, 1500, type as any) })
+      const mark = await pdfMarkWithImage(registry, selected)
+      await copyMark(mark, { bookUrl: props.bookUrl || '', isPdf: true, showMsg: (msg: string, type?: string) => showMessage(msg, 1500, type as any) })
     },
     visible: () => !!selectedPdfAnnotation(),
   })
@@ -269,7 +382,7 @@ const setupPdfCommands = (registry: PluginRegistry) => {
     label: props.i18n?.sendTo || 'Send to',
     icon: 'fileImport',
     categories: ['selection', 'sireader-send'],
-    action: () => openPdfQuickSendMenu('selection', registry),
+    action: () => openSendMenu('selection'),
   })
   commands?.registerCommand?.({
     id: 'sireader:create-hole',
@@ -280,17 +393,17 @@ const setupPdfCommands = (registry: PluginRegistry) => {
   ;[
     ['dict', props.i18n?.dict || '词典', 'book', async (mark: any) => (await import('@/utils/dictionary')).openDict(mark.text, innerWidth / 2, innerHeight / 2, mark)],
     ['translate', props.i18n?.translate || '翻译', 'text', (mark: any) => openPdfTranslate(mark.text)],
-  ].forEach(([id, label, icon, run]: any) => commands?.registerCommand?.({ id: `sireader:${id}-selection`, label, icon, action: async () => { const mark = await pdfSelectedMark(registry); if (mark?.text) run(mark) } }))
+  ].forEach(([id, label, icon, run]: any) => commands?.registerCommand?.({ id: `sireader:${id}-selection`, label, icon, action: async () => { const mark = await selectedMark(); if (mark?.text) run(mark) } }))
   docs.forEach((doc: any, index: number) => commands?.registerCommand?.({
     id: `sireader:send-selection:${index}`,
     label: doc.name || props.i18n?.sendTo || 'Send to',
     icon: 'fileImport',
     categories: ['selection', 'sireader-send'],
     action: async () => {
-      const mark = await pdfSelectedMark(registry)
+      const mark = await selectedMark()
       if (mark) await sendPdfMark(mark, doc.id, registry)
-      getCapability<any>(registry, 'selection')?.forDocument(documentId)?.clear?.()
-      getCapability<any>(registry, 'ui')?.forDocument(documentId)?.closeMenu?.('sireader-pdf-send-selection')
+      selection?.clear?.()
+      uiDoc?.closeMenu?.('sireader-pdf-send-selection')
     },
   }))
   commands?.registerCommand?.({
@@ -298,7 +411,7 @@ const setupPdfCommands = (registry: PluginRegistry) => {
     label: props.i18n?.sendTo || 'Send to',
     icon: 'fileImport',
     categories: ['annotation', 'sireader-send'],
-    action: () => openPdfQuickSendMenu('annotation', registry),
+    action: () => openSendMenu('annotation'),
   })
   docs.forEach((doc: any, index: number) => commands?.registerCommand?.({
     id: `sireader:send-annotation:${index}`,
@@ -307,8 +420,11 @@ const setupPdfCommands = (registry: PluginRegistry) => {
     categories: ['annotation', 'sireader-send'],
     action: async () => {
       const selected = selectedPdfAnnotation()
-      if (selected) await sendPdfMark(pdfMarkFromAnnotation(selected, pdfTooltipAnnotations), doc.id, registry)
-      getCapability<any>(registry, 'ui')?.forDocument(documentId)?.closeMenu?.('sireader-pdf-send-annotation')
+      if (selected) {
+        const mark = await pdfMarkWithImage(registry, selected)
+        await sendPdfMark(mark, doc.id, registry)
+      }
+      uiDoc?.closeMenu?.('sireader-pdf-send-annotation')
     },
   }))
   commands?.registerCommand?.({
@@ -319,7 +435,7 @@ const setupPdfCommands = (registry: PluginRegistry) => {
     action: () => {
       copyNextCapture = true
       window.dispatchEvent(new Event('sireader:close-reader-panels'))
-      getCapability<any>(registry, 'capture')?.forDocument(documentId)?.toggleMarqueeCapture?.()
+      capture?.toggleMarqueeCapture?.()
       showMessage(props.i18n?.capture || '拖选截图区域', 1500)
     },
   })
@@ -390,16 +506,21 @@ const setupPdfTooltip = () => {
   const root = rootRef.value
   if (!root) return
   const onMove = (event: PointerEvent) => {
+    if (event.pointerType !== 'mouse') return
     if (!root.contains(event.target as Node | null)) return
     const { clientX: x, clientY: y } = event
-    const item = pdfAnnotationFromPoint(x, y)
-    item ? showPdfTooltip(item, x, y) : hidePdfTooltip()
+    cancelAnimationFrame(pdfTooltipFrame)
+    pdfTooltipFrame = requestAnimationFrame(() => {
+      const item = pdfAnnotationFromPoint(x, y)
+      item ? showPdfTooltip(item, x, y) : hidePdfTooltip()
+    })
   }
   root.addEventListener('pointermove', onMove, true)
   root.addEventListener('mouseleave', hidePdfTooltip, true)
   document.addEventListener('pointerdown', hidePdfTooltip, true)
   refreshPdfTooltipAnnotations()
   cleanupTooltipEvents = () => {
+    cancelAnimationFrame(pdfTooltipFrame)
     root.removeEventListener('pointermove', onMove, true)
     root.removeEventListener('mouseleave', hidePdfTooltip, true)
     document.removeEventListener('pointerdown', hidePdfTooltip, true)
@@ -416,6 +537,17 @@ const setupPdfMigration = () => {
   }
   window.addEventListener('sireader:pdf-migration', onMigration as EventListener)
   cleanupMigrationEvents = () => window.removeEventListener('sireader:pdf-migration', onMigration as EventListener)
+}
+
+const savePdfZoomLevel = (level: unknown) => {
+  const pdfZoomLevel = normalizePdfZoomLevel(level)
+  const settings = props.settings || (window as any).__sireader_settings
+  if (!pdfZoomLevel || !settings || settings.pdfZoomLevel === pdfZoomLevel) return
+  clearTimeout(zoomSaveTimer)
+  zoomSaveTimer = setTimeout(() => {
+    zoomSaveTimer = null
+    void settingsManager.save({ ...settings, pdfZoomLevel })
+  }, 400)
 }
 
 const saveAnnotations = async (registry: PluginRegistry) => {
@@ -436,11 +568,9 @@ const queueAnnotationSave = (registry: PluginRegistry) => {
   }, 600)
 }
 
-const toProgress = (page: { pageNumber: number; totalPages: number }) => ({ ...page, updatedAt: Date.now() })
-
 const saveProgress = async (page: { pageNumber: number; totalPages: number }) => {
   if (!props.bookUrl) return
-  const progress = toProgress(page)
+  const progress = { ...page, updatedAt: Date.now() }
   await writeEmbedPdfProgress(storageKey(), progress)
   const percent = progress.totalPages ? Math.round(progress.pageNumber / progress.totalPages * 100) : 0
   await bookshelfManager.updateProgress(props.bookUrl, percent, progress.pageNumber, `#page-${progress.pageNumber}`)
@@ -465,10 +595,9 @@ const handleReady = async (registry: PluginRegistry) => {
   activeRegistry = registry
   emit('ready', registry)
   setupPdfMigration()
-  cleanupDocumentEvents?.()
-  cleanupAnnotationEvents?.()
-  cleanupScrollEvents?.()
-  cleanupDocumentEvents = cleanupAnnotationEvents = cleanupScrollEvents = null
+  ;[cleanupDocumentEvents, cleanupAnnotationEvents, cleanupScrollEvents, cleanupZoomEvents, cleanupPdfDoubleTapZoom].forEach(cleanup => cleanup?.())
+  pdfZoomRestore = null
+  cleanupDocumentEvents = cleanupAnnotationEvents = cleanupScrollEvents = cleanupZoomEvents = cleanupPdfDoubleTapZoom = null
   const scroll = getCapability<any>(registry, 'scroll')
   if (props.bookUrl && scroll?.forDocument) {
     let restored = false
@@ -498,33 +627,63 @@ const handleReady = async (registry: PluginRegistry) => {
   const getPageHeights = () => (documents?.getDocumentState(documentId)?.document?.pages || []).map((page: any) => Number(page?.size?.height || 0))
   activeAnnotationScope = getCapability<any>(registry, 'annotation')?.forDocument(documentId) || null
   activeScrollScope = scroll?.forDocument?.(documentId) || null
+  const zoom = getCapability<any>(registry, 'zoom')?.forDocument?.(documentId)
+  const offZoomState = zoom?.onStateChange?.((state: any) => savePdfZoomLevel(state?.zoomLevel))
+  cleanupZoomEvents = () => offZoomState?.()
+  const ui = getCapability<any>(registry, 'ui'), sidebarPanel = ui?.getSchema?.().sidebars?.['sidebar-panel'] as any, tabs = sidebarPanel?.content?.tabs
+  const outline = Array.isArray(tabs) ? tabs.find((tab: any) => tab.id === 'outline') : null
+  if (outline && tabs[0]?.id !== 'outline') ui?.mergeSchema?.({ sidebars: { 'sidebar-panel': { ...sidebarPanel, content: { ...sidebarPanel.content, tabs: [outline, ...tabs.filter((tab: any) => tab.id !== 'outline')] } } } as any })
+  ui?.forDocument(documentId)?.closeToolbarSlot?.('top', 'main')
   setupPdfCommands(registry)
+  setupPdfBottomButtons(registry)
+  setupPdfDoubleTapZoom(registry)
   setupPdfCapture(registry)
   let annotationsLoaded = false
+  const annotation = activeAnnotationScope
+  let annotationFallbackTimer: any = null
+  const annotationIds = () => new Set(annotation?.getAnnotations?.()?.map((item: any) => item.object?.id).filter(Boolean) || [])
   const loadAnnotations = async () => {
+    clearTimeout(annotationFallbackTimer)
     if (annotationsLoaded) return
     annotationsLoaded = true
-    const annotation = activeAnnotationScope
-    if (!storageKey() || !annotation?.importAnnotations) return
+    if (!storageKey() || !annotation?.importAnnotations) {
+      window.dispatchEvent(new Event('sireader:marks-updated'))
+      refreshPdfTooltipAnnotations()
+      return
+    }
     const pageHeights = getPageHeights()
     const stored = await readEmbedPdfAnnotations(storageKey(), pageHeights).catch(() => null)
     const aligned = stored?.length && needsLegacyPdfTextAlign(stored) ? await alignLegacyPdfAnnotations(stored, registry, documents, documentId) : stored
     if (aligned !== stored && aligned?.length) await writeEmbedPdfAnnotations(storageKey(), aligned)
-    if (aligned?.length) annotation.importAnnotations(aligned)
+    if (aligned?.length) {
+      const existing = annotationIds()
+      const missing = aligned.filter((item: any) => !existing.has((item.annotation || item)?.id))
+      if (missing.length) annotation.importAnnotations(missing)
+    }
     window.dispatchEvent(new Event('sireader:marks-updated'))
     refreshPdfTooltipAnnotations()
-    const offEvent = annotation.onAnnotationEvent?.(() => { queueAnnotationSave(registry); refreshPdfTooltipAnnotations() })
+  }
+  const scheduleAnnotationLoad = (delay = 0) => {
+    clearTimeout(annotationFallbackTimer)
+    annotationFallbackTimer = setTimeout(() => void loadAnnotations(), delay)
+  }
+  if (annotation) {
+    const offEvent = annotation.onAnnotationEvent?.((event: any) => {
+      if (event?.type === 'loaded') void loadAnnotations()
+      else queueAnnotationSave(registry)
+      refreshPdfTooltipAnnotations()
+    })
     const offState = annotation.onStateChange?.(refreshPdfTooltipAnnotations)
-    cleanupAnnotationEvents = () => { offEvent?.(); offState?.() }
+    cleanupAnnotationEvents = () => { clearTimeout(annotationFallbackTimer); offEvent?.(); offState?.() }
   }
   const offOpen = documents?.onDocumentOpened?.((state: any) => {
-    if (state.id === documentId) void loadAnnotations()
+    if (state.id === documentId) scheduleAnnotationLoad(2000)
   })
   const offError = documents?.onDocumentError?.((event: any) => {
     if (event.documentId === documentId) showMessage(event.message || props.i18n?.loadFailed || 'PDF load failed', 3000, 'error')
   })
-  cleanupDocumentEvents = () => { offOpen?.(); offError?.() }
-  if (documents?.getDocumentState(documentId)?.status === 'loaded') void loadAnnotations()
+  cleanupDocumentEvents = () => { clearTimeout(annotationFallbackTimer); offOpen?.(); offError?.() }
+  if (documents?.getDocumentState(documentId)?.status === 'loaded') scheduleAnnotationLoad(annotationIds().size ? 0 : 2000)
   ensurePageThemeStyle()
   void nextTick(setupPdfTooltip)
 }
@@ -534,11 +693,10 @@ watch(() => props.source, async (source) => {
   const token = ++sourceToken
   documentSource.value = null
   if (!source) return
+  await preparePdfWasmUrl()
+  if (token !== sourceToken) return
   if (typeof source === 'string') {
-    const res = await fetch(source)
-    const buffer = await res.arrayBuffer()
-    if (token !== sourceToken) return
-    documentSource.value = { documentId, buffer, name: source.split('/').pop()?.split('?')[0] || 'document.pdf', autoActivate: true }
+    documentSource.value = { documentId, url: source, name: source.split('/').pop()?.split('?')[0] || 'document.pdf', autoActivate: true }
   } else {
     const buffer = await source.arrayBuffer()
     if (token !== sourceToken) return
@@ -548,16 +706,18 @@ watch(() => props.source, async (source) => {
 
 const config = computed(() => ({
   tabBar: 'never',
-  worker: false,
-  wasmUrl: '/plugins/siyuan-sireader/assets/pdfium.wasm',
+  worker: true,
+  wasmUrl: pdfWasmUrl.value,
   documentManager: {
     initialDocuments: [documentSource.value],
   },
   fontFallback: null,
   fonts: { ui: null, signature: null },
-  stamp: { manifests: [{ url: '/plugins/siyuan-sireader/assets/default-stamps/{locale}/manifest.json', fallbackLocale: 'zh-CN' }] },
+  stamp: { manifests: [] },
   permissions: { enforceDocumentPermissions: true },
   capture: { imageType: 'image/png', scale: 2, withAnnotations: true },
+  scroll: { defaultBufferSize: 1 },
+  zoom: { defaultZoomLevel: pdfZoomLevel() },
   redaction: { useAnnotationMode: true, drawBlackBoxes: true },
   i18n: {
     defaultLocale: 'zh-CN',
@@ -567,9 +727,10 @@ const config = computed(() => ({
 }))
 
 watch(() => [props.theme, props.customTheme?.color, props.customTheme?.bg, props.customTheme?.bgImg], () => nextTick(applyPdfTheme))
+watch(() => props.hideAnnotations, hidden => syncPdfAnnotationsHidden(!!hidden))
 watch(() => props.settings?.quickSendDocs, () => activeRegistry && setupPdfCommands(activeRegistry), { deep: true })
-themeObserver = new MutationObserver(() => requestAnimationFrame(applyPdfTheme))
-;[document.documentElement, document.body].forEach(el => themeObserver?.observe(el, { attributes: true, attributeFilter: ['class', 'style', 'data-theme-mode'] }))
+const themeObserver = new MutationObserver(() => requestAnimationFrame(applyPdfTheme))
+;[document.documentElement, document.body].forEach(el => themeObserver.observe(el, { attributes: true, attributeFilter: ['class', 'style', 'data-theme-mode'] }))
 
 onBeforeUnmount(() => {
   if (annotationSaveTimer && activeRegistry) {
@@ -580,13 +741,17 @@ onBeforeUnmount(() => {
     clearTimeout(progressSaveTimer)
     void saveProgress(pendingProgress)
   }
+  clearTimeout(zoomSaveTimer)
   cleanupAnnotationEvents?.()
   cleanupDocumentEvents?.()
   cleanupScrollEvents?.()
+  cleanupZoomEvents?.()
   cleanupCaptureEvents?.()
   cleanupTooltipEvents?.()
   cleanupMigrationEvents?.()
-  themeObserver?.disconnect()
+  cleanupPdfDoubleTapZoom?.()
+  pdfZoomRestore = null
+  themeObserver.disconnect()
   activeAnnotationScope = null
   activeScrollScope = null
   activeContainer = null
