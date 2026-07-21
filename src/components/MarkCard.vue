@@ -197,8 +197,8 @@ const emit = defineEmits<{
 .sr-tag-list{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sr-gap,4px);min-height:var(--sr-line,19px)}
 .sr-tag-editor{flex-direction:column;align-items:stretch}
 .sr-tag-options{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sr-gap,4px)}
-.sr-tag-group-title{flex-basis:100%;height:18px;padding:0 4px;border:0;border-radius:2px;background:transparent;color:var(--b3-theme-on-surface-variant);font-size:11px;line-height:18px;text-align:left;cursor:pointer}
-.sr-tag-group-title.active{color:var(--b3-theme-primary);background:var(--b3-theme-primary-lightest)}
+.sr-tag-group-title{flex:0 0 auto;height:18px;padding:0 6px;border:1px dashed var(--b3-border-color);border-radius:2px;background:transparent;color:var(--b3-theme-on-surface-variant);font-size:11px;font-weight:500;line-height:16px;text-align:left;white-space:nowrap;cursor:pointer}
+.sr-tag-group-title.active{border-color:var(--b3-theme-primary);color:var(--b3-theme-primary);background:var(--b3-theme-primary-lightest)}
 .sr-tag-chip{display:inline-flex;align-items:center;height:18px;padding:0 6px;border:0;border-radius:2px;background:var(--b3-theme-primary-lightest);color:var(--b3-theme-primary);font-size:12px;line-height:18px;cursor:default}
 button.sr-tag-chip{cursor:pointer;opacity:.58}
 button.sr-tag-chip.active{opacity:1;background:var(--b3-theme-primary-lightest);color:var(--b3-theme-primary)}

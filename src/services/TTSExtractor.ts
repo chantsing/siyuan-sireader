@@ -1,52 +1,30 @@
-const BLOCK_TAGS = new Set(['article', 'aside', 'blockquote', 'div', 'dl', 'dt', 'dd', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'li', 'main', 'nav', 'ol', 'p', 'pre', 'section', 'tr'])
+import { textWalker } from 'foliate-js/text-walker.js'
 
-export function* extractBlocks(doc: Document, startRange?: Range): Generator<Range> {
-  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_ELEMENT)
-  let last: Range | null = null
-  let startNode: Element | null = null
-
-  if (startRange) {
-    let node: Node | null = startRange.startContainer.nodeType === Node.TEXT_NODE ? startRange.startContainer.parentElement : startRange.startContainer
-    while (node && !BLOCK_TAGS.has((node as Element).tagName?.toLowerCase())) node = node.parentElement
-    if (node && BLOCK_TAGS.has((node as Element).tagName?.toLowerCase())) {
-      startNode = node as Element
-      while (walker.nextNode() !== startNode);
-    }
-  }
-
-  for (let node = startNode || walker.nextNode(); node; node = walker.nextNode()) {
-    if (!BLOCK_TAGS.has((node as Element).tagName.toLowerCase())) continue
-    if (last) {
-      last.setEndBefore(node)
-      if (last.toString().trim()) yield last
-    }
-    last = doc.createRange()
-    last.setStart(node, 0)
-  }
-
-  if (last) {
-    last.setEndAfter(doc.body.lastChild || doc.body)
-    if (last.toString().trim()) yield last
-  }
+const textNodeFilter = (node: Node) => {
+  if (node.nodeType !== Node.ELEMENT_NODE) return NodeFilter.FILTER_ACCEPT
+  const el = node as Element
+  return el.matches('script,style,svg,nav,link,meta') || ttsNodeFilter(node) === NodeFilter.FILTER_REJECT
+    ? NodeFilter.FILTER_REJECT
+    : NodeFilter.FILTER_SKIP
 }
 
-export class TextIterator {
-  private arr: any[] = []
-  private iter: Iterator<Range>
-  private idx = -1
+export const extractText = (root: Document | DocumentFragment | Element | Range | null) => {
+  if (!root) return ''
+  const join = function* (strs: string[]) { yield strs.join('') }
+  return Array.from(textWalker(root, join, textNodeFilter)).join('')
+    .replace(/\r/g, '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim()
+}
 
-  constructor(iter: Iterator<Range>) { this.iter = iter }
-
-  get(targetIdx: number) {
-    if (targetIdx < 0) return null
-    if (this.arr[targetIdx]) return (this.idx = targetIdx, this.arr[targetIdx])
-    while (this.arr.length <= targetIdx) {
-      const { done, value } = this.iter.next()
-      if (done) return null
-      this.arr.push({ index: this.arr.length, text: value.toString().trim(), range: value })
-    }
-    return (this.idx = targetIdx, this.arr[targetIdx])
-  }
-
-  next() { return this.get(this.idx + 1) }
+export const ttsNodeFilter = (node: Node) => {
+  if (node.nodeType !== Node.ELEMENT_NODE) return NodeFilter.FILTER_ACCEPT
+  const el = node as Element
+  const tokens = [
+    el.getAttribute('epub:type'),
+    el.getAttributeNS?.('http://www.idpf.org/2007/ops', 'type'),
+    el.getAttribute('role'),
+  ].join(' ')
+  return el.matches('.epubtype-footnote,.duokan-footnote-content,.duokan-footnote-item,.md-footnotes')
+    || /\b(footnote|endnote|rearnote|note|doc-footnote|doc-endnote)\b/i.test(tokens)
+    ? NodeFilter.FILTER_REJECT
+    : NodeFilter.FILTER_ACCEPT
 }

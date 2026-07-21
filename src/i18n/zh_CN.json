@@ -384,6 +384,8 @@
   "ttsRate": "语速",
   "ttsVolume": "音量",
   "ttsPitch": "音调",
+  "ttsSentenceGap": "句间隔",
+  "ttsParagraphGap": "段间隔",
   "ttsOptions": "TTS选项",
   "ttsAutoPlay": "自动播放",
   "ttsAutoPlayDesc": "打开书籍时自动开始朗读",

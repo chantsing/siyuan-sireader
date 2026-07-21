@@ -1,65 +1,47 @@
-const flashElement = (el: HTMLElement, className: string, duration = 1200) => {
-  el.classList.add(className)
-  setTimeout(() => el.classList.remove(className), duration)
-}
-
-const flashSVG = (el: SVGElement) => {
-  const orig = el.style.opacity || '1'
-  el.style.opacity = '1'
-  setTimeout(() => {
-    el.style.opacity = '0.3'
-    setTimeout(() => (el.style.opacity = orig), 300)
-  }, 300)
-}
-
-const ensureStyle = (doc: Document, id: string, css: string) => {
-  if (doc.querySelector(`#${id}`)) return
-  const s = doc.createElement('style')
-  s.id = id
-  s.textContent = css
-  doc.head.appendChild(s)
-}
-
 export const pdfPageFromCfi = (cfi?: string) => Number(String(cfi || '').match(/^(?:#page-)?(\d+)$/)?.[1] || 0)
 
-export const gotoEPUB = (cfi: string, id: string | undefined, reader: any, markManager: any) => {
-  reader?.goTo(cfi)
-  const tryFlash = () => {
-    let targetCfi = cfi
-    if (id) targetCfi = markManager?.getAll?.().find((m: any) => m.id === id)?.cfi || targetCfi
-    reader?.getView()?.renderer?.getContents?.()?.forEach(({ doc, overlayer }: any) => {
-      if (!overlayer) return
-      const iframe = doc.defaultView?.frameElement as HTMLIFrameElement
-      const svg = iframe?.parentElement?.querySelector('svg')
-      if (!svg) return
-      const groups = Array.from(svg.querySelectorAll('g[fill]:not([fill="none"])')) as SVGGElement[]
-      let target: SVGGElement | undefined
-      try {
-        const resolved = targetCfi && reader.getView().resolveCFI(targetCfi)
-        const range = resolved?.anchor?.(doc)
-        const rect = range?.getClientRects?.()[0]
-        const ir = iframe.getBoundingClientRect()
-        if (rect) target = groups.find(g => {
-          const r = g.getBoundingClientRect()
-          return Math.abs(r.left - (rect.left + ir.left)) < 20 && Math.abs(r.top - (rect.top + ir.top)) < 20
-        })
-      } catch {}
-      ;(target ? [target] : groups).forEach(flashSVG)
-      const marker = doc.querySelectorAll('[data-note-marker]')[0] as HTMLElement
-      if (marker) {
-        ensureStyle(doc, 'epub-flash-style', '@keyframes epub-flash{0%,100%{opacity:1}50%{opacity:.3}}.epub-flash{animation:epub-flash 1.2s ease-in-out 1!important}')
-        flashElement(marker, 'epub-flash')
-      }
+const flashEPUB = (view: any, cfi: string, resolved?: any) => {
+  try {
+    const { index, anchor } = resolved || view?.resolveCFI?.(cfi) || {}
+    const doc = view?.renderer?.getContents?.().find((item: any) => item.index === index)?.doc
+    const target = anchor?.(doc)
+    const rects = Array.from(target?.getClientRects?.() || []).filter((rect: any) => rect.width && rect.height).slice(0, 8)
+    if (!doc?.body || !rects.length) return
+    if (!doc.getElementById('sireader-mark-flash-style')) {
+      const style = doc.createElement('style')
+      style.id = 'sireader-mark-flash-style'
+      style.textContent = '@keyframes sireader-mark-flash{0%,100%{opacity:0;transform:scale(.98)}18%,70%{opacity:1;transform:scale(1)}}.sireader-mark-flash{position:fixed;z-index:2147483647;pointer-events:none;background:rgba(255,214,64,.42);outline:2px solid rgba(255,177,0,.9);border-radius:4px;box-shadow:0 0 0 4px rgba(255,214,64,.22);animation:sireader-mark-flash 1.25s ease-out both}'
+      doc.head.appendChild(style)
+    }
+    rects.forEach((rect: any) => {
+      const el = doc.createElement('span')
+      el.className = 'sireader-mark-flash'
+      el.style.cssText = `left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px`
+      doc.body.appendChild(el)
+      setTimeout(() => el.remove(), 1300)
     })
-  }
-  setTimeout(tryFlash, 300)
-  setTimeout(tryFlash, 800)
+  } catch {}
 }
 
+export const gotoEPUB = async (cfi: string, id: string | undefined, reader: any, marks: any) => {
+  const mark = marks?.getAll?.().find((item: any) => (id && item.id === id) || item.cfi === cfi)
+  const target = mark?.cfi || cfi
+  const view = reader?.getView?.()
+  if (!target) return
+  const resolved = view?.goTo ? await view.goTo(target) : await reader?.goTo?.(target)
+  requestAnimationFrame(() => flashEPUB(view || reader?.getView?.(), target, resolved))
+  return resolved
+}
+
+export const markTarget = (item: any) =>
+  typeof item === 'number' ? `#page-${item}` : typeof item === 'string' ? item : item?.cfi || (item?.page ? `#page-${item.page}` : '')
+
 export const jump = (item: any, activeView: any, activeReader: any, marks: any) => {
-  if (activeView?.isOnlineContext && item.cfi) activeView.goTo(item.cfi)
-  else if (activeView?.isPdf && item.page) activeView.goTo?.(item.page)
-  else if (item.cfi) gotoEPUB(item.cfi, item.id, activeReader, marks)
+  const target = markTarget(item)
+  const page = pdfPageFromCfi(target)
+  if (activeView?.isOnlineContext && target) activeView.goTo(target)
+  else if (activeView?.isPdf && page) activeView.goTo?.(page, item?.id)
+  else if (target) void gotoEPUB(target, item?.id, activeReader, marks)
 }
 
 export const restorePosition = async (bookUrl: string, reader: any, getMobilePosition: any) => {

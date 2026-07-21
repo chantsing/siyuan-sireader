@@ -386,6 +386,8 @@
   "ttsRate": "Speech Rate",
   "ttsVolume": "Volume",
   "ttsPitch": "Pitch",
+  "ttsSentenceGap": "Sentence Gap",
+  "ttsParagraphGap": "Paragraph Gap",
   "ttsOptions": "TTS Options",
   "ttsAutoPlay": "Auto Play",
   "ttsAutoPlayDesc": "Automatically start reading when opening a book",

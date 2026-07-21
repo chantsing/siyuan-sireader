@@ -1,35 +1,37 @@
-// TTS 播放器：播放控制 + 高亮 + UI 交互
 import { ref } from 'vue'
 import { showMessage } from 'siyuan'
-import { EdgeTTSCore, toArrayBuffer, loadLocalVoices } from './TTSEngine'
-import { extractBlocks, TextIterator } from './TTSExtractor'
+import { TTS } from 'foliate-js/tts.js'
+import { textWalker } from 'foliate-js/text-walker.js'
+import { EdgeTTSCore, loadLocalVoices, toArrayBuffer } from './TTSEngine'
+import { ttsNodeFilter } from './TTSExtractor'
 
 declare const window: any
+const BLOCK_SELECTOR = 'article,aside,blockquote,div,dl,dt,dd,figure,footer,form,h1,h2,h3,h4,h5,h6,header,li,main,ol,p,pre,section,tr'
 
-// TTS 播放器
 export class EdgeTTSPlayer {
-  private tts = new EdgeTTSCore()
-  private textIter: TextIterator
+  private edge = new EdgeTTSCore()
+  private foliateTTS: any
+  private view: any
+  private doc?: Document
   private renderer: any
+  private startRange?: Range
   private config: any
   private audioCtx = new AudioContext()
-  private blocks: any[] = []
   private stopped = false
   private paused = false
-  private loadQueue = Promise.resolve()
-  private isLocal: boolean
+  private isLocal = false
   private currentSource: any = null
-  private currentIndex = 0
-  private jumped = false
+  private voiceTask: Promise<void>
+  private ticket = 0
 
-  constructor(doc: Document, renderer: any, config: any, startRange?: Range) {
-    this.isLocal = false
-    this.tts.setVoice(config.voice)
-    this.textIter = new TextIterator(extractBlocks(doc, startRange))
-    this.renderer = renderer
+  constructor(source: Document | any, config: any, startRange?: Range) {
+    this.view = source?.initTTS ? source : null
+    this.doc = this.view ? undefined : source
+    this.renderer = this.view?.renderer
     this.config = config
-    // 异步检查是否为本地语音
-    this.checkLocalVoice(config.voice)
+    this.startRange = startRange
+    this.edge.setVoice(config.voice)
+    this.voiceTask = this.checkLocalVoice(config.voice)
   }
 
   private async checkLocalVoice(voiceName: string) {
@@ -40,23 +42,15 @@ export class EdgeTTSPlayer {
 
   async updateConfig(config: any) {
     const voiceChanged = config.voice && config.voice !== this.config.voice
-    const rateChanged = config.rate !== undefined && config.rate !== this.config.rate
     this.config = { ...this.config, ...config }
-    if (voiceChanged) {
-      this.tts.setVoice(config.voice)
-      await this.checkLocalVoice(config.voice)
-    }
-    if (!this.isLocal && (voiceChanged || rateChanged)) this.blocks.forEach(block => {
-      block.source = null
-      block.buffer = null; block.loaded = false; block.loading = true
-      this.loadQueue = this.loadQueue.then(async () => {
-        if (this.stopped || block.aborted) return void (block.loading = false)
-        try {
-          const buf = await this.tts.toStream(block.text, this.config.rate || 1)
-          if (!this.stopped && !block.aborted) block.buffer = await this.audioCtx.decodeAudioData(toArrayBuffer(buf)), block.loaded = true
-        } catch { block.loaded = false } finally { block.loading = false }
-      }).catch(() => (block.loading = false, block.loaded = false))
-    })
+    if (!voiceChanged) return
+    this.edge.setVoice(config.voice)
+    await this.checkLocalVoice(config.voice)
+    !this.isLocal && this.stopCurrent()
+  }
+
+  private highlighter = (range: Range) => {
+    this.config.highlightText && this.renderer?.scrollToAnchor?.(range, true)
   }
 
   private stopCurrent() {
@@ -64,112 +58,150 @@ export class EdgeTTSPlayer {
     this.currentSource = null
   }
 
-  private resetBlocks() {
-    this.blocks.forEach(b => (b.aborted = true, b.source = null))
-    this.blocks = []
-  }
-
-  private pushBlock(item: any) {
-    const block: any = { ...item, buffer: null, source: null, loading: !this.isLocal, loaded: this.isLocal, aborted: false }
-    this.blocks.push(block)
-    !this.isLocal && (this.loadQueue = this.loadQueue.then(async () => {
-      if (this.stopped || block.aborted) return void (block.loading = false)
-      try {
-        const buf = await this.tts.toStream(block.text, this.config.rate || 1)
-        if (this.stopped || block.aborted) return void (block.loading = false)
-        block.buffer = await this.audioCtx.decodeAudioData(toArrayBuffer(buf))
-        block.loaded = true
-      } catch { block.loaded = false } finally { block.loading = false }
-    }).catch(() => (block.loading = false, block.loaded = false)))
-  }
-
-  private fillCache() {
-    while (this.blocks.length < 3 && !this.stopped) {
-      const item = this.textIter.next()
-      if (!item) break
-      this.pushBlock(item)
+  private async initPipeline() {
+    if (this.view) {
+      await this.view.initTTS('sentence', ttsNodeFilter, this.highlighter)
+      this.foliateTTS = this.view.tts
+      this.renderer = this.view.renderer
+    } else if (this.doc) {
+      this.foliateTTS ||= new TTS(this.doc, textWalker, ttsNodeFilter, this.highlighter, 'sentence')
     }
   }
 
-  private async playBlock(block: any) {
-    while (block.loading && !this.stopped && !this.paused) await new Promise(r => setTimeout(r, 50))
-    if (this.stopped || this.paused || !block.loaded) return
-    this.currentIndex = block.index || 0
-    this.config.onBlock?.(block.text)
-    this.config.highlightText && block.range && this.renderer?.scrollToAnchor?.(block.range, true)
-    return this.isLocal ? this.playLocal(block) : this.playOnline(block)
+  private textOf(ssml: string) {
+    try { return new DOMParser().parseFromString(ssml, 'application/xml').documentElement?.textContent?.trim() || '' }
+    catch { return ssml.replace(/<[^>]+>/g, ' ').trim() }
   }
 
-  private playLocal(block: any) {
+  private ssmlOf(range?: Range, fallback = '') {
+    if (!range) return fallback
+    const doc = document.implementation.createHTMLDocument()
+    doc.body.appendChild(range.cloneContents())
+    return new TTS(doc, textWalker, ttsNodeFilter, () => {}, 'sentence').start() || fallback
+  }
+
+  private markSSML(ssml = '') {
+    const mark = /<mark\b[^>]*\bname="([^"]+)"/.exec(ssml)?.[1]
+    mark && this.foliateTTS?.setMark(mark)
+    return this.ssmlOf(this.foliateTTS?.getLastRange?.(), ssml)
+  }
+
+  private firstSSML(fromCurrent: boolean) {
+    if (fromCurrent) return this.ssmlOf(this.foliateTTS?.getLastRange?.(), this.foliateTTS?.resume())
+    const range = this.startRange
+    this.startRange = undefined
+    return this.markSSML(range
+      ? this.foliateTTS?.from(range)
+      : (this.foliateTTS?.start(), this.foliateTTS?.nextMark(this.config.highlightText) || this.foliateTTS?.resume()))
+  }
+
+  private async nextSSML(paused = false) {
+    const ssml = this.foliateTTS?.nextMark(paused || this.config.highlightText)
+    if (ssml || !this.view || !this.config.autoTurnPage) return ssml
+    const doc = this.foliateTTS?.doc
+    await this.view.next()
+    await this.view.initTTS('sentence', ttsNodeFilter, this.highlighter)
+    this.foliateTTS = this.view.tts
+    if (this.foliateTTS?.doc === doc) return ''
+    this.foliateTTS?.start()
+    return this.markSSML(this.foliateTTS?.nextMark(paused || this.config.highlightText) || this.foliateTTS?.resume())
+  }
+
+  private async playSSML(ssml: string, ticket: number) {
+    if (this.stopped || this.paused || ticket !== this.ticket || !ssml) return
+    this.config.onBlock?.(this.textOf(ssml))
+    const range = this.foliateTTS?.getLastRange?.()
+    this.config.highlightText && range && this.renderer?.scrollToAnchor?.(range, true)
+    return this.isLocal ? this.playLocal(ssml, ticket) : this.playOnline(ssml, ticket)
+  }
+
+  private playLocal(ssml: string, ticket: number) {
     return new Promise<void>((resolve) => {
-      if (this.stopped || this.paused) return resolve()
-      const utterance = new SpeechSynthesisUtterance(block.text)
+      if (this.stopped || this.paused || ticket !== this.ticket) return resolve()
+      const utterance = new SpeechSynthesisUtterance(this.textOf(ssml))
       const voice = window.speechSynthesis.getVoices().find((v: any) => v.name === this.config.voice)
       if (voice) utterance.voice = voice
       utterance.rate = this.config.rate || 1
+      utterance.pitch = this.config.pitch || 1
       this.currentSource = utterance
       utterance.onend = utterance.onerror = () => (this.currentSource = null, resolve())
       window.speechSynthesis.speak(utterance)
     })
   }
 
-  private playOnline(block: any) {
-    if (block.buffer && !block.source) {
-      const source = this.audioCtx.createBufferSource()
-      source.buffer = block.buffer
-      source.playbackRate.value = this.config.rate || 1
-      source.connect(this.audioCtx.destination)
-      block.source = source
-    }
-    if (!block.source) return
+  private async playOnline(ssml: string, ticket: number) {
+    const buf = await this.edge.toSSMLStream(ssml, this.config.rate || 1, this.config.pitch || 1)
+    if (this.stopped || this.paused || ticket !== this.ticket) return
+    const source = this.audioCtx.createBufferSource()
+    source.buffer = await this.audioCtx.decodeAudioData(toArrayBuffer(buf))
+    source.connect(this.audioCtx.destination)
     return new Promise<void>((resolve) => {
-      if (this.stopped || this.paused) return resolve()
-      this.currentSource = block.source
-      block.source.addEventListener('ended', () => (this.currentSource = null, resolve()), { once: true })
-      try { block.source.start(0) } catch { this.currentSource = null; resolve() }
+      if (this.stopped || this.paused || ticket !== this.ticket) return resolve()
+      this.currentSource = source
+      source.addEventListener('ended', () => (this.currentSource = null, resolve()), { once: true })
+      try { source.start(0) } catch { this.currentSource = null; resolve() }
     })
   }
 
-  async play(fromCurrent = false) {
-    this.stopped = this.paused = false
-    !fromCurrent && (this.blocks = [], this.currentSource = null, this.fillCache())
-    while (!this.stopped && !this.paused) {
-      const block = this.blocks.shift()
-      if (!block) break
-      try {
-        await this.playBlock(block)
-        const jumped = this.jumped
-        this.jumped = false
-        if (this.stopped || this.paused || (!jumped && !this.config.autoTurnPage)) break
-        this.fillCache()
-      }
-      catch (e) { if (!this.config.autoTurnPage) throw e }
+  private async playFrom(ssml: string, ticket: number) {
+    while (!this.stopped && !this.paused && ticket === this.ticket && ssml) {
+      await this.playSSML(ssml, ticket)
+      if (this.stopped || this.paused || ticket !== this.ticket || !this.config.autoTurnPage) break
+      const prev = this.foliateTTS?.getLastRange?.()
+      ssml = await this.nextSSML()
+      if (ssml) await this.delay(this.gapOf(prev, this.foliateTTS?.getLastRange?.()))
     }
   }
 
+  private blockOf(range?: Range) {
+    const node = range?.startContainer
+    const el = node?.nodeType === Node.ELEMENT_NODE ? node as Element : node?.parentElement
+    return el?.closest?.(BLOCK_SELECTOR)
+  }
+
+  private gapOf(prev?: Range, next?: Range) {
+    return 1000 * (this.blockOf(prev) && this.blockOf(prev) !== this.blockOf(next)
+      ? this.config.paragraphGap ?? 0.3
+      : this.config.sentenceGap ?? 0)
+  }
+
+  private delay(ms: number) {
+    return ms > 0 ? new Promise(resolve => setTimeout(resolve, ms)) : Promise.resolve()
+  }
+
+  async play(fromCurrent = false) {
+    await this.initPipeline()
+    await this.voiceTask
+    this.stopped = this.paused = false
+    await this.playFrom(this.firstSSML(fromCurrent), ++this.ticket)
+  }
+
   jump(delta: number) {
-    const item = this.textIter.get(Math.max(0, this.currentIndex + delta))
-    if (!item) return
-    this.paused = false
-    this.jumped = true
-    this.resetBlocks()
-    this.pushBlock(item)
+    if (!this.foliateTTS) return
+    const ticket = ++this.ticket
+    const seek = delta < 0 ? this.markSSML(this.foliateTTS.prevMark(true)) : this.nextSSML(true)
+    this.stopped = this.paused = false
     this.stopCurrent()
+    Promise.resolve(seek).then(ssml => this.playFrom(ssml, ticket))
   }
 
   pause() { this.paused = true; this.isLocal ? window.speechSynthesis.pause() : this.currentSource?.context?.suspend() }
-  resume() { if (!this.paused) return; this.paused = false; this.isLocal ? window.speechSynthesis.resume() : this.currentSource?.context?.resume() }
+  resume() {
+    if (!this.paused) return
+    this.paused = false
+    this.isLocal ? window.speechSynthesis.resume() : this.currentSource?.context?.resume()
+    !this.currentSource && this.play(true)
+  }
 
   stop() {
     this.stopped = true
     this.paused = false
-    this.resetBlocks()
+    this.ticket++
     this.stopCurrent()
-    this.tts.close()
+    this.edge.close()
   }
 }
 
-// TTS 控制器
 export class TTSController {
   private player: EdgeTTSPlayer | null = null
   private loopText: string | null = null
@@ -184,8 +216,8 @@ export class TTSController {
     this.loopText = text.trim()
     this.title.value = title
     this.isActive.value = true
-    try { await this.playLoop(config) } 
-    catch (error) { showMessage((error instanceof Error ? error.message : String(error)) || 'TTS 播放失败', 3000, 'error') } 
+    try { await this.playLoop(config) }
+    catch (error) { showMessage((error instanceof Error ? error.message : String(error)) || 'TTS 播放失败', 3000, 'error') }
     finally { this.reset() }
   }
 
@@ -194,7 +226,7 @@ export class TTSController {
       const doc = document.implementation.createHTMLDocument(), p = doc.createElement('p')
       p.textContent = this.loopText
       doc.body.appendChild(p)
-      this.player = new EdgeTTSPlayer(doc, null, { ...config, autoTurnPage: true, onBlock: (text: string) => this.currentText.value = text })
+      this.player = new EdgeTTSPlayer(doc, { ...config, autoTurnPage: true, onBlock: (text: string) => this.currentText.value = text })
       await this.player.play()
       if (!this.loopText) break
     }
@@ -205,11 +237,11 @@ export class TTSController {
     if (this.isActive.value) return this.togglePause()
     this.stop()
     try {
-      const { doc, renderer, location } = this.getDocument(getReader)
-      if (!doc?.body) throw new Error('无法获取文档内容')
-      const startRange = selection?.range || (renderer && this.getVisibleRange(renderer, doc, location))
+      const { view, doc, renderer, location } = this.getDocument(getReader)
+      if (!view && !doc?.body) throw new Error('无法获取文档内容')
+      const startRange = selection?.range || (renderer && doc && this.getVisibleRange(renderer, doc, location))
       this.title.value = title
-      this.player = new EdgeTTSPlayer(doc, renderer, { ...config, onBlock: (text: string) => this.currentText.value = text }, startRange)
+      this.player = new EdgeTTSPlayer(view || doc, { ...config, onBlock: (text: string) => this.currentText.value = text }, startRange)
       this.isActive.value = true
       await this.player.play()
       this.reset()
@@ -229,7 +261,7 @@ export class TTSController {
     let doc: Document | null = null, renderer: any = null, location: any = null
     if (view?.renderer) doc = view.renderer.getContents?.()?.[0]?.doc, renderer = view.renderer, location = view.lastLocation
     if (!doc?.body) doc = document, renderer = null
-    return { doc, renderer, location }
+    return { view, doc, renderer, location }
   }
 
   private getVisibleRange(renderer: any, doc: Document, location?: any) {
@@ -250,4 +282,3 @@ export class TTSController {
 
 let globalTTSController: TTSController | null = null
 export const getTTSController = () => globalTTSController || (globalTTSController = new TTSController())
-

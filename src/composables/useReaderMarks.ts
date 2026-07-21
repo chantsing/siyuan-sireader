@@ -5,8 +5,7 @@ import { useReaderState } from '@/core/epub/state'
 import { bookshelfManager } from '@/core/bookshelf'
 import { pdfMarkFromAnnotation } from '@/utils/embedPdfActions'
 import { copyMark as copyMarkUtil, hideFloat, openBlock, showFloat } from '@/utils/copy'
-import { jump } from '@/utils/jump'
-import { hideMarkPreview } from '@/utils/markPreview'
+import { jump, markTarget } from '@/utils/jump'
 import { collectMarkTagGroups, formatMarkTags, getMarkTags, parseMarkTags, toggleMarkTags } from '@/components/MarkCard.vue'
 
 type MarkSort = 'time' | 'date' | 'chapter' | 'page' | 'name' | 'custom'
@@ -368,13 +367,10 @@ export const useReaderMarks = (i18n?: any, context?: any) => {
     const book = await bookshelfManager.getBook(item.bookUrl)
     if (!book) return showMsg('书籍不存在', 'error')
     const [{ openOrActivateBook }, { settingsManager }, { usePlugin }] = await Promise.all([import('@/utils/bookOpen'), import('@/composables/useSetting'), import('@/main')])
-    await openOrActivateBook(usePlugin(), book, await settingsManager.get(), () => window.dispatchEvent(new CustomEvent('sireader:goto', { detail: { cfi: item.cfi, id: item.id, bookUrl: item.bookUrl } })))
+    await openOrActivateBook(usePlugin(), book, await settingsManager.get(), () => window.dispatchEvent(new CustomEvent('sireader:goto', { detail: { cfi: markTarget(item), id: item.id, bookUrl: item.bookUrl } })))
   }
+  const showMark = (item: any) => goTo(item)
   const onBlockEnter = (event: MouseEvent, id: string) => showFloat(id, event.target as HTMLElement)
-  const onMarkEnter = (_event: MouseEvent, _item: any) => {
-    return
-  }
-  const onMarkLeave = () => hideMarkPreview()
 
   const refresh = () => refreshKey.value++
   const refreshLibrary = () => {
@@ -472,8 +468,6 @@ export const useReaderMarks = (i18n?: any, context?: any) => {
     openBlock,
     onBlockEnter,
     hideFloat,
-    onMarkEnter,
-    onMarkLeave,
     canImport,
     readOnly,
     importMark,
@@ -486,6 +480,7 @@ export const useReaderMarks = (i18n?: any, context?: any) => {
     resetMarkOrganize,
     getMarkTags,
     goTo,
+    showMark,
   }
 }
 

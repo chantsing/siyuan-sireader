@@ -30,7 +30,8 @@ const imageSrcToMarkdown = async (src: string | Blob, name = 'mark') => {
   if (!src) return ''
   try {
     const blob = typeof src === 'string' ? await fetch(src).then(r => r.blob()) : src
-    const file = new File([blob], `${name}.${blob.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png'}`, { type: blob.type || 'image/png' })
+    const ext = (blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace('svg+xml', 'svg').split('+')[0]
+    const file = new File([blob], `${name}.${ext}`, { type: blob.type || 'image/png' })
     const res = await (await import('@/api')).upload('/assets/', [file])
     return res.succMap?.[file.name] ? `![](${res.succMap[file.name]})` : (typeof src === 'string' ? `![](${src})` : '')
   } catch { return typeof src === 'string' ? `![](${src})` : '' }
@@ -92,7 +93,8 @@ export const copyMark = async (item: any, ctx: { bookUrl: string; bookInfo?: any
   const { getChapterName } = await import('@/core/MarkManager')
   const book = isPdf ? null : reader?.getBook?.()
   const toc = isPdf ? null : book?.toc
-  const chapter = item.chapter || getChapterName({ cfi, page, isPdf, toc, location: reader?.getLocation?.() }) || '📍'
+  const tocItem = !isPdf && cfi ? await Promise.resolve(reader?.getView?.()?.getTOCItemOf?.(cfi)).catch(() => null) : null
+  const chapter = item.chapter || tocItem?.label || tocItem?.title || getChapterName({ cfi, page, isPdf, toc, location: reader?.getLocation?.() }) || '📍'
   let img = ''
   if (item.image || item.src) {
     img = await imageSrcToMarkdown(item.image || item.src || '', 'mark')

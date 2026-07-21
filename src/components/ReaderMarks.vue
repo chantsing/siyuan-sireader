@@ -30,8 +30,6 @@
           @dragover.prevent
           @drop.prevent="dropMark(row.mark)"
           @dragend="endMarkDrag()"
-          @mouseenter="onMarkEnter($event, row.mark)"
-          @mouseleave="onMarkLeave"
         >
           <MarkCard
             :time="formatDateTime(row.mark.timestamp || Date.now())"
@@ -56,7 +54,7 @@
             @update:color-value="editColor = $event"
             @update:style-value="editStyle = $event"
             @toggle-tags="toggleEditTags"
-            @go="goTo(row.mark)"
+            @go="showMark(row.mark)"
             @edit="startEdit(row.mark)"
             @cancel="cancelEdit"
             @save="saveEdit(row.mark)"
@@ -70,7 +68,7 @@
               </div>
             </template>
             <template #extra>
-              <img v-if="row.mark.image" class="sr-image-preview" :src="row.mark.image" :alt="mainText(row.mark)" @click.stop="goTo(row.mark)">
+              <img v-if="row.mark.image" class="sr-image-preview" :src="row.mark.image" :alt="mainText(row.mark)" @click.stop="showMark(row.mark)">
             </template>
           </MarkCard>
         </div>
@@ -175,8 +173,6 @@ const {
   openBlock,
   onBlockEnter,
   hideFloat,
-  onMarkEnter,
-  onMarkLeave,
   canImport,
   readOnly,
   importMark,
@@ -188,7 +184,7 @@ const {
   toggleMarkFilterItem,
   resetMarkOrganize,
   getMarkTags,
-  goTo,
+  showMark,
 } = useReaderMarks(props.i18n, () => props.context)
 const MARK_RENDER_STEP = 120
 const markRenderLimit = ref(MARK_RENDER_STEP)

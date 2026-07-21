@@ -1,4 +1,5 @@
 import type { TOCItem } from './types'
+import { extractText } from '@/services/TTSExtractor'
 
 const flattenToc = (items: TOCItem[], level = 0): Array<{ item: TOCItem; level: number }> =>
   items.flatMap(item => [{ item, level }, ...(item.subitems?.length ? flattenToc(item.subitems, level + 1) : [])])
@@ -11,17 +12,6 @@ const elementFromAnchor = (anchor: any): Element | null => {
     return node instanceof Element ? node : node.parentElement
   }
   return null
-}
-
-const normalizeText = (root: Element | DocumentFragment | null) => {
-  if (!root) return ''
-  const copy = root.cloneNode(true) as Element | DocumentFragment
-  if ('querySelectorAll' in copy) {
-    copy.querySelectorAll('script,style,svg,nav,link,meta').forEach(el => el.remove())
-    copy.querySelectorAll('br').forEach(el => el.replaceWith('\n'))
-    copy.querySelectorAll('p,div,section,article,header,footer,h1,h2,h3,h4,h5,h6,li,blockquote,tr').forEach(el => el.append('\n'))
-  }
-  return (copy.textContent || '').replace(/\r/g, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
 }
 
 const createRange = (doc: Document, startAnchor: any, endAnchor?: any) => {
@@ -67,7 +57,7 @@ export const getTocChapterText = async (book: any, href: string, label: string) 
     const startAnchor = index === startIndex ? startTarget.anchor?.(doc) : null
     const endAnchor = endTarget && endIndex === index ? endTarget.anchor?.(doc) : null
     const range = index === startIndex || endAnchor ? createRange(doc, startAnchor, endAnchor) : null
-    const text = normalizeText(range ? range.cloneContents() : doc.body || doc.documentElement)
+    const text = extractText(range || doc.body || doc.documentElement)
     if (text) parts.push(text)
   }
 

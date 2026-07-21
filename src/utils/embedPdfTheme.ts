@@ -1,5 +1,7 @@
-import type { ThemeConfig, ThemePreference } from '@embedpdf/vue-pdf-viewer'
 import { PRESET_THEMES, type ReadTheme } from '@/composables/useSetting'
+
+type ThemePreference = 'light' | 'dark'
+type ThemeConfig = { preference: ThemePreference; light: Record<string, any>; dark: Record<string, any> }
 
 const darkThemes = new Set(['dark', 'night', 'gold'])
 const root = () => document.documentElement

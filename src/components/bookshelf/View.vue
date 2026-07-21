@@ -7,7 +7,7 @@
           data-type="navigation-root"
           :data-path="compactPath(root)"
           data-playlist-item
-          :class="{ dragover: isGroupDropTarget(root), 'b3-list-item--focus': isSelectableBook(root.item) && isBookSelected(root.item.data) }"
+          :class="{ dragover: isGroupDropTarget(root), 'b3-list-item--focus': isSelected(root.item) }"
           :style="compactItemStyle(root)"
           :draggable="root.kind === 'book'"
           @click="handleCompactClick(root, $event)"
@@ -18,8 +18,8 @@
           @dragleave="handleGroupDragLeave(root)"
           @drop="handleGroupDrop(root, $event)"
         >
-          <span v-if="isSelectableBook(root.item)" class="b3-list-item__toggle b3-list-item__toggle--hl" :style="compactToggleStyle(root)">
-            <svg class="b3-list-item__arrow"><use :xlink:href="isBookSelected(root.item.data) ? '#iconCheck' : '#iconUncheck'" /></svg>
+          <span v-if="isSelectable(root.item)" class="b3-list-item__toggle b3-list-item__toggle--hl" :style="compactToggleStyle(root)" @click.stop="toggleSelected(root.item)">
+            <svg class="b3-list-item__arrow"><use :xlink:href="isSelected(root.item) ? '#iconCheck' : '#iconUncheck'" /></svg>
           </span>
           <span v-else class="b3-list-item__toggle b3-list-item__toggle--hl" :class="{ fn__hidden: root.kind !== 'group' }" :style="compactToggleStyle(root)">
             <svg class="b3-list-item__arrow" :class="{ 'b3-list-item__arrow--open': root.kind === 'group' && isCompactExpanded(root.item.data.id) }"><use xlink:href="#iconRight" /></svg>
@@ -35,7 +35,7 @@
             data-type="navigation-file"
             :data-path="compactPath(child)"
             data-playlist-item
-            :class="{ dragover: isGroupDropTarget(child), 'b3-list-item--focus': isSelectableBook(child.item) && isBookSelected(child.item.data) }"
+            :class="{ dragover: isGroupDropTarget(child), 'b3-list-item--focus': isSelected(child.item) }"
             :style="compactItemStyle(child)"
             :draggable="child.kind === 'book'"
             @click="handleCompactClick(child, $event)"
@@ -46,8 +46,8 @@
             @dragleave="handleGroupDragLeave(child)"
             @drop="handleGroupDrop(child, $event)"
           >
-            <span v-if="isSelectableBook(child.item)" class="b3-list-item__toggle b3-list-item__toggle--hl" :style="compactToggleStyle(child)">
-              <svg class="b3-list-item__arrow"><use :xlink:href="isBookSelected(child.item.data) ? '#iconCheck' : '#iconUncheck'" /></svg>
+            <span v-if="isSelectable(child.item)" class="b3-list-item__toggle b3-list-item__toggle--hl" :style="compactToggleStyle(child)" @click.stop="toggleSelected(child.item)">
+              <svg class="b3-list-item__arrow"><use :xlink:href="isSelected(child.item) ? '#iconCheck' : '#iconUncheck'" /></svg>
             </span>
             <span v-else class="b3-list-item__toggle b3-list-item__toggle--hl" :class="{ fn__hidden: child.kind !== 'group' }" :style="compactToggleStyle(child)">
               <svg class="b3-list-item__arrow" :class="{ 'b3-list-item__arrow--open': child.kind === 'group' && isCompactExpanded(child.item.data.id) }"><use xlink:href="#iconRight" /></svg>
@@ -201,6 +201,7 @@ const props = withDefaults(defineProps<{
   currentGroupIsSmart?: boolean
   selecting?: boolean
   selectedUrls?: string[]
+  selectGroups?: boolean
   dense?: boolean
   showGroupMeta?: boolean
   hiddenItems?: string[]
@@ -221,8 +222,11 @@ const isBook = (item: Item): item is BookItem => item.type === 'book'
 const isGroup = (item: Item): item is GroupItem => item.type === 'group'
 const isImport = (item: Item): item is ImportItem => item.type === 'import'
 const isSelectableBook = (item: Item): item is BookItem => !!props.selecting && isBook(item)
+const isSelectable = (item: Item) => isSelectableBook(item) || (props.selectGroups && isGroup(item))
 const hidden = (key: string) => props.hiddenItems?.includes(key)
 const isBookSelected = (book: Book) => props.selectedUrls?.includes(book.url)
+const isSelected = (item: Item) => isBook(item) ? isBookSelected(item.data) : isGroup(item) && props.selectedUrls?.includes(item.data.id)
+const toggleSelected = (item: Item) => emit('toggle-select-book', (isBook(item) ? item.data : { url: item.data.id }) as Book)
 const groupCount = (group: GroupConfig) => props.groupCounts[group.id] || 0
 const itemKey = (item: Item) => isGroup(item) ? `group-${item.data.id}` : isBook(item) ? `book-${item.data.url}` : `import-${item.data.id}`
 const compactExpanded = ref<Record<string, boolean>>({})

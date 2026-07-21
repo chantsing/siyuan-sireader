@@ -36,6 +36,11 @@
             <input class="b3-slider" type="range" min="0.5" max="2" step="0.1" :value="ttsSettings.rate || 1" @input="setRate">
           </label>
         </div>
+        <div class="tts-mini-line tts-mini-line--triple">
+          <label class="tts-mini-rate"><span>音调 {{ Number(ttsSettings.pitch || 1).toFixed(1) }}</span><input class="b3-slider" type="range" min="0.5" max="1.5" step="0.1" :value="ttsSettings.pitch || 1" @input="setNum('pitch', $event)"></label>
+          <label class="tts-mini-rate"><span>句 {{ Number(ttsSettings.sentenceGap || 0).toFixed(1) }}s</span><input class="b3-slider" type="range" min="0" max="3" step="0.1" :value="ttsSettings.sentenceGap || 0" @input="setNum('sentenceGap', $event)"></label>
+          <label class="tts-mini-rate"><span>段 {{ Number(ttsSettings.paragraphGap ?? 0.3).toFixed(1) }}s</span><input class="b3-slider" type="range" min="0" max="5" step="0.1" :value="ttsSettings.paragraphGap ?? 0.3" @input="setNum('paragraphGap', $event)"></label>
+        </div>
         <div class="tts-mini-switches">
           <label><input class="b3-switch" type="checkbox" :checked="ttsSettings.autoTurnPage" @change="setCheck('autoTurnPage', $event)"> 自动翻页</label>
           <label><input class="b3-switch" type="checkbox" :checked="ttsSettings.highlightText" @change="setCheck('highlightText', $event)"> 高亮文本</label>
@@ -103,6 +108,7 @@ const setTTS = (key: string, value: any) => {
   tts.updateConfig(settings.value.tts)
   saveSettings()
 }
+const setNum = (key: string, e: Event) => setTTS(key, Number((e.target as HTMLInputElement).value))
 const setRate = (e: Event) => setTTS('rate', Number((e.target as HTMLInputElement).value))
 const setVoice = (e: Event) => setTTS('voice', (e.target as HTMLSelectElement).value)
 const setCheck = (key: 'autoTurnPage' | 'highlightText', e: Event) => setTTS(key, (e.target as HTMLInputElement).checked)
@@ -140,6 +146,7 @@ onUnmounted(() => {
 .tts-mini-text{margin:0 10px 10px;padding:8px;border-radius:6px;background:var(--b3-theme-background);font-size:12px;line-height:1.55;color:var(--b3-theme-on-surface-variant);max-height:140px;overflow:auto;word-break:break-word}
 .tts-mini-controls{border-top:1px solid var(--b3-border-color);padding:8px 10px 10px;display:grid;gap:8px;font-size:12px;color:var(--b3-theme-on-surface-variant)}
 .tts-mini-line{display:grid;grid-template-columns:minmax(0,1fr) 118px;align-items:center;gap:8px;min-width:0}
+.tts-mini-line--triple{grid-template-columns:1fr;gap:4px}
 .tts-mini-voice,.tts-mini-rate{display:flex;align-items:center;gap:6px;min-width:0}
 .tts-mini-voice span,.tts-mini-rate span{flex-shrink:0}
 .tts-mini-voice .b3-select{width:100%;min-width:0;max-width:150px;height:26px}

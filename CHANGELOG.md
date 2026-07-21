@@ -1,5 +1,53 @@
 # 思阅 SiReader - 更新日志
 
+## v2.2.0（2026.7.21）
+
+### 新增
+
+- 新增思盘导入多选与文件夹导入，文件夹导入会自动创建同名书架分组并批量归类书籍。
+- 新增 EPUB 图片与表格交互：支持 `img`、`svg image`、`table` 点击识别，图片可复制、导出、标注，表格可复制并通过 CFI 定位。
+- TTS 迷你播放器新增音调、句间停顿、段间停顿控制。
+
+### 优化
+
+- EPUB/MOBI/AZW3 底层切换到 Readest foliate-js 固定提交，优先复用其分页、脚注、TTS 与多格式兼容改进；PDF 仍统一走 EmbedPDF。
+- 优化书架 EPUB/MOBI/AZW3 批量解析，直接读取元数据与封面，减少打开视图解析带来的耗时和异常。
+- 优化本地文件、链接和思盘导入流程，封面顺序写入并增加超时兜底，降低“导入中”卡住概率。
+- 优化书架搜索，搜索时首页会包含已归入手动分组的书籍。
+- EPUB 脚注弹窗改用 foliate-js `FootnoteHandler` 渲染片段，减少手写 DOM 解析与脚注误判。
+- 优化 EPUB 脚注弹窗交互，支持弹窗内链接跟随、返回历史与回链防重复跳转。
+- 兼容 `p.fnote` 反向锚点类脚注结构，提升《语言学》等特殊 EPUB 的脚注识别稳定性。
+- 优化 EPUB 图片浏览器列表，补齐 `svg image` 内部图片收集，并统一图片、表格菜单生命周期。
+- EPUB TTS 改用 foliate-js TTS 与 `textWalker` 流程，按句朗读、高亮、自动翻页和脚注过滤与底层阅读顺序保持一致。
+- 在线 Edge TTS 支持标准 SSML 包装与音调控制，本地语音同步支持音调控制。
+- 优化 EPUB 标注弹窗，标签预设分组标题与标签同排显示，并用虚线框样式增强分组识别。
+- 优化 EPUB 标注弹窗定位与高度限制，靠近页面底部时保存按钮仍可点击，同时减少弹窗与标注位置的距离。
+- 优化 EPUB 标注弹窗视觉样式，补齐指向箭头、阴影与内部滚动边界。
+- 优化标注列表跳转，EPUB 按 Readest 标准使用 `goTo(cfi)`，跳转后直接解析 CFI 并闪烁目标位置；PDF 跳转同步选中对应批注。
+- 优化标注预览，PDF 预览复用 EmbedPDF 文档源与 public wasm，EPUB 上下文复用统一文本抽取逻辑。
+- 优化 PDF 加载，`pdfium.wasm` 首次打开从 EmbedPDF 官方 `@embedpdf/pdfium@2.14.4` 地址下载到思源 `/data/public`，后续 worker 直接从 `/public/siyuan-sireader/embedpdf/pdfium.wasm` 读取，避免 blob 路径和插件包体积膨胀。
+- 优化 PDF 默认图章加载，中文与英文默认图章首次打开从 EmbedPDF 官方默认图章地址下载到 `/data/public/siyuan-sireader/embedpdf/stamps`，运行时直接通过 public manifest 调用，不再打包图章资源。
+- 优化 EmbedPDF 运行时加载，官方 snippet JS 首次打开 PDF 时下载到 `/data/public/siyuan-sireader/embedpdf/snippet`，后续直接通过 public ESM 复用。
+- 优化 EmbedPDF 文档源创建与加载错误展示，PDF 字符串 URL 直接按 URL 加载，文件源再转换为 buffer。
+
+### 构建与依赖
+
+- 版本号升级到 `2.2.0`。
+- 移除 `pdfium.wasm` 资源打包，PDF 引擎改为首次下载后缓存复用。
+- 移除 `@embedpdf/default-stamps` 依赖和图章资源打包，默认图章改为首次下载到 public 后复用。
+- 移除 EmbedPDF viewer 运行时代码的静态打包，插件 zip 从约 3.69 MB 降至约 550 KB。
+- 移除旧 `foliate-js@1.0.1` patch 与多余 workspace 配置，改由 Readest foliate-js 固定提交提供 EPUB/MOBI/AZW3 能力。
+- 构建中增加 Foliate PDF stub，避免 EPUB 底层重复引入 PDF 逻辑。
+- 删除旧 EmbedPDF worker 打包补丁，PDF viewer 运行时改由 public snippet 独立加载。
+
+### 修复
+
+- 修复部分 EPUB 打开后未初始化首屏定位，或 CSS 资源类型异常导致阅读器空白的问题。
+- 修复部分 EPUB 脚注点击无反应，或被误识别为图片点击的问题。
+- 修复 EPUB 标注弹窗编辑态未传入国际化文本，导致标签、笔记、取消和保存按钮显示英文 fallback 的问题。
+- 修复标注列表点击 EPUB 标注时可能打开标注卡片、跳转后不突出目标位置的问题。
+- 修复 PDF worker 初始化失败时页面长期停留在“Loading...”的问题。
+
 ## v2.1.4（2026.7.18）
 
 ### 新增

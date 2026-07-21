@@ -215,7 +215,7 @@ const initEmbedPdfMode=async(loadSource:()=>Promise<File|string|null>)=>{
   embedPdfMarks.value=[]
   embedPdfAnnotationsHidden.value=false
   markManager.value=null
-  currentView.value={engine:'embedpdf',isPdf:true,annotationsHidden:embedPdfAnnotationsHidden,marks:{getAnnotations:()=>embedPdfMarks.value.filter((item:any)=>item.type!=='bookmark'),getBookmarks:()=>embedPdfMarks.value.filter((item:any)=>item.type==='bookmark'),updateMark:updateEmbedPdfMark,deleteMark:deleteEmbedPdfMark,toggleBookmark:toggleEmbedPdfBookmark},goTo:(page:any)=>embedPdfPages.value?.scrollToPage({pageNumber:Number(page)||1,behavior:'smooth'}),getCurrentPage:()=>embedPdfPages.value?.getCurrentPage?.()||1,toggleAnnotationsHidden:()=>embedPdfAnnotationsHidden.value=!embedPdfAnnotationsHidden.value,cleanup:()=>{cleanupEmbedPdfEvents?.();cleanupEmbedPdfEvents=null;embedPdfSource.value=null;embedPdfPages.value=null;embedPdfAnnotations.value=null;embedPdfMarks.value=[];embedPdfAnnotationsHidden.value=false}}
+  currentView.value={engine:'embedpdf',isPdf:true,annotationsHidden:embedPdfAnnotationsHidden,marks:{getAnnotations:()=>embedPdfMarks.value.filter((item:any)=>item.type!=='bookmark'),getBookmarks:()=>embedPdfMarks.value.filter((item:any)=>item.type==='bookmark'),updateMark:updateEmbedPdfMark,deleteMark:deleteEmbedPdfMark,toggleBookmark:toggleEmbedPdfBookmark},goTo:(page:any,id?:string)=>{const pageNumber=Number(page)||1;embedPdfPages.value?.scrollToPage({pageNumber,behavior:'smooth'});if(id)requestAnimationFrame(()=>embedPdfAnnotations.value?.selectAnnotation?.(pageNumber-1,id))},getCurrentPage:()=>embedPdfPages.value?.getCurrentPage?.()||1,toggleAnnotationsHidden:()=>embedPdfAnnotationsHidden.value=!embedPdfAnnotationsHidden.value,cleanup:()=>{cleanupEmbedPdfEvents?.();cleanupEmbedPdfEvents=null;embedPdfSource.value=null;embedPdfPages.value=null;embedPdfAnnotations.value=null;embedPdfMarks.value=[];embedPdfAnnotationsHidden.value=false}}
   setActiveReader(currentView.value,null,getSettings())
 }
 const handleEmbedPdfReady=(registry:any)=>{
@@ -240,13 +240,35 @@ const handleEmbedPdfReady=(registry:any)=>{
   currentView.value.getBookmarks=()=>taskToPromise<any>(registry.getPlugin('bookmark')?.provides?.()?.forDocument?.(documentId)?.getBookmarks?.()).then((result:any)=>result?.bookmarks||[])
   window.dispatchEvent(new CustomEvent('sireader:tab-switched'))
 }
-const openImageMenu = ({ item, x, y }: any) => {
-  const m = new Menu()
+const loadViewer=()=>document.getElementById('protyleViewerScript')?Promise.resolve():new Promise<void>((resolve,reject)=>{
+  const s=document.createElement('script')
+  s.id='protyleViewerScript';s.src='/stage/protyle/js/viewerjs/viewer.js?v=1.11.7';s.onload=()=>resolve();s.onerror=()=>reject(new Error('viewer.js load failed'));document.head.appendChild(s)
+})
+let activeMediaMenu:any=null
+const closeMediaMenu=()=>{activeMediaMenu?.element?.remove?.();activeMediaMenu=null}
+const openMediaMenu=(x:number,y:number,setup:(m:Menu)=>void)=>{closeMediaMenu();const m=new Menu('sireader-media-menu',()=>activeMediaMenu=null);setup(m);activeMediaMenu=m;m.open({x,y})}
+const openImageMenu = ({ item, x, y }: any) => openMediaMenu(x, y, m => {
   m.addItem({ icon: 'iconCopy', label: '复制图片', click: () => handleCopyToClipboard(item) })
   m.addItem({ icon: 'iconUpload', label: '导出图片', click: () => handleCopy(item) })
   m.addItem({ icon: 'iconMark', label: '标注图片', click: async () => markPanelRef.value?.showCard(await (markManager.value as any)?.addImageMark(item.image, item.text, item.cfi), x, y, true) })
-  m.open({ x, y })
+})
+const openImageViewer=async({item}:any)=>{
+  if(!item?.image)return
+  await loadViewer().catch(()=>{})
+  if(!(window as any).Viewer)return window.open(item.image,'_blank')
+  const root=document.createElement('ul')
+  const mediaSrc=(el:any,doc:any)=>{if(el.localName==='img')return el.currentSrc||el.src;const image=el.querySelector?.('image');const href=image?.getAttribute('href')||image?.getAttributeNS?.('http://www.w3.org/1999/xlink','href');return href&&(/^data:|^blob:|^[a-z]+:/i.test(href)?href:new URL(href,doc.baseURI).href)}
+  const images=[...new Set([...(reader?.getView?.()?.renderer?.getContents?.()?.flatMap(({doc}:any)=>Array.from(doc.querySelectorAll('img, svg')).map((el:any)=>mediaSrc(el,doc)))||[]),item.image].filter(Boolean))]
+  images.forEach((src:any)=>{const li=document.createElement('li');li.appendChild(Object.assign(document.createElement('img'),{src,alt:item.text||''}));root.appendChild(li)})
+  const initialViewIndex=Math.max(0,images.indexOf(item.image))
+  ;(window as any).siyuan ||= {}
+  const viewer=(window as any).siyuan.viewer=new (window as any).Viewer(root,{button:false,initialViewIndex,transition:false,hidden(){viewer.destroy()},toolbar:{close(){viewer.destroy()},flipHorizontal:true,flipVertical:true,next:true,oneToOne:true,play:true,prev:true,reset:true,rotateLeft:true,rotateRight:true,zoomIn:true,zoomOut:true}})
+  viewer.show();viewer.view(initialViewIndex)
 }
+const openTableMenu = ({ item, x, y }: any) => openMediaMenu(x, y, m => {
+  m.addItem({ icon: 'iconCopy', label: '复制表格', click: () => navigator.clipboard.writeText(item.html || item.text || '') })
+  m.addItem({ icon: 'iconRef', label: '定位表格', click: () => item.cfi && reader?.goTo(item.cfi) })
+})
 const init=async()=>{
   if(!containerRef.value)return
   try{
@@ -273,12 +295,16 @@ const init=async()=>{
       await initEmbedPdfMode(loadSource)
     }else{
       reader=createReader({container:viewerContainerRef.value!,settings:getSettings()!,plugin:props.plugin})
-      await reader.open(await loadSource()||await Promise.reject(new Error('未提供书籍')),props.bookInfo?.format)
+      await reader.open(async()=>await loadSource()||await Promise.reject(new Error('未提供书籍')),props.bookInfo?.format)
       const view=reader.getView()
       markManager.value=createMarkManager({format:'epub',view,plugin:props.plugin,bookUrl,bookName:getBookName(),reader})
       !isTemporary&&await markManager.value.init()
       ;(view as any).marks=markManager.value
+      reader.on('image-open', openImageViewer)
       reader.on('image-menu', openImageMenu)
+      reader.on('table-menu', openTableMenu)
+      reader.on('table-open', openTableMenu)
+      reader.on('content-interaction', closeMediaMenu)
       !isTemporary&&bookshelfManager.restoreProgress(bookUrl,reader).catch(()=>{})
       reader.on('relocate',onProgress)
       setupEpubKeyboard(
@@ -359,10 +385,10 @@ const handleGoto=(e:CustomEvent)=>{
   if(!cfi)return
   const pdfPage=pdfPageFromCfi(cfi)
   if(isEmbedPdfMode.value&&pdfPage){
-    if(id) embedPdfAnnotations.value?.selectAnnotation?.(pdfPage-1,id)
-    return void currentView.value?.goTo?.(pdfPage)
+    currentView.value?.goTo?.(pdfPage,id)
+    return
   }
-  gotoEPUB(cfi,id,reader,markManager.value)
+  void gotoEPUB(cfi,id,reader,markManager.value)
 }
 const handleUndo=()=>markManager.value?.undo?.()
 const refreshEmbedPdfMarks=()=>{if(isEmbedPdfMode.value)void loadEmbedPdfMarks()}
@@ -384,7 +410,15 @@ const setupTabObserver=()=>{if(isMobile())return;let el=containerRef.value?.pare
 const resize=()=>reader?.resize?.()
 defineExpose({ resize })
 onMounted(()=>{init();containerRef.value?.focus();events.forEach(([e,h])=>window.addEventListener(e,h as any));window.addEventListener('keydown',handleKeydown);window.addEventListener('unhandledrejection',suppressError);window.addEventListener('blur',handleWindowBlur);window.addEventListener('focus',handleWindowFocus);document.addEventListener('visibilitychange',handleVisibilityChange);setupTabObserver();const c=containerRef.value;c&&(c.addEventListener('focusin',handleFocusIn),c.addEventListener('focusout',handleFocusOut));bindTouchPaging(c);bindTouchPaging(viewerContainerRef.value);window.dispatchEvent(new CustomEvent('reader:open',{detail:{bookUrl:getBookUrl()}}));syncReaderFocus(true)})
-onUnmounted(async()=>{const{bookshelfManager}=await import('@/core/bookshelf');bookshelfManager.cleanup();syncReaderFocus(false);window.dispatchEvent(new CustomEvent('reader:close'));savePosition();readerSplashRef.value?.cleanup();clearActiveReader(currentView.value);await markManager.value?.destroy();try{reader?.destroy();currentView.value?.cleanup?.();}catch{};setTimeout(()=>viewerContainerRef.value&&(viewerContainerRef.value.innerHTML=''),50);events.forEach(([e,h])=>window.removeEventListener(e,h as any));window.removeEventListener('keydown',handleKeydown);window.removeEventListener('unhandledrejection',suppressError);window.removeEventListener('blur',handleWindowBlur);window.removeEventListener('focus',handleWindowFocus);document.removeEventListener('visibilitychange',handleVisibilityChange);(containerRef.value as any)?.__observer?.disconnect();const c=containerRef.value;c&&(c.removeEventListener('focusin',handleFocusIn),c.removeEventListener('focusout',handleFocusOut));unbindTouchPaging();await bookshelfManager.flush()})
+onUnmounted(async()=>{
+  const view=currentView.value,c=containerRef.value
+  syncReaderFocus(false);window.dispatchEvent(new CustomEvent('reader:close'));savePosition();readerSplashRef.value?.cleanup();clearActiveReader(view);closeMediaMenu()
+  events.forEach(([e,h])=>window.removeEventListener(e,h as any));window.removeEventListener('keydown',handleKeydown);window.removeEventListener('unhandledrejection',suppressError);window.removeEventListener('blur',handleWindowBlur);window.removeEventListener('focus',handleWindowFocus);document.removeEventListener('visibilitychange',handleVisibilityChange);(c as any)?.__observer?.disconnect();c&&(c.removeEventListener('focusin',handleFocusIn),c.removeEventListener('focusout',handleFocusOut));unbindTouchPaging()
+  try{await reader?.destroy();view?.cleanup?.()}catch{}
+  await markManager.value?.destroy()
+  const{bookshelfManager}=await import('@/core/bookshelf');bookshelfManager.cleanup();await bookshelfManager.flush()
+  setTimeout(()=>viewerContainerRef.value&&(viewerContainerRef.value.innerHTML=''),50)
+})
 </script>
 <style scoped lang="scss">
 .reader-container{position:relative;width:100%;height:100%;outline:none;user-select:text;-webkit-user-select:text;isolation:isolate;display:flex;flex-direction:column;background:var(--b3-theme-background)}

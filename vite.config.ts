@@ -15,6 +15,7 @@ import zipPack from "vite-plugin-zip-pack"
 const pluginInfo = require("./plugin.json")
 const PRIVATE_SOURCES_ID = "@private-sources"
 const VIRTUAL_PRIVATE_SOURCES_ID = "\0@private-sources"
+const FOLIATE_PDF_STUB_ID = "\0foliate-pdf-stub"
 const PUBLIC_PRIVATE_SOURCES_STUB = `
 export const registerPrivateSources = () => {}
 export const createPrivateSearchAccess = () => ({
@@ -58,11 +59,14 @@ export default defineConfig(({
     plugins: [
       {
         name: "private-sources",
-        resolveId(id) {
+        enforce: "pre",
+        resolveId(id, importer) {
+          if (/[\\/]foliate-js[\\/]pdf\.js$/.test(id) || id === "foliate-js/pdf.js" || (id === "./pdf.js" && /[\\/]foliate-js[\\/]view\.js$/.test(importer || ""))) return FOLIATE_PDF_STUB_ID
           if (id !== PRIVATE_SOURCES_ID) return null
           return existsSync(privateSources) ? privateSources : VIRTUAL_PRIVATE_SOURCES_ID
         },
         load(id) {
+          if (id === FOLIATE_PDF_STUB_ID) return "export const makePDF = async () => { throw new Error('PDF is handled by EmbedPDF') }"
           if (id !== VIRTUAL_PRIVATE_SOURCES_ID) return null
           return PUBLIC_PRIVATE_SOURCES_STUB
         },
@@ -89,14 +93,6 @@ export default defineConfig(({
           {
             src: "./src/i18n/*.json",
             dest: "./i18n/",
-          },
-          {
-            src: "./node_modules/@embedpdf/pdfium/dist/pdfium.wasm",
-            dest: "./assets/",
-          },
-          {
-            src: "./node_modules/@embedpdf/default-stamps/*",
-            dest: "./assets/default-stamps/",
           },
         ],
       }),

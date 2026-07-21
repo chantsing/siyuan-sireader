@@ -176,16 +176,19 @@ export class MarkManager{
   private add(m:Partial<Mark>):Mark{
     const mark:Mark={id:m.id||`${m.type}-${Date.now()}-${Math.random().toString(36).slice(2,9)}`,format:this.format,type:m.type!,timestamp:Date.now(),...m,tags:normalizeTags(m.tags)}as Mark
     if(!mark.chapter&&mark.type!=='bookmark'){
-      const loc=this.reader?.getView?.()?.lastLocation||this.view?.lastLocation,book=this.reader?.getBook?.()||this.view?.book
-      mark.chapter=book?.toc&&loc?.tocItem?.href?this.findTocPath(book.toc,loc.tocItem.href)||loc.tocItem.label||loc.tocItem.title||'':loc?.tocItem?.label||loc?.tocItem?.title||loc?.label||''
+      const loc=this.reader?.getView?.()?.lastLocation||this.view?.lastLocation
+      mark.chapter=loc?.tocItem?.label||loc?.tocItem?.title||loc?.label||''
     }
     this.marks.push(mark)
     this.marksMap.set(mark.id,mark)
     return mark
   }
 
-  private findTocPath(toc:any[],href:string,path=''):string{for(const item of toc){const cur=path?`${path} - ${item.label}`:item.label;if(item.href===href)return cur;if(item.subitems?.length){const found=this.findTocPath(item.subitems,href,cur);if(found)return found}}return''}
-
+  private async locMeta(cfi?:string){
+    const view=this.reader?.getView?.()||this.view,loc=view?.lastLocation||this.reader?.getLocation?.()
+    const [toc,progress]=cfi?await Promise.all([Promise.resolve(view?.getTOCItemOf?.(cfi)).catch(()=>null),Promise.resolve(view?.getCFIProgress?.(cfi)).catch(()=>null)]):[loc?.tocItem,null]
+    return{chapter:toc?.label||toc?.title||loc?.tocItem?.label||loc?.tocItem?.title||loc?.label||'',progress:Math.round(((progress?.fraction??loc?.fraction)||0)*100)}
+  }
 
   /** 删除标注（内存+数据库） */
   private async del(id:string):Promise<boolean>{
@@ -248,6 +251,7 @@ export class MarkManager{
       const icon=getNoteIcon(mark.color),themeColor=getNoteColor(mark.color),isVocab=mark.color==='purple'
       const marker=doc.createElement('span')
       marker.setAttribute('data-note-marker','true')
+      marker.setAttribute('cfi-inert','')
       if(isVocab)marker.setAttribute('data-vocab','true')
       marker.setAttribute('data-mark-id',mark.id)
       marker.textContent=icon
@@ -288,7 +292,7 @@ export class MarkManager{
   }
 
   async addHighlight(loc:string|number,text:string,color:HighlightColor,style:MarkStyle='highlight',rects?:any[],textOffset?:number,tags?:string[]):Promise<Mark>{
-    const m=this.add({type:'highlight',[typeof loc==='string'?'cfi':'section']:loc,text,color,style,rects,textOffset,tags})
+    const m=this.add({type:'highlight',...(typeof loc==='string'?await this.locMeta(loc):{}),[typeof loc==='string'?'cfi':'section']:loc,text,color,style,rects,textOffset,tags})
     this.undoStack.push({...m})
     if(this.undoStack.length>10)this.undoStack.shift()
     if(m.cfi)await this.view?.addAnnotation?.({value:m.cfi,color:m.color,note:m.note}).catch(()=>{})
@@ -299,7 +303,7 @@ export class MarkManager{
   }
 
   async addNote(loc:string|number,note:string,text:string,color:HighlightColor='blue',style:MarkStyle='outline',rects?:any[],textOffset?:number,tags?:string[]):Promise<Mark>{
-    const m=this.add({type:'note',[typeof loc==='string'?'cfi':'section']:loc,text,note,color,style,rects,textOffset,tags})
+    const m=this.add({type:'note',...(typeof loc==='string'?await this.locMeta(loc):{}),[typeof loc==='string'?'cfi':'section']:loc,text,note,color,style,rects,textOffset,tags})
     this.undoStack.push({...m})
     if(this.undoStack.length>10)this.undoStack.shift()
     if(m.cfi)await this.view?.addAnnotation?.({value:m.cfi,color:m.color,note:m.note}).catch(()=>{})
@@ -394,7 +398,7 @@ export class MarkManager{
   getNotes=()=>this.marks.filter(m=>m.type==='note')
   getAll=()=>[...this.marks]
   async addImageMark(src:string,text:string,cfi?:string,note='',tags?:string[]):Promise<Mark>{
-    const loc=this.view?.lastLocation||this.reader?.getLocation?.(),m=this.add({type:'note',format:'epub',cfi:cfi||loc?.cfi||'',text:text||'图片标注',note,image:src,tags,progress:Math.round((loc?.fraction||0)*100)})
+    const loc=this.view?.lastLocation||this.reader?.getLocation?.(),useCfi=cfi||loc?.cfi||'',m=this.add({type:'note',format:'epub',...(await this.locMeta(useCfi)),cfi:useCfi,text:text||'图片标注',note,image:src,tags})
     this.undoStack.push({...m});this.undoStack.length>10&&this.undoStack.shift();this.save();window.dispatchEvent(new Event('sireader:marks-updated'));this.tryAutoSync(m);return m
   }
   undo=async()=>{

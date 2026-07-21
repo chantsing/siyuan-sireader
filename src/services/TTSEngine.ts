@@ -18,6 +18,8 @@ const WINDOWS_EPOCH = 11644473600n
 const OUTPUT_FORMAT = 'webm-24khz-16bit-mono-opus'
 const VOICES_URL = `https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list?trustedclienttoken=${TRUSTED_TOKEN}`
 const CACHE_TTL = 24 * 60 * 60 * 1000
+const SSML_NS = 'http://www.w3.org/2001/10/synthesis'
+const XML_NS = 'http://www.w3.org/XML/1998/namespace'
 const ensureNodeEnv = () => {
   if (!randomBytes || !createHash || !NodeURL || !net || !tls || !stream) {
     throw new Error('Node runtime is unavailable in current environment')
@@ -351,14 +353,39 @@ export class EdgeTTSCore {
     return this.wsPromise
   }
 
-  async toStream(text: string, rate = 1): Promise<Buffer> {
+  async toStream(text: string, rate = 1, pitch = 1): Promise<Buffer> {
+    return this.sendSSML(this.wrapSSML(text, rate, pitch))
+  }
+
+  async toSSMLStream(ssml: string, rate = 1, pitch = 1): Promise<Buffer> {
+    return this.sendSSML(this.wrapSSML(ssml, rate, pitch))
+  }
+
+  private wrapSSML(input: string, rate = 1, pitch = 1) {
+    const doc = document.implementation.createDocument(SSML_NS, 'speak')
+    const speak = doc.documentElement
+    const voice = doc.createElementNS(SSML_NS, 'voice')
+    const prosody = doc.createElementNS(SSML_NS, 'prosody')
+    const rateVal = Math.round((rate - 1) * 100)
+    speak.setAttribute('version', '1.0')
+    speak.setAttributeNS(XML_NS, 'xml:lang', /([a-z]{2}-[A-Z]{2})/.exec(this.voice)?.[1] || 'zh-CN')
+    voice.setAttribute('name', this.voice)
+    prosody.setAttribute('rate', `${rateVal >= 0 ? '+' : ''}${rateVal}%`)
+    prosody.setAttribute('pitch', `${Math.round((pitch - 1) * 100)}%`)
+    try {
+      const parsed = new DOMParser().parseFromString(input, 'application/xml').documentElement
+      if (parsed?.localName === 'speak' && !parsed.querySelector('parsererror'))
+        Array.from(parsed.childNodes).forEach(child => prosody.appendChild(doc.importNode(child, true)))
+      else prosody.appendChild(doc.createTextNode(input))
+    } catch { prosody.appendChild(doc.createTextNode(input)) }
+    voice.appendChild(prosody)
+    speak.appendChild(voice)
+    return new XMLSerializer().serializeToString(doc)
+  }
+
+  private async sendSSML(ssml: string): Promise<Buffer> {
     await this.init(this.voice)
     const id = randomBytes(16).toString('hex')
-    const rateVal = Math.round((rate - 1) * 100)
-    const rateStr = `${rateVal >= 0 ? '+' : ''}${rateVal}%`
-    const locale = /([a-z]{2}-[A-Z]{2})/.exec(this.voice)?.[1] || 'zh-CN'
-    const ssml = `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="${locale}"><voice name="${this.voice}"><prosody rate="${rateStr}">${text}</prosody></voice></speak>`
-    
     const readable = new stream.Readable({ read() {} })
     this.queue[id] = readable
     this.ws.send(`X-RequestId:${id}\r\nContent-Type:application/ssml+xml\r\nPath:ssml\r\n\r\n${ssml}`)

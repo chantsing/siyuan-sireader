@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support highlights, ink, shapes, forms, stamps, signatures, images, screenshots, search, printing, export, and backlinks, with annotation notes, dictionary, translation, themes, and bookshelf management.
 
-[![Version](https://img.shields.io/badge/version-2.1.4-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-2.2.0-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,54 @@ Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support high
 ---
 
 ## 📝 Latest Updates
+
+### v2.2.0 (2026.7.21)
+
+### Added
+
+- Added multi-select and folder import for SiYuan assets. Folder import automatically creates a bookshelf group with the same name and batch-categorizes imported books into it.
+- Added EPUB image and table interactions: `img`, `svg image`, and `table` clicks are recognized; images can be copied, exported, and annotated, and tables can be copied and located by CFI.
+- Added pitch, sentence-pause, and paragraph-pause controls to the TTS mini player.
+
+### Improved
+
+- Switched the EPUB/MOBI/AZW3 foundation to a pinned Readest foliate-js commit, reusing its pagination, footnote, TTS, and multi-format compatibility improvements first; PDFs still use EmbedPDF uniformly.
+- Improved bookshelf batch parsing for EPUB/MOBI/AZW3 by reading metadata and covers directly, reducing slowdowns and errors caused by parsing when opening the view.
+- Improved local-file, link, and SiYuan asset import flows. Covers are written sequentially with timeout fallbacks, reducing the chance of getting stuck on "importing".
+- Improved bookshelf search so the home page includes books that have already been assigned to manual groups during search.
+- EPUB footnote popups now render fragments through foliate-js `FootnoteHandler`, reducing handwritten DOM parsing and footnote misclassification.
+- Improved EPUB footnote popup interactions with in-popup link following, return history, and duplicate backlink jump prevention.
+- Added compatibility for `p.fnote` reverse-anchor footnote structures, improving recognition stability for special EPUBs such as Linguistics.
+- Improved the EPUB image browser list by collecting images inside `svg image` and unifying the image/table menu lifecycle.
+- EPUB TTS now uses the foliate-js TTS and `textWalker` flow, keeping sentence reading, highlighting, auto page turning, and footnote filtering aligned with the underlying reading order.
+- Online Edge TTS now supports standard SSML wrapping and pitch control; local voice synchronization also supports pitch control.
+- Improved the EPUB annotation popup by placing tag preset group titles on the same row as tags and using dashed boxes to make groups easier to identify.
+- Improved EPUB annotation popup positioning and height limits so the save button remains clickable near the bottom of the page while keeping the popup closer to the selected annotation.
+- Improved the visual style of the EPUB annotation popup with a pointer arrow, shadow, and internal scroll boundaries.
+- Improved annotation-list jumps. EPUB now uses Readest-standard `goTo(cfi)`, parses the CFI after jumping, and flashes the target position; PDF jumps also select the corresponding annotation.
+- Improved annotation previews. PDF previews reuse the EmbedPDF document source and public wasm, while EPUB context previews reuse the unified text extraction logic.
+- Improved PDF loading. On first open, `pdfium.wasm` is downloaded from the official EmbedPDF `@embedpdf/pdfium@2.14.4` address into SiYuan `/data/public`; later workers read it directly from `/public/siyuan-sireader/embedpdf/pdfium.wasm`, avoiding blob paths and a larger plugin package.
+- Improved PDF default stamp loading. Chinese and English default stamps are downloaded from official EmbedPDF default stamp addresses into `/data/public/siyuan-sireader/embedpdf/stamps` on first open, then loaded at runtime through the public manifest instead of being bundled.
+- Improved EmbedPDF runtime loading. The official snippet JS is downloaded to `/data/public/siyuan-sireader/embedpdf/snippet` on first PDF open and then reused as public ESM.
+- Improved EmbedPDF document-source creation and loading error display. PDF string URLs are loaded directly as URLs, while file sources are converted to buffers.
+
+### Build and Dependencies
+
+- Bumped the version to `2.2.0`.
+- Removed bundled `pdfium.wasm`; the PDF engine now downloads it on first use and reuses the cached copy.
+- Removed the `@embedpdf/default-stamps` dependency and bundled stamp assets; default stamps are now downloaded to public storage on first use and reused.
+- Removed static bundling for the EmbedPDF viewer runtime, reducing the plugin zip from about 3.69 MB to about 550 KB.
+- Removed the old `foliate-js@1.0.1` patch and extra workspace configuration; EPUB/MOBI/AZW3 support now comes from the pinned Readest foliate-js commit.
+- Added a Foliate PDF stub during build to avoid pulling duplicate PDF logic into the EPUB foundation.
+- Removed the old EmbedPDF worker bundling patch; the PDF viewer runtime now loads independently from the public snippet.
+
+### Fixed
+
+- Fixed some EPUBs opening without initial first-screen positioning or showing a blank reader because of abnormal CSS resource types.
+- Fixed some EPUB footnotes not responding to clicks or being misidentified as image clicks.
+- Fixed EPUB annotation popup edit mode not receiving localized text, causing tag, note, cancel, and save buttons to show English fallbacks.
+- Fixed clicking EPUB annotations in the annotation list possibly opening an annotation card, and not highlighting the target position after jumping.
+- Fixed PDF worker initialization failures leaving the page stuck on "Loading...".
 
 ### v2.1.4 (2026.7.18)
 

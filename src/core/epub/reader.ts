@@ -11,6 +11,7 @@ import { createTooltip, hideTooltip, showTooltip } from '@/core/MarkManager'
 import { EPUBSearch } from './search'
 import { createTxtBook, isTxtSource } from '@/core/txt/book'
 import { isMobile } from '@/utils/mobile'
+import { FootnoteHandler } from 'foliate-js/footnotes.js'
 import 'foliate-js/view.js'
 
 export interface ReaderOptions {
@@ -35,20 +36,6 @@ const preloadFont = (url: string) => {
   preloadedFonts.add(url)
   document.head.appendChild(Object.assign(document.createElement('link'), { rel: 'preload', as: 'font', href: url, crossOrigin: 'anonymous' }))
 }
-const getAttrSet = (el: Element | null | undefined, ns: string | null, name: string) =>
-  new Set((ns ? el?.getAttributeNS?.(ns, name) : el?.getAttribute?.(name))?.split(' '))
-const isBackLink = (el: Element | null | undefined, types: Set<string>, roles: Set<string>) =>
-  types.has('backlink') || roles.has('doc-backlink') || /back|return/i.test((el as HTMLElement | null)?.className || '')
-const getNoteType = (i: any, roles: Set<string>, types: Set<string>, cls: string) => {
-  const key = [...roles, ...types, cls].join()
-  return /endnote|rearnote/i.test(key) ? i.endnote || '尾注'
-    : /footnote/i.test(key) ? i.footnote || '脚注'
-    : /biblio|reference/i.test(key) ? i.reference || '参考'
-    : /gloss|definition/i.test(key) ? i.glossary || '术语'
-    : /note/i.test(key) ? i.annotation || '注释'
-    : i.note || '注释'
-}
-
 const watchTheme = (cb: () => void) => {
   const observer = new MutationObserver(() => requestAnimationFrame(cb))
   observer.observe(document.documentElement, { attributeFilter: ['data-theme-mode', 'class'] })
@@ -58,8 +45,57 @@ const watchTheme = (cb: () => void) => {
 const getStyleTag = (id: string) =>
   document.getElementById(id) || Object.assign(document.head.appendChild(document.createElement('style')), { id })
 const setAttr = (el: Element, name: string, value: string, on: any = true) => on ? el.setAttribute(name, value) : el.removeAttribute(name)
-const noteRefNumberPattern = /^[\[\(]?\d+[\]\)]?$/
-const noteRefSymbolPattern = /^[\[\(]?[*†‡]+[\]\)]?$/
+const numericNotePattern = /^.{0,2}\d+$/
+const inlineFootnoteSelector = '.js_readerFooterNote,.zhangyue-footnote,.duokan-footnote,.qqreader-footnote'
+const footnoteSelector = `${inlineFootnoteSelector},.footnote-link,.footnote`
+const footnoteLinkClasses = ['duokan-footnote', 'footnote-link', 'footnote']
+const shouldCheckAsFootnote = (a: HTMLAnchorElement) => {
+  if (!numericNotePattern.test(a.textContent?.trim() || '')) return false
+  for (let el = a.parentElement, depth = 0; el && depth < 3; el = el.parentElement, depth++) {
+    const count = Array.from(el.querySelectorAll('a')).filter(link => link !== a && numericNotePattern.test(link.textContent?.trim() || '')).length
+    if (count >= 2) return false
+  }
+  return true
+}
+const footnoteText = (el: HTMLElement, target?: Element | null) =>
+  (el.getAttribute('data-wr-footernote') || el.getAttribute('zy-footnote') || el.querySelector('img')?.getAttribute('alt') || el.getAttribute('alt') || (target as HTMLElement | null)?.getAttribute?.('alt') || el.textContent || '').trim()
+const inlineFootnote = (target: Element | null) => {
+  const el = target?.closest?.(inlineFootnoteSelector) as HTMLElement | null
+  if (!el || el.closest('a[href]')) return null
+  const text = footnoteText(el, target)
+  return text.trim() ? { el, text: text.trim() } : null
+}
+const normalizeFootnoteTypes = (doc?: Document) => doc?.querySelectorAll('[type~="noteref"],[type~="footnote"],[type~="endnote"],[type~="note"],[type~="rearnote"]').forEach(el => {
+  const type = el.getAttribute('type')
+  if (type && !el.getAttribute('epub:type')) el.setAttribute('epub:type', type)
+})
+
+const isFootnoteClick = (target: Element | null) => {
+  const a = target?.closest?.('a')
+  const key = [a?.className, a?.id, a?.getAttribute('href'), a?.getAttribute('type'), a?.getAttribute('role'), a?.getAttribute('epub:type'), a?.getAttributeNS?.('http://www.idpf.org/2007/ops', 'type')].join(' ')
+  return !!target?.closest?.(`sup,${footnoteSelector}`) || /\b(doc-)?(note|noteref|footnote|endnote|rearnote|biblio(ref|entry)?)\b|fn\d/i.test(key)
+}
+
+const mediaTarget = (target: Element | null) => {
+  if (!target || isFootnoteClick(target)) return null
+  if (target.localName === 'img') return { type: 'image', el: target, image: (target as HTMLImageElement).currentSrc || (target as HTMLImageElement).src, text: (target as HTMLImageElement).alt || target.title || '图片标注' }
+  const svgImage = target.localName === 'image' ? target : target.closest('image') || target.closest('svg')?.querySelector('image')
+  const href = svgImage?.getAttribute('href') || svgImage?.getAttributeNS('http://www.w3.org/1999/xlink', 'href')
+  if (href) return { type: 'image', el: svgImage as Element, image: /^data:|^blob:|^[a-z]+:/i.test(href) ? href : new URL(href, target.ownerDocument.baseURI).href, text: '图片标注' }
+  const table = target.localName === 'table' ? target : target.closest('table')
+  return table ? { type: 'table', el: table, html: table.outerHTML, text: table.textContent?.replace(/\s+/g, ' ').trim() || '表格' } : null
+}
+
+const recoverTransformErrors = (book: any) => book?.transformTarget?.addEventListener('data', (event: Event) => {
+  const { detail } = event as CustomEvent
+  detail.data = Promise.resolve(detail.data).catch(e => (console.error(new Error(`Failed to load ${detail.name}`, { cause: e })), ''))
+})
+let openQueue = Promise.resolve()
+const enqueueOpen = <T>(task: () => Promise<T>) => {
+  const next = openQueue.catch(() => {}).then(task)
+  openQueue = next.catch(() => {}).then(() => {})
+  return next
+}
 
 const readText = (value: any): string => {
   if (typeof value === 'string') return value.trim()
@@ -274,6 +310,14 @@ export class FoliateReader {
   private resizeObserver?: ResizeObserver
   private resizeTimer: any = null
   private lastResizeWidth = 0
+  private footnote = new FootnoteHandler()
+  private footnoteAnchor: HTMLElement | null = null
+  private footnoteHref = ''
+  private footnoteHistory: any[] = []
+  private footnoteIndex = -1
+  private destroyed = false
+  private closeFootnote = () => document.querySelectorAll<HTMLElement>('[data-footnote-tooltip]').forEach(el => Object.assign(el.style, { display: 'none', opacity: '0', transform: 'translateY(-8px)' }))
+  private closeFloaters = () => { this.closeFootnote(); this.emit('content-interaction') }
   private syncThemeObserver = (auto: boolean) => auto
     ? this.themeObserver ||= watchTheme(() => this.applySettings())
     : (this.themeObserver?.disconnect(), this.themeObserver = undefined)
@@ -293,19 +337,28 @@ export class FoliateReader {
     this.listenToSettingsChanges()
   }
 
-  async open(file: File | string | any, format?: string) {
-    const source = (isTxtSource(file) || (format === 'txt' && !isKnownEbookSource(file))) ? await createTxtBook(file) : file
-    await this.view.open(source)
-    const renderer = this.view.renderer as any
-    if (renderer && !renderer.__sireaderMarginalsBound) {
-      renderer.__sireaderMarginalsBound = true
-      const refresh = () => refreshMarginals(this.view)
-      renderer.addEventListener('load', refresh)
-      renderer.addEventListener('relocate', refresh)
-    }
-    this.applySettings()
-    if (this.marks) await this.marks.init()
-    this.emit('loaded', { book: this.view.book })
+  async open(file: File | string | any | (() => Promise<File | string | any>), format?: string) {
+    await enqueueOpen(async () => {
+      if (this.destroyed) return
+      const input = typeof file === 'function' ? await file() : file
+      const source = (isTxtSource(input) || (format === 'txt' && !isKnownEbookSource(input))) ? await createTxtBook(input) : input
+      if (this.destroyed) return
+      await this.view.open(source)
+      if (this.destroyed) return this.view.close?.()
+      recoverTransformErrors(this.view.book)
+      const renderer = this.view.renderer as any
+      if (renderer && !renderer.__sireaderMarginalsBound) {
+        renderer.__sireaderMarginalsBound = true
+        const refresh = () => refreshMarginals(this.view)
+        renderer.addEventListener('load', refresh)
+        renderer.addEventListener('relocate', refresh)
+      }
+      this.applySettings()
+      await this.view.init?.({})
+      if (this.destroyed) return this.view.close?.()
+      if (this.marks) await this.marks.init()
+      this.emit('loaded', { book: this.view.book })
+    })
   }
 
   private applySettings() {
@@ -327,25 +380,62 @@ export class FoliateReader {
     this.resizeTimer = setTimeout(() => this.applySettings(), delay)
   }
 
-  private handleLoad(detail: any) { refreshMarginals(this.view); this.bindContentImages(detail?.doc, detail?.index); this.emit('load', detail) }
+  private handleLoad(detail: any) { normalizeFootnoteTypes(detail?.doc); refreshMarginals(this.view); this.bindContentMedia(detail?.doc, detail?.index); this.emit('load', detail) }
 
-  private bindContentImages(doc?: Document, index?: number) {
+  private cfiFor(doc: Document, index: number | undefined, node: Node) {
+    try { const range = doc.createRange(); range.selectNode(node); return index !== undefined ? (this.view as any).getCFI(index, range) : '' } catch { return '' }
+  }
+
+  private bindContentMedia(doc?: Document, index?: number) {
     if (!doc) return
     doc.querySelectorAll('img').forEach((img: HTMLImageElement) => { img.onerror = () => { img.style.display = 'none' } })
     if ((doc as any).__sireaderImageMenu) return
     ;(doc as any).__sireaderImageMenu = true
-    doc.addEventListener('contextmenu', ((event: MouseEvent) => {
-      const img = (event.target as HTMLElement)?.closest?.('img') as HTMLImageElement | null
-      if (!img) return
-      event.preventDefault(); event.stopPropagation()
-      let cfi = ''
-      try { const range = doc.createRange(); range.selectNode(img); cfi = index !== undefined ? (this.view as any).getCFI(index, range) : '' } catch {}
+    const emitMedia = (event: MouseEvent, media: any, name: string) => {
       const rect = (doc.defaultView?.frameElement as HTMLIFrameElement | null)?.getBoundingClientRect()
-      this.emit('image-menu', { item: { id: '', type: 'note', format: 'epub', cfi, text: img.alt || img.title || '图片标注', image: img.currentSrc || img.src, chapter: this.view.lastLocation?.tocItem?.label || '' }, x: event.clientX + (rect?.left || 0), y: event.clientY + (rect?.top || 0) })
+      this.emit(name, { item: { id: '', type: 'note', format: 'epub', cfi: this.cfiFor(doc, index, media.el), text: media.text, image: media.image, html: media.html, chapter: this.view.lastLocation?.tocItem?.label || '' }, x: event.clientX + (rect?.left || 0), y: event.clientY + (rect?.top || 0) })
+    }
+    const openMenu = (event: MouseEvent) => {
+      const media = mediaTarget(event.target as Element | null)
+      if (!media) return false
+      this.closeFloaters()
+      event.preventDefault(); event.stopPropagation()
+      emitMedia(event, media, media.type === 'table' ? 'table-menu' : 'image-menu')
+      return true
+    }
+    doc.addEventListener('contextmenu', openMenu as EventListener)
+    doc.addEventListener('click', ((event: MouseEvent) => {
+      const target = event.target as Element | null
+      const note = inlineFootnote(target)
+      if (note) return event.preventDefault(), event.stopPropagation(), this.renderInlineFootnote(note.el, note.text)
+      const media = mediaTarget(target)
+      if (!media) return target?.closest?.('a[href]') ? undefined : this.closeFloaters()
+      this.closeFloaters()
+      event.preventDefault(); event.stopPropagation()
+      emitMedia(event, media, media.type === 'table' ? 'table-open' : 'image-open')
     }) as EventListener)
   }
 
   private setupEventListeners() {
+    this.footnote.addEventListener('before-render', ((e: CustomEvent) => {
+      const view = e.detail.view as FoliateView
+      view.style.cssText = 'display:block;width:100%;height:min(360px,calc(100vh - 120px))'
+      view.addEventListener('link', ((event: CustomEvent) => {
+        event.preventDefault()
+        let id = this.footnoteHref.split('#')[1]
+        try { id = id && decodeURIComponent(id) } catch {}
+        if (id && event.detail.a?.id === id) return
+        const detail = { ...event.detail, follow: true }
+        this.footnoteHistory = [...this.footnoteHistory.slice(0, this.footnoteIndex + 1), detail]
+        this.footnoteIndex = this.footnoteHistory.length - 1
+        this.footnote.handle(this.view.book, { detail, preventDefault: () => event.preventDefault() } as any)?.catch(() => this.view.goTo(detail.href))
+      }) as EventListener)
+      view.addEventListener('load', ((event: CustomEvent) => normalizeFootnoteTypes(event.detail?.doc)) as EventListener)
+      view.renderer?.setAttribute?.('flow', 'scrolled')
+      view.renderer?.setAttribute?.('no-background', '')
+      view.renderer?.setStyles?.('body{padding:14px!important;font-size:13px!important;line-height:1.7!important;color:var(--b3-theme-on-surface)!important;background:var(--b3-theme-surface)!important}a{color:var(--b3-theme-primary)!important}')
+    }) as EventListener)
+    this.footnote.addEventListener('render', ((e: CustomEvent) => this.renderFootnote(e.detail)) as EventListener)
     this.view.addEventListener('relocate', ((e: CustomEvent) => {
       refreshMarginals(this.view)
       this.emit('relocate', e.detail)
@@ -356,97 +446,65 @@ export class FoliateReader {
     this.view.addEventListener('link', ((e: CustomEvent) => {
       const { a, href } = e.detail
       if (!a || !href) return this.emit('link', e.detail)
-      const types = getAttrSet(a, 'http://www.idpf.org/2007/ops', 'type')
-      const roles = getAttrSet(a, null, 'role')
-      const cls = a.className || ''
-      const id = a.id || ''
-      const txt = a.textContent?.trim() || ''
-      const isSuper = (el: HTMLElement | null) => !!el && (el.matches('sup') || /^(super|top|\d)/.test(getComputedStyle(el).verticalAlign))
-      const isRef = ['doc-noteref', 'doc-biblioref', 'doc-glossref', 'doc-footnote', 'doc-endnote'].some(role => roles.has(role))
-        || ['noteref', 'biblioref', 'glossref', 'footnote', 'endnote', 'note', 'rearnote'].some(type => types.has(type))
-        || (
-          !isBackLink(a, types, roles)
-          && (
-            /note|foot|end|ref|annotation|comment|fn/i.test(cls + id)
-            || ((isSuper(a) || (a.children.length === 1 && isSuper(a.children[0] as HTMLElement)) || isSuper(a.parentElement as HTMLElement))
-              && (noteRefNumberPattern.test(txt) || noteRefSymbolPattern.test(txt)))
-          )
-        )
-      if (!isRef) return this.emit('link', e.detail)
-      e.preventDefault()
-      this.showFootnote(a, href).catch(() => {})
+      this.closeFloaters()
+      this.footnoteAnchor = a
+      this.footnoteHistory = [e.detail]
+      this.footnoteIndex = 0
+      if (footnoteLinkClasses.some(cls => a.classList.contains(cls))) e.detail.follow = true
+      if (shouldCheckAsFootnote(a)) e.detail.check = true
+      const handled = this.footnote.handle(this.view.book, e as any)
+      if (handled) return handled.catch(() => this.emit('link', e.detail))
+      this.emit('link', e.detail)
     }) as EventListener)
   }
 
-  private async showFootnote(a: HTMLElement, href: string) {
-    try {
-      const target = await this.view.book.resolveHref(href)
-      const section = this.view.book.sections[target?.index]
-      if (!section) return
-      const html = await (await fetch(await section.load())).text()
-      const doc = new DOMParser().parseFromString(html, 'text/html')
-      const el = target.anchor(doc)
-      if (!el) return
+  private getFootnoteTooltip() {
+    let tooltip = document.querySelector('[data-footnote-tooltip]') as HTMLDivElement | null
+    if (tooltip) return tooltip
+    tooltip = document.createElement('div')
+    tooltip.setAttribute('data-footnote-tooltip', '')
+    tooltip.style.cssText = 'position:fixed;display:none;width:min(360px,calc(100vw - 20px));background:var(--b3-theme-surface);border:1px solid var(--b3-border-color);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:99999;pointer-events:auto;overflow:hidden;transition:all .2s'
+    document.body.appendChild(tooltip)
+    return tooltip
+  }
 
-      const types = getAttrSet(el, 'http://www.idpf.org/2007/ops', 'type')
-      const roles = getAttrSet(el, null, 'role')
-      const cls = el.className || ''
-      const id = el.id || ''
-      const i = this.plugin.i18n
-      const noteType = getNoteType(i, roles, types, cls)
+  private renderInlineFootnote(el: HTMLElement, text: string) {
+    const tooltip = this.getFootnoteTooltip()
+    const i = this.plugin.i18n
+    tooltip.innerHTML = createTooltip({ icon: '#iconMark', iconColor: '#ef4444', title: i.footnote || '脚注', content: '<div data-footnote-content style="max-height:min(360px,calc(100vh - 120px));overflow:auto;user-select:text;padding:14px;font-size:13px;line-height:1.7;white-space:pre-wrap"></div>' })
+    tooltip.querySelector('[data-footnote-content]')!.textContent = text
+    const rect = el.getBoundingClientRect()
+    const frameRect = (el.ownerDocument.defaultView?.frameElement as HTMLIFrameElement | null)?.getBoundingClientRect()
+    showTooltip(tooltip, (frameRect?.left || 0) + rect.left, (frameRect?.top || 0) + rect.bottom + 8)
+  }
 
-      const clone = el.cloneNode(true) as HTMLElement
-      clone.querySelectorAll('a').forEach(link => {
-        const linkTypes = getAttrSet(link, 'http://www.idpf.org/2007/ops', 'type')
-        const linkRoles = getAttrSet(link, null, 'role')
-        if (isBackLink(link, linkTypes, linkRoles)) link.remove()
-      })
-
-      const range = doc.createRange()
-      const contentWrap = document.createElement('div')
-      clone.matches('li,aside,div,section,p') ? range.selectNodeContents(clone) : range.selectNode(clone)
-      contentWrap.appendChild(range.cloneContents())
-
-      let tooltip = document.querySelector('[data-footnote-tooltip]') as HTMLDivElement | null
-      if (!tooltip) {
-        tooltip = document.createElement('div')
-        tooltip.setAttribute('data-footnote-tooltip', '')
-        tooltip.style.cssText = 'position:fixed;display:none;width:340px;background:var(--b3-theme-surface);border:1px solid var(--b3-border-color);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:99999;pointer-events:auto;overflow:hidden;transition:all .2s'
-        document.body.appendChild(tooltip)
-      }
-
-      const content = `<div style="padding:14px;font-size:13px;line-height:1.7;max-height:300px;overflow-y:auto;user-select:text">${contentWrap.innerHTML.trim() || '无内容'}</div>`
-      tooltip.innerHTML = createTooltip({
-        icon: '#iconMark',
-        iconColor: '#ef4444',
-        title: `${noteType} (${i.clickToJump || '点击跳转'})`,
-        content,
-        id: id ? `#${id}` : ''
-      })
-
-      const header = tooltip.firstElementChild as HTMLElement | null
-      if (header) {
-        header.style.cursor = 'pointer'
-        header.onclick = () => {
-          hideTooltip(tooltip!, 0)
-          this.goTo(href).catch(() => {})
-        }
-      }
-
-      const rect = a.getBoundingClientRect()
-      const iframe = a.ownerDocument.defaultView?.frameElement as HTMLIFrameElement | null
-      const frameRect = iframe?.getBoundingClientRect()
-      const x = (frameRect?.left || 0) + rect.left
-      const y = (frameRect?.top || 0) + rect.bottom + 8
-      let timer: any
-      showTooltip(tooltip, x, y)
-      a.onmouseenter = () => { clearTimeout(timer); showTooltip(tooltip!, x, y) }
-      a.onmouseleave = () => { timer = setTimeout(() => hideTooltip(tooltip!), 100) }
-      tooltip.onmouseenter = () => clearTimeout(timer)
-      tooltip.onmouseleave = () => hideTooltip(tooltip)
-    } catch (error) {
-      console.error('[Footnote]', error)
+  private renderFootnote({ view, href, type, target }: any) {
+    const a = this.footnoteAnchor
+    if (!a) return
+    this.footnoteHref = href || ''
+    const tooltip = this.getFootnoteTooltip()
+    const i = this.plugin.i18n
+    const title = type === 'endnote' ? i.endnote || '尾注' : type === 'biblioentry' ? i.reference || '参考' : type === 'definition' ? i.glossary || '术语' : i.footnote || '脚注'
+    tooltip.innerHTML = createTooltip({ icon: '#iconMark', iconColor: '#ef4444', title: `${title} (${i.clickToJump || '点击跳转'})`, content: `${this.footnoteIndex > 0 ? '<button data-footnote-back style="margin:8px 0 0 8px;padding:4px 8px;border:1px solid var(--b3-border-color);border-radius:6px;background:var(--b3-theme-background);color:var(--b3-theme-on-surface);cursor:pointer">←</button>' : ''}<div data-footnote-content style="height:min(360px,calc(100vh - 120px));overflow:auto;user-select:text"></div>`, id: target?.id ? `#${target.id}` : '' })
+    tooltip.querySelector('[data-footnote-content]')?.replaceChildren(view)
+    tooltip.querySelector('[data-footnote-back]')?.addEventListener('click', () => {
+      const detail = this.footnoteHistory[--this.footnoteIndex]
+      detail && this.footnote.handle(this.view.book, { detail: { ...detail, follow: true }, preventDefault: () => {} } as any)
+    })
+    const header = tooltip.firstElementChild as HTMLElement | null
+    if (header) {
+      header.style.cursor = 'pointer'
+      header.onclick = () => { hideTooltip(tooltip!, 0); this.goTo(href).catch(() => {}) }
     }
+    const rect = a.getBoundingClientRect()
+    const frameRect = (a.ownerDocument.defaultView?.frameElement as HTMLIFrameElement | null)?.getBoundingClientRect()
+    const x = (frameRect?.left || 0) + rect.left, y = (frameRect?.top || 0) + rect.bottom + 8
+    let timer: any
+    showTooltip(tooltip, x, y)
+    a.onmouseenter = () => { clearTimeout(timer); showTooltip(tooltip!, x, y) }
+    a.onmouseleave = () => { timer = setTimeout(() => hideTooltip(tooltip!), 100) }
+    tooltip.onmouseenter = () => clearTimeout(timer)
+    tooltip.onmouseleave = () => hideTooltip(tooltip)
   }
 
   private listenToSettingsChanges() {
@@ -521,11 +579,13 @@ export class FoliateReader {
   getView = () => this.view
 
   async destroy() {
+    this.destroyed = true
     await this.marks?.destroy()
     this.themeObserver?.disconnect()
     this.resizeObserver?.disconnect()
     clearTimeout(this.resizeTimer)
     this.eventListeners.clear()
+    this.view.close?.()
     this.view.book?.destroy?.()
     try { this.view.remove() } catch {}
   }

@@ -2,7 +2,7 @@
   "name": "siyuan-sireader",
   "author": "mm-o",
   "url": "https://github.com/mm-o/siyuan-sireader",
-  "version": "2.1.4",
+  "version": "2.2.0",
   "minAppVersion": "2.10.14",
   "disabledInPublish": true,
   "backends": [
@@ -32,13 +32,12 @@
     ]
   },
   "keywords": [
-    "阅读", "reading", "电子书", "ebook", 
+    "阅读", "reading", "电子书", "ebook",
     "pdf", "epub", "mobi", "txt", "azw3", "fb2", "cbz",
-    "sireader", "思阅", 
+    "sireader", "思阅",
     "标注", "annotation", "笔记", "note", "书签", "bookmark",
     "词典", "dictionary",
     "书源", "book source", "在线小说", "online novel",
     "主题", "theme"
   ]
 }
-

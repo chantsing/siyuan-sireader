@@ -42,32 +42,33 @@
             <div class="sr-form-item"><span class="ft__secondary">快捷操作</span><div class="sr-grid2"><button class="b3-button b3-button--outline" type="button" title="从电脑选择 EPUB、PDF 等电子书文件，导入后由插件托管文件和封面。" @click="openLocalImport">本地导入</button><button class="b3-button b3-button--outline" type="button" title="浏览或搜索思源同步盘中的电子书，并添加到书架。" @click="setImportMode('cloud')">思盘导入</button><button class="b3-button b3-button--outline" type="button" title="创建普通文件夹分组。书籍加入后会从首页独立书籍区移出，属于实际归类。" @click="startEditGroup()">手动分组</button><button class="b3-button b3-button--outline" type="button" title="创建按标签、格式、状态、评分等条件动态显示的分组。智能分组不移动书籍归属，也不会把书从首页隐藏。" @click="startEditGroup(undefined, 'smart')">智能分组</button></div></div>
 
             <template v-if="!editingGroup && importMode === 'link'">
-              <div class="sr-form-item">
-                <span class="ft__secondary">输入链接</span>
+              <div class="sr-editor sr-import-card">
+                <div class="sr-editor-head"><strong>输入链接</strong></div>
                 <textarea class="b3-text-field fn__block sr-textarea" v-model="importDraft" placeholder="每行一个本地路径、file 链接、网络直链或思盘链接" />
                 <div class="sr-row"><button class="b3-button b3-button--outline sr-grow" type="button" @click="parseImportUrls" :disabled="!importDraft.trim() || importParsing">{{ importParsing ? '解析中...' : '解析链接' }}</button></div>
               </div>
             </template>
 
             <template v-if="!editingGroup && importMode === 'cloud'">
-              <div class="sr-form-item">
-                <span class="ft__secondary">思盘导入</span>
+              <div class="sr-editor sr-import-card">
+                <div class="sr-editor-head"><strong>思盘导入</strong></div>
                 <div class="sr-row"><input v-model.trim="cloudInput" class="b3-text-field sr-grow" placeholder="输入思盘路径" @keyup.enter="openCloudInput" /><button class="b3-button b3-button--outline" type="button" :disabled="cloudLoading || !cloudInput" @click="openCloudInput">输入</button></div>
                 <div class="sr-row"><input v-model.trim="cloudKeyword" class="b3-text-field sr-grow" placeholder="输入关键词搜索" @keyup.enter="searchCloud" /><button class="b3-button b3-button--outline" type="button" :disabled="cloudLoading || !cloudKeyword" @click="searchCloud">搜索</button></div>
                 <div class="sr-row"><button class="b3-button b3-button--outline sr-grow" type="button" :disabled="cloudLoading" @click="listCloud('/')">浏览全部</button></div>
                 <div v-if="cloudError" class="sr-muted">{{ cloudError }}</div>
-                <View v-if="cloudResults.length" :items="cloudDisplayItems" mode="compact" dense :show-group-meta="false" :status-map="STATUS_MAP" :get-cover-url="getCoverUrl" :get-group-cover-urls="() => []" :get-progress="() => ''" @select-group="listCloud" @book-click="importCloudBook" />
+                <View v-if="cloudResults.length" class="sr-cloud-results" :items="cloudDisplayItems" mode="compact" dense selecting select-groups :selected-urls="cloudSelectedPaths" :show-group-meta="false" :status-map="STATUS_MAP" :get-cover-url="getCoverUrl" :get-group-cover-urls="() => []" :get-progress="() => ''" @select-group="listCloud" @toggle-select-book="book => toggleCloudPath(book.url)" />
+                <div v-if="cloudResults.length" class="sr-row sr-actions-end"><button class="b3-button b3-button--outline" type="button" :disabled="cloudLoading || !cloudSelectedPaths.length" @click="parseSelectedCloud">{{ cloudLoading ? '解析中...' : `解析选中 ${cloudSelectedPaths.length || ''}` }}</button></div>
               </div>
             </template>
 
-            <div v-if="!editingGroup && importHasItems" class="sr-form-item">
-              <span class="ft__secondary">待导入</span>
+            <div v-if="showImportItems" class="sr-editor sr-import-card">
+              <div class="sr-editor-head"><strong>待导入</strong></div>
               <div class="sr-row"><button class="sr-chip" :class="{ 'is-active': importAllSelected }" type="button" @click="importAllSelected = !importAllSelected">{{ importAllSelected ? '取消全选' : '全选导入' }}</button><span>{{ importSelectedCount }} / {{ importItems.length }}</span><span v-if="importParsing">{{ importProgress }}%</span></div>
-              <View :items="importDisplayItems" mode="list" :status-map="STATUS_MAP" :get-cover-url="getCoverUrl" :get-progress="getProgress" @toggle-import="toggleImportItem" />
+              <View class="sr-import-list" :items="importDisplayItems" mode="list" :status-map="STATUS_MAP" :get-cover-url="getCoverUrl" :get-progress="getProgress" @toggle-import="toggleImportItem" />
             </div>
 
-            <div v-if="!editingGroup && importHasItems" class="sr-form-item">
-              <span class="ft__secondary">导入设置</span>
+            <div v-if="showImportItems" class="sr-editor sr-import-card sr-import-card--sm">
+              <div class="sr-editor-head"><strong>导入设置</strong></div>
               <input v-model="importBulkTags" class="b3-text-field sr-input" placeholder="添加标签，用逗号分隔" />
               <div v-if="allTags.length" class="sr-chips"><button v-for="t in allTags.slice(0, 10)" :key="t.tag" class="sr-chip" type="button" :class="{ 'is-active': importTagList.includes(t.tag) }" @click="toggleImportTag(t.tag)">#{{ t.tag }}</button></div>
               <template v-for="row in importApplyRows" :key="row.key"><span class="sr-muted">{{ row.label }}</span><div class="sr-chips"><button v-for="item in row.items" :key="item.key" class="sr-chip" type="button" :class="{ 'is-active': item.active }" @click="item.click">{{ item.label }}</button></div></template>
@@ -97,8 +98,8 @@
           <template v-if="modalMode === 'manage'">
             <div class="sr-row sr-actions-end sr-section-line">
               <button class="b3-button b3-button--outline" type="button" title="关闭面板，不导入当前待导入项目。" @click="closePopups">取消</button>
-              <button v-if="!editingGroup && importHasItems && importMode === 'file'" class="b3-button b3-button--outline" type="button" title="复制文件到插件托管目录，适合希望书籍随插件数据一起管理的本地文件。" @click="confirmImport('file')" :disabled="!importSelectedCount || importParsing || importing">复制导入</button>
-              <button v-if="!editingGroup && importHasItems" class="b3-button b3-button--outline" type="button" title="保留原始路径或链接添加到书架，支持 file 链接、本地路径、网络直链和思盘链接。" @click="confirmImport('link')" :disabled="!importLinkSelectedCount || importParsing || importing">链接导入</button>
+              <button v-if="showImportItems && importMode === 'file'" class="b3-button b3-button--outline" type="button" title="复制文件到插件托管目录，适合希望书籍随插件数据一起管理的本地文件。" @click="confirmImport('file')" :disabled="!importSelectedCount || importParsing || importing">复制导入</button>
+              <button v-if="showImportItems" class="b3-button b3-button--outline" type="button" title="保留原始路径或链接添加到书架，支持 file 链接、本地路径、网络直链和思盘链接。" @click="confirmImport('link')" :disabled="!importLinkSelectedCount || importParsing || importing">链接导入</button>
             </div>
           </template>
 
@@ -194,7 +195,7 @@ const batchTags = ref(''), batchGroups = ref<string[]>([])
 const batchTagAction = ref<'add' | 'remove' | 'set'>('add'), batchGroupAction = ref<'add' | 'remove' | 'set'>('add')
 const editForm = ref(createDefaultEditForm())
 const bindSearch = ref(''), bindResults = ref<any[]>([])
-const cloudInput = ref(''), cloudKeyword = ref(''), cloudLoading = ref(false), cloudError = ref(''), cloudResults = ref<SiyuanCloudNode[]>([])
+const cloudInput = ref(''), cloudKeyword = ref(''), cloudLoading = ref(false), cloudError = ref(''), cloudResults = ref<SiyuanCloudNode[]>([]), cloudSelectedPaths = ref<string[]>([]), cloudImportGroups = ref<Record<string, string[]>>({})
 const { items: importItems, draft: importDraft, parsing: importParsing, importing, progress: importProgress, hasItems: importHasItems, selectedCount: importSelectedCount, linkSelectedCount: importLinkSelectedCount, allSelected: importAllSelected, reset: resetImport, pickAndParseFiles, parseDraftUrls, importSelected } = useBookImport()
 
 let settingsLoaded = false, reloading = false, lastReloadAt = 0, activeMenu: any = null
@@ -229,7 +230,7 @@ const matchBook = (book: Book, kw = keyword.value.toLowerCase()) => !kw || book.
 const displayItems = computed(() => {
   const kw = keyword.value.toLowerCase()
   if (currentGroup.value) return books.value.filter(b => matchBook(b, kw)).map(b => ({ type: 'book', data: b }))
-  const rootBooks = (viewMode.value === 'compact' ? books.value : books.value.filter(b => !groupedBook(b)))
+  const rootBooks = (kw || viewMode.value === 'compact' ? books.value : books.value.filter(b => !groupedBook(b)))
   const items = [
     ...(keyword.value ? groups.value.filter(g => g.name.toLowerCase().includes(kw)) : groups.value).map(g => ({ type: 'group', data: g })),
     ...rootBooks.filter(b => matchBook(b, kw)).map(b => ({ type: 'book', data: b })),
@@ -249,6 +250,7 @@ const batchRatingOptions = computed(() => [...RATING_OPTIONS, [0, '清除评分'
 const parseList = (value: string) => Array.from(new Set(value.split(/[,，\n]/).map(t => t.trim()).filter(Boolean)))
 const importTagList = computed(() => parseList(importBulkTags.value))
 const batchTagList = computed(() => parseList(batchTags.value))
+const showImportItems = computed(() => !editingGroup.value && importHasItems.value)
 const optionChip = (key: string, label: string, active: boolean, click: () => void) => ({ key, label, active, click })
 const importApplyRows = computed(() => [
   { key: 'groups', label: '导入到分组', items: folderGroups.value.map(g => optionChip(g.id, g.name, importBulkGroups.value.includes(g.id), () => toggleImportGroup(g.id))) },
@@ -440,33 +442,51 @@ const confirmDeleteAction = async (deleteData = false) => {
 }
 const openLocalImport = async () => { setImportMode('file'); await pickAndParseFiles() }
 const parseImportUrls = async () => { try { await parseDraftUrls() } catch (e) { showMessage(e instanceof Error ? e.message : '解析失败', 2000, 'error') } }
-const listCloud = async (path = '/') => {
+const runCloud = async (fallback: string, fn: () => Promise<void>) => {
   cloudLoading.value = true; cloudError.value = ''
-  try {
-    cloudResults.value = mergeCloudNodes(cloudResults.value, await listCloudNodes(path), path)
-  } catch (e) { cloudError.value = e instanceof Error ? e.message : '浏览失败' } finally { cloudLoading.value = false }
+  try { await fn() } catch (e) { cloudError.value = e instanceof Error ? e.message : fallback } finally { cloudLoading.value = false }
 }
-const searchCloud = async () => {
-  cloudLoading.value = true; cloudError.value = ''; cloudResults.value = []
-  try {
-    cloudResults.value = mergeCloudNodes([], await searchCloudNodes(cloudKeyword.value))
-    cloudError.value = cloudResults.value.length ? '' : '未找到电子书'
-  } catch (e) { cloudError.value = e instanceof Error ? e.message : '搜索失败' } finally { cloudLoading.value = false }
-}
+const listCloud = (path = '/') => runCloud('浏览失败', async () => { cloudResults.value = mergeCloudNodes(cloudResults.value, await listCloudNodes(path), path) })
+const searchCloud = () => runCloud('搜索失败', async () => {
+  cloudResults.value = mergeCloudNodes([], await searchCloudNodes(cloudKeyword.value))
+  cloudError.value = cloudResults.value.length ? '' : '未找到电子书'
+})
 const openCloudInput = async () => {
   const path = normalizeCloudPath(cloudInput.value)
   try {
-    if (isCloudBookPath(path)) return await importCloud({ path })
+    if (isCloudBookPath(path)) return await parseCloudImports([path])
     if (path !== '/') await listCloud('/')
     await listCloud(path)
   } catch (e) { cloudError.value = e instanceof Error ? e.message : '打开失败' }
 }
-const importCloud = async (item: any) => { importDraft.value = siyuanCloudUrl(item.path); await parseImportUrls() }
-const importCloudBook = (book: Book) => importCloud({ path: book.url })
+const toggleCloudPath = (path: string) => toggleArrayItem(cloudSelectedPaths.value, path)
+const cloudUrls = (paths: string[]) => Array.from(new Set(paths.map(siyuanCloudUrl))).join('\n')
+const collectCloudBooks = async (path: string): Promise<string[]> => {
+  const parent = normalizeCloudPath(path), children = (await listCloudNodes(parent)).map((node: any) => ({ path: normalizeCloudPath(node.path || `${parent}/${node.name}`), is_dir: !!(node.is_dir ?? node.isDir) })).filter(node => node.is_dir || isCloudBookPath(node.path))
+  return [...children.filter(node => !node.is_dir).map(node => node.path), ...(await Promise.all(children.filter(node => node.is_dir).map(node => collectCloudBooks(node.path)))).flat()]
+}
+const rememberCloudGroup = async (groupPath: string, paths: string[]) => {
+  const gid = `cloud:${normalizeCloudPath(groupPath)}`
+  await bookshelfManager.upsertGroup({ id: gid, name: groupPath === '/' ? '思盘' : groupPath.split('/').pop() || '思盘分组', order: groups.value.length, type: 'folder' })
+  cloudImportGroups.value = { ...cloudImportGroups.value, ...Object.fromEntries(paths.map(path => [siyuanCloudUrl(path), [gid]])) }
+}
+const parseCloudImports = async (paths: string[]) => { const draft = importDraft.value; await parseDraftUrls(cloudUrls(paths)); importDraft.value = draft }
+const parseSelectedCloud = () => runCloud('导入失败', async () => {
+  const files = cloudSelectedPaths.value.filter(isCloudBookPath)
+  const folders = await Promise.all(cloudSelectedPaths.value.filter(path => !isCloudBookPath(path)).map(async path => [path, await collectCloudBooks(path)] as const))
+  await Promise.all(folders.map(([path, paths]) => rememberCloudGroup(path, paths)))
+  files.push(...folders.flatMap(([, paths]) => paths))
+  if (!files.length) { cloudError.value = '未找到电子书'; return }
+  await parseCloudImports(files)
+  await refreshGroups()
+})
 const confirmImport = async (mode: 'file' | 'link') => {
   const patch = buildImportPatch()
   const res = await importSelected(mode, hasBookBulkPatch(patch) ? patch : undefined)
+  await Promise.all(res.urls.filter(url => cloudImportGroups.value[url]?.length).map(url => bookshelfManager.applyBookPatch(url, { groups: { add: cloudImportGroups.value[url] } }, false)))
+  cloudImportGroups.value = {}
   await loadBooks()
+  await refreshGroups()
   allTags.value = await bookshelfManager.getAllTags()
   showResult(res.success, res.failed, `导入${res.success}本`, `成功${res.success}本，失败${res.failed}本`, 3000)
   if (!res.failed) closePopups()
@@ -587,6 +607,8 @@ watch(viewMode, v => settingsLoaded && saveUiSetting('bookshelf_viewMode', v))
 .sr-modal__head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--b3-border-color);font-size:13px;font-weight:600}
 .sr-modal__body{display:flex;flex-direction:column;gap:12px;padding-top:12px;box-sizing:border-box}
 .sr-grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.sr-textarea{min-height:84px;resize:vertical;box-sizing:border-box}
+.sr-import-card{gap:8px;max-height:min(44vh,360px);overflow:auto}.sr-import-card--sm{max-height:min(32vh,260px)}
+.sr-cloud-results,.sr-import-list{max-height:min(32vh,260px);overflow:auto;min-height:120px}
 .sr-entry-meta{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sr-form-item{display:flex;flex-direction:column;gap:4px;padding:0 0 12px;border-bottom:1px solid var(--b3-border-color);font-size:12px}.sr-form-item:last-child{border-bottom:none}
 .sr-chips{display:flex;flex-wrap:wrap;gap:calc(var(--sr-gap) / 2)}

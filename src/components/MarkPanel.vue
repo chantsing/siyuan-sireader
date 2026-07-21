@@ -20,7 +20,7 @@
       <button v-for="doc in sendDocs" :key="doc.id" class="send-item" @click="() => handleSendToDoc(doc.path?.split('/').pop()?.replace('.sy', '') || doc.id)">{{ doc.hPath || doc.content || '无标题' }}</button>
     </div>
 
-    <div v-if="state.showPanel" v-motion :initial="{ opacity: 0, y: 5 }" :enter="{ opacity: 1, y: 0 }" class="sr-popup sr-popup-panel" :style="cardPosition" @click.stop>
+    <div v-if="state.showPanel" v-motion :initial="{ opacity: 0, y: 5 }" :enter="{ opacity: 1, y: 0 }" :class="['sr-popup sr-popup-panel',{ 'is-above': cardPlacement.dir === 'down' }]" :style="cardPosition" @click.stop>
       <div class="sr-main">
         <Translate v-if="state.panel === 'translate'" :text="state.selection?.text || ''" />
         <MarkCard
@@ -30,6 +30,7 @@
           :tag-groups="panelTagGroups"
           :selected-tags="displayTags"
           :tag-input="state.tags"
+          :i18n="i18n"
           :editing="state.isEditing"
           :editable="!readOnly"
           :text="state.text || '无内容'"
@@ -172,11 +173,13 @@ const placePopup = (x: number, y: number, w: number, h: number, preferAbove = fa
       x: Math.max(box.left + w / 2 + pad, Math.min(x, box.right - w / 2 - pad)),
       y: placeAbove ? Math.max(box.top + pad, y - Math.min(h, maxHeight) - pad) : belowY,
       maxHeight,
+      dir: placeAbove ? 'down' : 'up',
     }
   }
   return {
     x: Math.max(box.left + w / 2 + pad, Math.min(x, box.right - w / 2 - pad)),
     y: preferAboveHit ? aboveY : overflowBottom ? Math.max(box.top + pad * 2, aboveY) : belowY,
+    dir: preferAboveHit || overflowBottom ? 'down' : 'up',
   }
 }
 const popupStyle = ({ x, y, maxHeight }: { x: number; y: number; maxHeight?: number }) => ({
@@ -185,7 +188,7 @@ const popupStyle = ({ x, y, maxHeight }: { x: number; y: number; maxHeight?: num
   transform: 'translate(-50%,0)',
   maxHeight: maxHeight ? `${maxHeight}px` : undefined,
 })
-const cardPlacement = computed(() => placePopup(state.x, state.panelY || state.y + 24, 280, state.panel === 'translate' ? 420 : 180, false, true))
+const cardPlacement = computed(() => placePopup(state.x, state.panelY || state.y + 24, 280, state.panel === 'translate' ? 420 : state.isEditing ? 560 : 220, false, true))
 const menuPosition = computed(() => popupStyle(placePopup(state.x, state.y, 240, 50, true)))
 const cardPosition = computed(() => popupStyle(cardPlacement.value))
 const sendMenuPosition = computed(() => {
@@ -315,7 +318,8 @@ const setupAnnotationListeners = () => {
   if (!props.reader || !props.manager) return
   props.reader.getView().addEventListener('show-annotation', ((e: CustomEvent) => {
     if (quickMarkCooldown) return
-    const { value, range } = e.detail
+    const { value, range, rect } = e.detail
+    if (!rect) return
     const mark = props.manager?.getAll().find(item => item.cfi === value)
     if (!mark) return
     try {
@@ -330,7 +334,6 @@ const handleGlobalEdit = (e: Event) => {
 }
 
 onMounted(() => {
-  setupAnnotationListeners()
   window.addEventListener('sireader:edit-mark', handleGlobalEdit)
   if (!isMobile()) window.addEventListener('resize', closeAll)
   window.addEventListener('scroll', closeAll, true)
@@ -470,9 +473,11 @@ const handleImport = async () => {
 .send-input{margin:8px;width:calc(100% - 16px)}
 .send-empty{padding:16px 8px;text-align:center;color:var(--b3-theme-on-surface-variant);font-size:12px;opacity:.6}
 .send-item:hover{background:var(--b3-list-hover)}
-.sr-popup-panel{--sr-gap:4px;--sr-line:19px;position:fixed;z-index:10002!important;width:280px;max-width:min(280px,calc(100vw - 12px));pointer-events:auto;cursor:default;overflow:auto;box-sizing:border-box;padding:7px;border:1px solid color-mix(in srgb,var(--b3-border-color) 92%,transparent);border-radius:8px;background:linear-gradient(180deg,color-mix(in srgb,var(--b3-theme-background) 96%,white),var(--b3-theme-background));color:var(--b3-theme-on-surface);box-shadow:none!important;transition:border-color .15s}
-.sr-popup-panel:hover{border-color:var(--b3-theme-primary);box-shadow:none!important}
-.sr-popup-panel>.sr-main{display:flex;flex-direction:column;gap:var(--sr-gap);box-sizing:border-box;min-height:100%;padding-left:0;position:static;z-index:auto}
+.sr-popup-panel{--sr-gap:4px;--sr-line:19px;position:fixed;z-index:10002!important;width:280px;max-width:min(280px,calc(100vw - 12px));max-height:calc(100vh - 32px);pointer-events:auto;cursor:default;overflow:visible;box-sizing:border-box;padding:7px;border:1px solid color-mix(in srgb,var(--b3-border-color) 92%,transparent);border-radius:8px;background:linear-gradient(180deg,color-mix(in srgb,var(--b3-theme-background) 96%,white),var(--b3-theme-background));color:var(--b3-theme-on-surface);box-shadow:0 10px 28px #0002,0 2px 8px #0001!important;transition:border-color .15s,box-shadow .15s}
+.sr-popup-panel::before{content:'';position:absolute;left:50%;top:-5px;width:10px;height:10px;transform:translateX(-50%) rotate(45deg);border-left:inherit;border-top:inherit;background:inherit;border-radius:2px}
+.sr-popup-panel.is-above::before{top:auto;bottom:-5px;border:0;border-right:inherit;border-bottom:inherit}
+.sr-popup-panel:hover{border-color:var(--b3-theme-primary);box-shadow:0 12px 32px #0003,0 2px 8px #0001!important}
+.sr-popup-panel>.sr-main{display:flex;flex-direction:column;gap:var(--sr-gap);box-sizing:border-box;min-height:100%;max-height:inherit;overflow:auto;overscroll-behavior:contain;padding-left:0;position:relative;z-index:1}
 .sr-icon-actions{display:flex;align-items:center;gap:4px}
 .sr-icon-actions button{display:flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;border:none;border-radius:4px;background:transparent;color:var(--b3-theme-on-surface-variant);line-height:1;cursor:pointer}
 .sr-icon-actions button:hover{background:var(--b3-list-hover);color:var(--b3-theme-primary)}

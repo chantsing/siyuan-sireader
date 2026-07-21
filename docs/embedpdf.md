@@ -3,7 +3,7 @@
 SiReader uses EmbedPDF as the only PDF reader path.
 
 - GitHub: https://github.com/embedpdf/embed-pdf-viewer
-- Vue package: `@embedpdf/vue-pdf-viewer`
+- Runtime package: `@embedpdf/snippet`
 - License: MIT
 
 ## Runtime
@@ -16,8 +16,11 @@ Current loading path:
 
 - SiReader fetches/reads the PDF into an `ArrayBuffer`.
 - EmbedPDF receives it through `documentManager.initialDocuments`.
-- `worker: false` is intentional in SiYuan plugin runtime; the worker path can leave documents stuck in `loading`.
-- `pdfium.wasm` and default stamp assets are bundled into plugin `assets/` at build time.
+- `worker: true` is intentional. PDFium wasm is cached once into SiYuan `/data/public`, then loaded by the worker from `/public/siyuan-sireader/embedpdf/pdfium.wasm`.
+- `pdfium.wasm` is downloaded on first PDF open from EmbedPDF's official `@embedpdf/pdfium@2.14.4` CDN into `/data/public/siyuan-sireader/embedpdf/pdfium.wasm`.
+- Runtime uses `/public/siyuan-sireader/embedpdf/pdfium.wasm` directly; SiReader does not convert the wasm path into a blob URL.
+- EmbedPDF snippet runtime is downloaded on first PDF open from EmbedPDF's official `@embedpdf/snippet@2.14.4` CDN into `/data/public/siyuan-sireader/embedpdf/snippet`, then imported from `/public/siyuan-sireader/embedpdf/snippet/embedpdf.js`.
+- Default stamp manifests and PDFs are downloaded from EmbedPDF's official default-stamps CDN on first PDF open, cached into `/data/public/siyuan-sireader/embedpdf/stamps/{zh-CN,en}`, then loaded from `/public/siyuan-sireader/embedpdf/stamps/{locale}/manifest.json`.
 
 ## Stored State
 
@@ -267,7 +270,7 @@ If EmbedPDF does not expose a stable capability, SiReader leaves that PDF featur
 
 ## New Chat Checklist
 
-- Keep `buffer + worker:false + local wasm/assets`.
+- Keep `buffer + worker:true + CDN-downloaded public cached PDFium wasm/stamps`.
 - Keep PDF state in the normal per-book JSON record.
 - Keep EmbedPDF `exportAnnotations()` / `importAnnotations()` as the storage boundary.
 - Keep PDF annotations/bookmarks/progress on the same JSON record path; `.bin` is legacy migration input only.

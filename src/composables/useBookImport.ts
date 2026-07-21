@@ -283,7 +283,7 @@ export const useBookImport = () => {
     return files
   }
 
-  const parseDraftUrls = () => parseUrls()
+  const parseDraftUrls = (input = draft.value) => parseUrls(input)
 
   const importSelected = async (mode: ImportMode = 'file', patch?: BookBulkPatch) => {
     const selected = items.value.filter(item => item.selected && !item.loading && !item.error)
@@ -292,7 +292,7 @@ export const useBookImport = () => {
     let success = 0
     let failed = 0
     const urls: string[] = []
-    const concurrency = mode === 'file' ? 1 : 4
+    const concurrency = mode === 'file' || selected.some(item => item.mode === 'file') ? 1 : 4
     const importFile = {
       file: (item: BookImportItem) => bookshelfManager.addLocalBook(getImportFile(item), item.preview),
       link: (item: BookImportItem) => bookshelfManager.addLocalLinkBook(item.source as File, item.preview),

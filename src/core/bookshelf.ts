@@ -72,7 +72,16 @@ export const buildBookMetadata = (meta: any = {}) => ({ publisher: meta.publishe
 export interface SiyuanCloudNode { name: string; path: string; parent: string; is_dir: boolean; size?: number }
 const BOOK_RE = /\.(epub|pdf|mobi|azw3|azw|fb2|cbz|txt)$/i
 const hex = (buffer: ArrayBuffer) => Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join('')
-const digest = async (value: BufferSource) => hex(await crypto.subtle.digest('SHA-256', value))
+const fallbackDigest = (value: BufferSource) => {
+  const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+  let a = 0x811c9dc5, b = 0x9e3779b9, c = bytes.length >>> 0, d = Math.floor(bytes.length / 0x100000000) >>> 0
+  for (let i = 0; i < bytes.length; i++) {
+    a = Math.imul(a ^ bytes[i], 0x01000193)
+    b = Math.imul(b ^ (bytes[i] + i), 0x85ebca6b)
+  }
+  return [a, b, c, d].map(n => (n >>> 0).toString(16).padStart(8, '0')).join('')
+}
+const digest = async (value: BufferSource) => globalThis.crypto?.subtle ? hex(await crypto.subtle.digest('SHA-256', value)) : fallbackDigest(value)
 export const dataIdFromFingerprint = async (fingerprint: string) => `data-${await digest(new TextEncoder().encode(fingerprint))}`
 export const fileFingerprint = async (file: File) => {
   const path = normalizeNativePath((file as any)?.path || (file as any)?._path || '')
@@ -184,6 +193,7 @@ export class BookshelfManager {
     await this.addBook({ url, title: this.resolvedTitle(meta, name), author: meta.author || '未知作者', cover, format, path, size: size || 0, metadata: this.buildMetadata(meta), dataId, fingerprint })
     return url
   }
+  private saveCover = (blob: Blob | undefined, url: string) => blob ? Promise.race([saveOptionalCover(blob, url), new Promise<undefined>(resolve => setTimeout(resolve, 8000))]).catch(() => undefined) : undefined
   
   async init() { if (this.ready) return; await getDatabase(); this.ready = true; }
   async reload() { await (await getDatabase()).reload(); this.ready = true; }
@@ -267,7 +277,7 @@ export class BookshelfManager {
       if(!b)return
       const tgt=reader||view,loc=chapter??cfi
       if(!tgt)return
-      if(!loc)return void ((b.progress||0)<=0&&await reader?.goToTextStart?.())
+      if(!loc)return
       await new Promise(r=>setTimeout(r,300))
       try{await tgt.goTo(loc)}catch{chapter&&tgt.goTo(chapter).catch(()=>{})}
     }catch{}
@@ -410,7 +420,7 @@ export class BookshelfManager {
     const fingerprint = await fileFingerprint(source), dataId = await dataIdFromFingerprint(fingerprint)
     const url=`${format}://${source.name.replace(/\.[^.]+$/,'')}_${source.size}`
     const path = await saveBookFile(source, url)
-    const cover = await saveOptionalCover(meta.coverBlob, url)
+    const cover = await this.saveCover(meta.coverBlob, url)
     return this.savePreparedBook({ url, path, format, size: source.size, meta, name: title, cover, dataId, fingerprint })
   }
 
@@ -421,7 +431,7 @@ export class BookshelfManager {
     const { file: source, format, meta, title } = await this.prepareLocalBook(file, parsedMeta)
     const fingerprint = await fileFingerprint(source), dataId = await dataIdFromFingerprint(fingerprint)
     const url=toFileUrl(localPath)
-    const cover = await saveOptionalCover(meta.coverBlob, url)
+    const cover = await this.saveCover(meta.coverBlob, url)
     return this.savePreparedBook({ url, path: url, format, size: source.size, meta, name: title, cover, dataId, fingerprint })
   }
   
@@ -445,7 +455,7 @@ export class BookshelfManager {
     const fingerprint = parsedMeta?.fingerprint || (file ? await fileFingerprint(file) : urlFingerprint(filePath))
     const dataId = parsedMeta?.dataId || await dataIdFromFingerprint(fingerprint)
     let cover = await this.downloadCover(coverUrl, filePath)
-    if (!cover) cover = await saveOptionalCover(meta.coverBlob, filePath)
+    if (!cover) cover = await this.saveCover(meta.coverBlob, filePath)
     return this.savePreparedBook({ url: filePath, path: filePath, format, size: parsedMeta?.fileSize || 0, meta, name, cover, dataId, fingerprint })
   }
 
@@ -478,7 +488,7 @@ export class BookshelfManager {
     await this.init()
     const format = this.getFormat(file.name), name = file.name.replace(/\.[^.]+$/, ''), url = `asset://${assetPath}`, meta = await this.extractMeta(file, format, name)
     const fingerprint = urlFingerprint(url), dataId = await dataIdFromFingerprint(fingerprint)
-    return this.savePreparedBook({ url, path: assetPath, format, meta, name, cover: await saveOptionalCover(meta.coverBlob, url), dataId, fingerprint })
+    return this.savePreparedBook({ url, path: assetPath, format, meta, name, cover: await this.saveCover(meta.coverBlob, url), dataId, fingerprint })
   }
   
   // 对阅读器保留统一入口，底层实现已下沉到 bookStore。
@@ -486,58 +496,61 @@ export class BookshelfManager {
   
   private buildMetadata = buildBookMetadata
   private getFormat = (path: string): BookFormat => { const ext = this.cleanPath(path).split('.').pop()?.toLowerCase() || ''; return ({ epub: 'epub', pdf: 'pdf', mobi: 'mobi', azw3: 'azw3', azw: 'azw3', txt: 'txt' } as Record<string, BookFormat>)[ext] || 'epub' }
+  private metaDef = (defaultName: string) => ({ title: defaultName, author: '未知作者', publisher: undefined, published: undefined, language: undefined, identifier: undefined, intro: undefined, subjects: [], series: undefined, coverBlob: undefined, subtitle: undefined })
+  private normMeta = (metadata: any, defaultName: string, coverBlob?: Blob | null) => {
+    const norm = (v: any): string => typeof v === 'string' ? v : (v?.['zh-CN'] || v?.['zh'] || v?.['en'] || Object.values(v || {})[0] || '') as string
+    const arr = (v: any) => v ? (Array.isArray(v) ? v : [v]) : []
+    const contrib = (v: any) => arr(v).map((c: any) => typeof c === 'string' ? c : norm(c?.name)).filter(Boolean).join(', ') || undefined
+    return {
+      title: normalizeBookTitle(norm(metadata.title) || defaultName) || defaultName, subtitle: norm(metadata.subtitle), author: contrib(metadata.author) || '未知作者',
+      publisher: contrib(metadata.publisher), published: metadata.published instanceof Date ? metadata.published.toISOString().split('T')[0] : metadata.published ? String(metadata.published) : undefined,
+      language: arr(metadata.language)[0], identifier: arr(metadata.identifier)[0], intro: metadata.description,
+      subjects: arr(metadata.subject).map((s: any) => typeof s === 'string' ? s : norm(s?.name)).filter(Boolean),
+      series: Array.isArray(metadata.belongsTo) ? metadata.belongsTo[0] : metadata.belongsTo, coverBlob: coverBlob || undefined
+    }
+  }
+  private async extractEpubMeta(file: File, defaultName: string) {
+    const [{ configure, ZipReader, BlobReader, TextWriter, BlobWriter }, { parseEpubMetadataFromXML }] = await Promise.all([import('foliate-js/vendor/zip.js') as any, import('foliate-js/epub.js') as any])
+    configure({ useWebWorkers: false })
+    const reader = new ZipReader(new BlobReader(file))
+    try {
+      const entries = new Map((await reader.getEntries()).map((e: any) => [e.filename, e]))
+      const entry = (p = '') => entries.get(p) || entries.get(decodeURIComponent(p))
+      const text = async (p: string) => await entry(p)?.getData(new TextWriter())
+      const blob = async (p: string, type = '') => await entry(p)?.getData(new BlobWriter(type))
+      const container = new DOMParser().parseFromString(await text('META-INF/container.xml') || '', 'application/xml')
+      const opfPath = container.querySelector('rootfile[media-type="application/oebps-package+xml"]')?.getAttribute('full-path') || container.querySelector('rootfile')?.getAttribute('full-path') || ''
+      const opfXML = opfPath && await text(opfPath)
+      if (!opfXML) throw new Error('No package document')
+      const metadata = parseEpubMetadataFromXML(opfXML).metadata
+      const opf = new DOMParser().parseFromString(opfXML, 'application/xml')
+      const items = Array.from(opf.querySelectorAll('manifest item')), coverId = opf.querySelector('meta[name="cover"]')?.getAttribute('content')
+      const coverItem = items.find(el => el.getAttribute('id') === coverId) || items.find(el => /\bcover-image\b/.test(el.getAttribute('properties') || ''))
+      const href = coverItem?.getAttribute('href') || '', base = opfPath.includes('/') ? opfPath.slice(0, opfPath.lastIndexOf('/') + 1) : ''
+      const coverBlob = href ? await blob(decodeURIComponent(new URL(href, `file:///${base}`).pathname.slice(1)), coverItem?.getAttribute('media-type') || '') : null
+      return this.normMeta(metadata, defaultName, coverBlob)
+    } finally { await reader.close?.() }
+  }
+  private async extractMobiMeta(file: File, defaultName: string) {
+    const [{ readMobiMetadata }, { unzlibSync }] = await Promise.all([import('foliate-js/mobi.js') as any, import('fflate')])
+    const { metadata, getCover } = await readMobiMetadata(file, { unzlib: unzlibSync })
+    return this.normMeta(metadata, defaultName, await getCover?.().catch(() => null))
+  }
   private async extractMeta(file: File, format: BookFormat, defaultName: string) {
-    const def = { title: defaultName, author: '未知作者', publisher: undefined, published: undefined, language: undefined, identifier: undefined, intro: undefined, subjects: [], series: undefined, coverBlob: undefined, subtitle: undefined }
+    const def = this.metaDef(defaultName)
     if (!['epub', 'mobi', 'azw3', 'txt'].includes(format)) return def
     if (format === 'txt') return def
     try {
-      const view = document.createElement('foliate-view') as any
-      const coverTask = format === 'epub' ? this.extractCover(file).catch(() => undefined) : Promise.resolve(undefined)
-      await Promise.race([view.open(file), new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 10000))])
-      const { metadata = {} } = view.book || {}
-      const norm = (v: any) => typeof v === 'string' ? v : (v?.['zh-CN'] || v?.['zh'] || v?.['en'] || Object.values(v || {})[0] || '')
-      const arr = (v: any) => v ? (Array.isArray(v) ? v : [v]) : []
-      const contrib = (v: any) => arr(v).map((c: any) => typeof c === 'string' ? c : norm(c?.name)).filter(Boolean).join(', ') || undefined
-      const coverBlob = await coverTask
-      view.remove()
-      return {
-        title: normalizeBookTitle(norm(metadata.title) || defaultName) || defaultName, subtitle: norm(metadata.subtitle), author: contrib(metadata.author) || '未知作者',
-        publisher: contrib(metadata.publisher), published: metadata.published instanceof Date ? metadata.published.toISOString().split('T')[0] : metadata.published ? String(metadata.published) : undefined,
-        language: arr(metadata.language)[0], identifier: arr(metadata.identifier)[0], intro: metadata.description,
-        subjects: arr(metadata.subject).map((s: any) => typeof s === 'string' ? s : norm(s?.name)).filter(Boolean),
-        series: Array.isArray(metadata.belongsTo) ? metadata.belongsTo[0] : metadata.belongsTo, coverBlob
-      }
-    } catch { return def }
-  }
-  
-  private async extractCover(file: File): Promise<Blob | undefined> {
-    try {
-      const JSZip = (await import('jszip')).default, zip = await JSZip.loadAsync(file), container = await zip.file('META-INF/container.xml')?.async('text'), opfPath = container?.match(/full-path="([^"]+)"/)?.[1];
-      if (!opfPath) return;
-      const opf = await zip.file(opfPath)?.async('text');
-      if (!opf) return;
-      const base = opfPath.replace(/[^/]+$/, ''), norm = (h: string) => (base + h).replace(/\/+/g, '/'), getBlob = async (h: string) => {
-        return await zip.file(norm(h))?.async('blob')
-      };
-      let href = opf.match(/<item[^>]+properties="cover-image"[^>]+href="([^"]+)"/)?.[1] || opf.match(/<item[^>]+href="([^"]+)"[^>]+properties="cover-image"/)?.[1];
-      if (href) return await getBlob(href);
-      const item = opf.match(/<item[^>]+id="cover(-image)?"[^>]+href="([^"]+)"/i)?.[2];
-      if (item) {
-        if (/\.(xhtml|html)$/i.test(item)) {
-          const html = await zip.file(norm(item))?.async('text')
-          const img = html?.match(/<(?:img|image)[^>]+(?:src|(?:xlink:)?href)="([^"]+)"/i)?.[1]
-          const bg = html?.match(/background(?:-image)?:\s*url\((['"]?)([^'")]+)\1\)/i)?.[2]
-          const inlineSvg = html?.match(/<(?:image)[^>]+(?:xlink:href|href)=["']([^"']+)["']/i)?.[1]
-          const coverRef = img || bg || inlineSvg
-          if (coverRef) return await getBlob((item.replace(/[^/]+$/, '') + coverRef).replace(/^\.?\//, ''))
-        }
-        return await getBlob(item)
-      }
-      const id = opf.match(/<meta\s+name="cover"\s+content="([^"]+)"/i)?.[1];
-      if (id && (href = opf.match(new RegExp(`<item[^>]+id="${id}"[^>]+href="([^"]+)"`, 'i'))?.[1])) return await getBlob(href);
-      if (href = opf.match(/<item[^>]+href="([^"]+\.(?:jpg|jpeg|png|gif))"/i)?.[1]) return await getBlob(href);
-      for (const n of ['cover.jpg', 'cover.jpeg', 'cover.png']) for (const p of [n, 'Images/' + n, 'images/' + n]) if (zip.file(norm(p))) return await getBlob(p);
+      if (format === 'epub') return await this.extractEpubMeta(file, defaultName)
+      if (format === 'mobi' || format === 'azw3') return await this.extractMobiMeta(file, defaultName)
     } catch {}
+    try {
+      const { makeBook } = await import('foliate-js/view.js') as any
+      const book = await Promise.race([makeBook(file), new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 10000))]) as any
+      const metadata = book?.metadata || {}, cover = await book?.getCover?.().catch(() => null)
+      book?.destroy?.()
+      return this.normMeta(metadata, defaultName, cover)
+    } catch { return def }
   }
 }
 

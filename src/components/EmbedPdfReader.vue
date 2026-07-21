@@ -1,13 +1,13 @@
 ﻿<template>
-  <div v-if="documentSource && pdfWasmUrl" ref="rootRef" class="embed-pdf-reader">
-    <PDFViewer :config="config" @init="handleInit" @ready="handleReady" />
+  <div v-if="props.source && !pdfLoadError" ref="rootRef" class="embed-pdf-reader">
+    <div ref="viewerHostRef" class="embed-pdf-reader__host"></div>
+    <div v-if="pdfPreparing" class="embed-pdf-reader__loading embed-pdf-reader__loading--overlay">{{ pdfPreparing }}</div>
   </div>
-  <div v-else class="embed-pdf-reader__loading">{{ props.i18n?.loading || 'Loading...' }}</div>
+  <div v-else class="embed-pdf-reader__loading">{{ pdfLoadError || props.i18n?.loading || 'Loading...' }}</div>
 </template>
 
 <script setup lang="ts">
 import { computed, createApp, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
-import { PDFViewer, type EmbedPdfContainer, type PluginRegistry } from '@embedpdf/vue-pdf-viewer'
 import { Dialog, showMessage } from 'siyuan'
 import { bookshelfManager } from '@/core/bookshelf'
 import { readEmbedPdfAnnotations, readEmbedPdfProgress, writeEmbedPdfAnnotations, writeEmbedPdfProgress } from '@/core/bookStore'
@@ -15,22 +15,37 @@ import { alignLegacyPdfAnnotations, needsLegacyPdfTextAlign } from '@/core/dataM
 import { createTooltip, showTooltip } from '@/core/MarkManager'
 import { copyMark } from '@/utils/copy'
 import { buildEmbedPdfTheme, embedPdfThemePreference } from '@/utils/embedPdfTheme'
-import { addMissingPdfMenuItemsAfterFirst, getPdfSelectionMark, pdfAnnotationNote, pdfAnnotationText, pdfAnnotationWithReplies, pdfMarkFromAnnotation, pdfSelectionFromAnnotation, sendPdfMarkToDoc, taskToPromise, writeBlobToClipboard } from '@/utils/embedPdfActions'
+import { addMissingPdfMenuItemsAfterFirst, createEmbedPdfDocumentSource, ensureEmbedPdfStampManifests, ensureEmbedPdfWasmUrl, getPdfSelectionMark, initEmbedPdfViewer, pdfAnnotationNote, pdfAnnotationText, pdfAnnotationWithReplies, pdfMarkFromAnnotation, pdfSelectionFromAnnotation, sendPdfMarkToDoc, taskToPromise, writeBlobToClipboard } from '@/utils/embedPdfActions'
 import { settingsManager, type ReaderSettings, type ReadTheme } from '@/composables/useSetting'
 import { isMobile } from '@/utils/mobile'
 import Translate from './Translate.vue'
 
+type EmbedPdfContainer = any
+type PluginRegistry = any
+type PdfAssets = { wasmUrl: string; stampManifests: any[] }
 const props = defineProps<{ source: File | string | null; settings?: ReaderSettings; theme?: string; customTheme?: ReadTheme; bookUrl?: string; storageKey?: string; hideAnnotations?: boolean; i18n?: any }>()
 const storageKey = () => props.storageKey || props.bookUrl || ''
 const emit = defineEmits<{ ready: [registry: PluginRegistry] }>()
 const documentSource = shallowRef<any>(null)
-const pdfWasmUrl = ref('')
+const pdfAssets = shallowRef<PdfAssets | null>(null)
+const pdfLoadError = ref('')
+const pdfPreparing = ref('')
 const rootRef = ref<HTMLElement | null>(null)
+const viewerHostRef = ref<HTMLElement | null>(null)
 const documentId = 'sireader-document'
-const PDF_WASM_URL = '/plugins/siyuan-sireader/assets/pdfium.wasm'
-let pdfWasmPromise: Promise<string> | undefined
-const preparePdfWasmUrl = async () => {
-  pdfWasmUrl.value ||= await (pdfWasmPromise ||= fetch(PDF_WASM_URL).then(res => res.blob()).then(URL.createObjectURL))
+const pdfLoadFailedMessage = () => props.i18n?.loadFailed || 'PDF load failed'
+const pdfLoadingText = () => props.i18n?.loading || 'Loading...'
+const failPdfLoad = (error: any) => {
+  pdfPreparing.value = ''
+  pdfLoadError.value = error?.message || pdfLoadFailedMessage()
+}
+const preparePdfAssets = async () => {
+  if (pdfAssets.value) return pdfAssets.value
+  const [wasmUrl, stampManifests] = await Promise.all([
+    ensureEmbedPdfWasmUrl(),
+    ensureEmbedPdfStampManifests().catch(() => []),
+  ])
+  return (pdfAssets.value = { wasmUrl, stampManifests })
 }
 let annotationSaveTimer: any = null
 let progressSaveTimer: any = null
@@ -52,9 +67,17 @@ let cleanupTooltipEvents: (() => void) | null = null
 let cleanupMigrationEvents: (() => void) | null = null
 let cleanupPdfDoubleTapZoom: (() => void) | null = null
 let pdfZoomRestore: any = null
+let activeViewer: any = null
+let viewerToken = 0
 let copyNextCapture = false
 let lastCaptureBlob: Blob | null = null
 let zoomSaveTimer: any = null
+const disposePdfViewer = () => {
+  viewerToken++
+  activeViewer?.remove?.()
+  activeViewer = null
+  viewerHostRef.value?.replaceChildren()
+}
 
 const PDF_PAGE_THEME_STYLE = `
   :host([data-sireader-page-mode="dark"]) div[style*="mix-blend-mode"][style*="background-color"]{mix-blend-mode:screen!important}
@@ -680,7 +703,7 @@ const handleReady = async (registry: PluginRegistry) => {
     if (state.id === documentId) scheduleAnnotationLoad(2000)
   })
   const offError = documents?.onDocumentError?.((event: any) => {
-    if (event.documentId === documentId) showMessage(event.message || props.i18n?.loadFailed || 'PDF load failed', 3000, 'error')
+    if (event.documentId === documentId) showMessage(event.message || pdfLoadFailedMessage(), 3000, 'error')
   })
   cleanupDocumentEvents = () => { clearTimeout(annotationFallbackTimer); offOpen?.(); offError?.() }
   if (documents?.getDocumentState(documentId)?.status === 'loaded') scheduleAnnotationLoad(annotationIds().size ? 0 : 2000)
@@ -691,29 +714,30 @@ const handleReady = async (registry: PluginRegistry) => {
 let sourceToken = 0
 watch(() => props.source, async (source) => {
   const token = ++sourceToken
+  disposePdfViewer()
   documentSource.value = null
+  pdfLoadError.value = ''
+  pdfPreparing.value = source ? pdfLoadingText() : ''
   if (!source) return
-  await preparePdfWasmUrl()
-  if (token !== sourceToken) return
-  if (typeof source === 'string') {
-    documentSource.value = { documentId, url: source, name: source.split('/').pop()?.split('?')[0] || 'document.pdf', autoActivate: true }
-  } else {
-    const buffer = await source.arrayBuffer()
-    if (token !== sourceToken) return
-    documentSource.value = { documentId, buffer, name: source.name || 'document.pdf', autoActivate: true }
+  try {
+    await preparePdfAssets()
+    const nextSource = await createEmbedPdfDocumentSource(documentId, source)
+    if (token === sourceToken) documentSource.value = nextSource
+  } catch (error: any) {
+    if (token === sourceToken) failPdfLoad(error)
   }
 }, { immediate: true })
 
 const config = computed(() => ({
   tabBar: 'never',
   worker: true,
-  wasmUrl: pdfWasmUrl.value,
+  wasmUrl: pdfAssets.value?.wasmUrl,
   documentManager: {
     initialDocuments: [documentSource.value],
   },
   fontFallback: null,
   fonts: { ui: null, signature: null },
-  stamp: { manifests: [] },
+  stamp: { manifests: pdfAssets.value?.stampManifests || [] },
   permissions: { enforceDocumentPermissions: true },
   capture: { imageType: 'image/png', scale: 2, withAnnotations: true },
   scroll: { defaultBufferSize: 1 },
@@ -726,6 +750,25 @@ const config = computed(() => ({
   theme: pdfTheme(),
 }))
 
+const mountPdfViewer = async () => {
+  const host = viewerHostRef.value
+  if (!host || !documentSource.value || !pdfAssets.value || activeViewer) return
+  const token = ++viewerToken
+  try {
+    host.replaceChildren()
+    const viewer = await initEmbedPdfViewer(host, config.value)
+    if (token !== viewerToken || viewerHostRef.value !== host) return void viewer?.remove?.()
+    if (!viewer) throw new Error(pdfLoadFailedMessage())
+    activeViewer = viewer
+    handleInit(activeViewer)
+    pdfPreparing.value = ''
+    activeViewer.registry?.then((registry: PluginRegistry) => token === viewerToken && handleReady(registry))
+  } catch (error: any) {
+    if (token === viewerToken) failPdfLoad(error)
+  }
+}
+
+watch(() => [documentSource.value, pdfAssets.value, viewerHostRef.value], () => nextTick(mountPdfViewer), { flush: 'post' })
 watch(() => [props.theme, props.customTheme?.color, props.customTheme?.bg, props.customTheme?.bgImg], () => nextTick(applyPdfTheme))
 watch(() => props.hideAnnotations, hidden => syncPdfAnnotationsHidden(!!hidden))
 watch(() => props.settings?.quickSendDocs, () => activeRegistry && setupPdfCommands(activeRegistry), { deep: true })
@@ -755,6 +798,7 @@ onBeforeUnmount(() => {
   activeAnnotationScope = null
   activeScrollScope = null
   activeContainer = null
+  disposePdfViewer()
   pdfTooltip?.remove()
   pdfTooltip = null
 })
@@ -764,4 +808,5 @@ onBeforeUnmount(() => {
 .embed-pdf-reader{position:relative;width:100%;height:100%;display:block;background:var(--b3-theme-background)}
 .embed-pdf-reader :deep(> *){width:100%;height:100%}
 .embed-pdf-reader__loading{height:100%;display:flex;align-items:center;justify-content:center;color:var(--b3-theme-on-surface)}
+.embed-pdf-reader__loading--overlay{position:absolute;inset:0;background:var(--b3-theme-background);z-index:1}
 </style>

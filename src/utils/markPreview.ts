@@ -1,6 +1,8 @@
 ﻿import { createTooltip, hideTooltip, showTooltip } from '@/core/MarkManager'
 
 import { sameBookUrl } from '@/core/bookshelf'
+import { extractText } from '@/services/TTSExtractor'
+import { createEmbedPdfDocumentSource, ensureEmbedPdfWasmUrl, initEmbedPdfViewer } from '@/utils/embedPdfActions'
 import { pdfPageFromCfi } from '@/utils/jump'
 
 type PreviewContext = {
@@ -107,11 +109,7 @@ const waitPdfDocument = (registry: any, documentId: string) => new Promise<any>(
 })
 
 const disposeOfflinePdfSession = () => {
-  offlinePdfSession?.then(({ app, host, registry }) => {
-    registry?.destroy?.()
-    app?.unmount?.()
-    host?.remove?.()
-  }).catch(() => {})
+  offlinePdfSession?.then(({ host }) => host?.remove?.()).catch(() => {})
 }
 
 const getOfflinePdfSession = async (ctx: PreviewContext) => {
@@ -120,30 +118,30 @@ const getOfflinePdfSession = async (ctx: PreviewContext) => {
   disposeOfflinePdfSession()
   offlinePdfKey = bookUrl
   offlinePdfSession = (async () => {
-    const [{ createApp, h }, { PDFViewer }] = await Promise.all([import('vue'), import('@embedpdf/vue-pdf-viewer')])
+    const wasmUrl = await ensureEmbedPdfWasmUrl()
     const source = await getBookSource(ctx)
-    const buffer = typeof source === 'string' ? await (await fetch(source)).arrayBuffer() : await source.arrayBuffer()
     const documentId = 'sireader-preview-document'
+    const documentSource = await createEmbedPdfDocumentSource(documentId, source, `${bookUrl || 'document'}.pdf`)
     const host = document.createElement('div')
     host.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;visibility:hidden;pointer-events:none'
     document.body.appendChild(host)
     return new Promise((resolve, reject) => {
-      const app = createApp({
-        render: () => h(PDFViewer, {
-          config: {
-            tabBar: 'never',
-            worker: false,
-            wasmUrl: '/plugins/siyuan-sireader/assets/pdfium.wasm',
-            documentManager: { initialDocuments: [{ documentId, buffer, name: `${bookUrl || 'document'}.pdf`, autoActivate: true }] },
-            fontFallback: null,
-            fonts: { ui: null, signature: null },
-          },
-          onReady: (registry: any) => waitPdfDocument(registry, documentId)
-            .then((doc: any) => resolve({ registry, documentId, doc, app, host }))
-            .catch(reject),
-        }),
-      })
-      app.mount(host)
+      void (async () => {
+        const viewer = await initEmbedPdfViewer(host, {
+          tabBar: 'never',
+          worker: true,
+          wasmUrl,
+          documentManager: { initialDocuments: [documentSource] },
+          fontFallback: null,
+          fonts: { ui: null, signature: null },
+          stamp: { manifests: [] },
+        })
+        if (!viewer) throw new Error('PDF preview load failed')
+        viewer.registry?.then((registry: any) => waitPdfDocument(registry, documentId)
+          .then((doc: any) => resolve({ registry, documentId, doc, host }))
+          .catch(reject),
+        )
+      })().catch(reject)
     })
   })()
   return offlinePdfSession
@@ -251,14 +249,6 @@ export const pdfPreviewText = async (mark: any, ctx: PreviewContext) =>
 
 const getPdfContext = async (mark: any, ctx: PreviewContext) => renderContext(mark, await pdfPreviewText(mark, ctx), 'Mark Context')
 
-const textFromRange = (range: Range) => {
-  const clone = range.cloneContents()
-  clone.querySelectorAll?.('script,style,svg,nav,link,meta').forEach(el => el.remove())
-  clone.querySelectorAll?.('br').forEach(el => el.replaceWith('\n'))
-  clone.querySelectorAll?.('p,div,section,article,header,footer,h1,h2,h3,h4,h5,h6,li,blockquote,tr').forEach(el => el.append('\n'))
-  return compact(clone.textContent || '')
-}
-
 const getEpubContext = async (mark: any, ctx: PreviewContext) => {
   const view = ctx.reader?.getView?.() || ctx.view || await getOfflineView(ctx)
   const book = ctx.reader?.getBook?.() || view?.book
@@ -281,7 +271,7 @@ const getEpubContext = async (mark: any, ctx: PreviewContext) => {
   } else {
     return renderContext(mark, compact(body.textContent || ''), 'Mark Context')
   }
-  return renderContext(mark, textFromRange(range), 'Mark Context')
+  return renderContext(mark, compact(extractText(range)), 'Mark Context')
 }
 
 const buildPreview = (mark: any, ctx: PreviewContext) => {
@@ -440,10 +430,4 @@ export const scheduleHide = () => {
   clearTimeout(showTimer)
   hideTimer = window.setTimeout(() => tooltip && hideTooltip(tooltip, 120), 120)
 }
-
-export const hideMarkPreview = () => {
-  activeKey = ''
-  scheduleHide()
-}
-
 
