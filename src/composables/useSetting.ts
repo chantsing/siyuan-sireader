@@ -1,4 +1,4 @@
-﻿// ===== 阅读器设置管理 =====
+// ===== 阅读器设置管理 =====
 import { defineComponent, h, ref, toRaw } from 'vue'
 import { showMessage, fetchSyncPost } from 'siyuan'
 import type { Plugin } from 'siyuan'
@@ -31,7 +31,30 @@ export const PRESET_THEMES: Record<string, ReadTheme> = { default: { name: 'them
 const fixUrl = (u: string) => !u || u[0] === '/' || u.startsWith('http') ? u : `/${u}`;
 const msg = { success: (m: string) => showMessage(m, 2000, 'info'), error: (m: string) => showMessage(m, 3000, 'error') };
 const getTheme = (s: ReaderSettings) => s.theme === 'custom' ? s.customTheme : PRESET_THEMES[s.theme];
-const getFont = (t: TextSettings) => { const c = t.fontFamily === 'custom' && t.customFont.fontFamily; return { font: c ? `"${t.customFont.fontFamily}", sans-serif` : t.fontFamily || 'inherit', fontFace: c ? `@font-face{font-family:"${t.customFont.fontFamily}";src:url("/plugins/custom-fonts/${t.customFont.fontFile}");font-display:swap}` : '' }; };
+const getFont = (t: TextSettings) => {
+  const c = t.fontFamily === 'custom' && t.customFont.fontFamily;
+  let font = c ? `"${t.customFont.fontFamily}", sans-serif` : t.fontFamily || 'inherit';
+  if (font === 'inherit') {
+    try {
+      const bodyFont = getComputedStyle(document.body).fontFamily.trim();
+      if (bodyFont && bodyFont !== 'inherit') {
+        font = bodyFont;
+      } else {
+        const siyuanFont = getComputedStyle(document.documentElement).getPropertyValue('--b3-font-family').trim();
+        font = siyuanFont || 'inherit';
+      }
+    } catch {
+      font = 'inherit';
+    }
+  }
+  const textSettings = t as any;
+  if (textSettings.fontFamilyZh || textSettings.fontFamilyEn) {
+    const zhFont = textSettings.fontFamilyZh || font;
+    const enFont = textSettings.fontFamilyEn || font;
+    font = `"${zhFont}", "${enFont}", ${font}`;
+  }
+  return { font, fontFace: c ? `@font-face{font-family:"${t.customFont.fontFamily}";src:url("/plugins/custom-fonts/${encodeURI(t.customFont.fontFile)}");font-display:swap}` : '' };
+};
 
 export const applyTheme = (el: HTMLElement, s: ReaderSettings) => { const t = getTheme(s); if (!t) return; const img = t.bgImg; Object.assign(el.style, { color: t.color, backgroundColor: img ? 'transparent' : t.bg, backgroundImage: img ? `url("${fixUrl(img)}")` : '', backgroundSize: img ? 'cover' : '', backgroundPosition: img ? 'center' : '', backgroundRepeat: img ? 'no-repeat' : '' }); };
 
@@ -51,7 +74,7 @@ const splitTags = (value = '') => value.split(/[#;,\uFF1B\uFF0C\u3001\n]/).map(t
 
 // ===== UI配置常量 =====
 const r = (k: string, min: number, max: number, step: number, unit = '') => ({ key: k, type: 'range' as const, min, max, step, unit })
-export const UI_CONFIG = { interfaceItems: [{ key: 'openMode', opts: ['newTab', 'rightTab', 'bottomTab', 'newWindow'] }, { key: 'openDocAssets', type: 'checkbox' as const }, { key: 'showWereadTopBar', type: 'checkbox' as const }, { key: 'epubOpeningSplash', type: 'checkbox' as const }, { key: 'navPosition', opts: ['left', 'right', 'top', 'bottom'] }, { key: 'viewMode', opts: ['single', 'double', 'scroll'] }, { key: 'pageAnimation', opts: ['slide', 'none'] }, r('bookshelfCoverSize', 80, 160, 10, 'px'), r('toolbarOpacity', 0, 100, 5, '%')], customThemeItems: [{ key: 'color', label: 'textColor', type: 'color' }, { key: 'bg', label: 'bgColor', type: 'color' }, { key: 'bgImg', label: 'bgImage', type: 'text' }], appearanceGroups: [{ title: 'textSettings', items: [r('fontSize', 12, 32, 1, 'px'), r('fontWeight', 300, 900, 100), r('letterSpacing', 0, 0.2, 0.01, 'em')] }, { title: 'paragraphSettings', items: [r('lineHeight', 1.0, 3.0, 0.1), r('paragraphSpacing', 0, 2, 0.1, 'em'), r('textIndent', 0, 4, 0.5, 'em')] }, { title: 'layoutSettings', items: [r('gap', 0, 20, 1, '%'), r('headerFooterMargin', 0, 60, 5, 'px'), r('maxInlineSize', 0, 2000, 50, 'px'), r('maxBlockSize', 0, 3000, 50, 'px')] }, { title: 'visualSettings', items: [r('brightness', 0.5, 1.5, 0.05), r('contrast', 0.5, 1.5, 0.05), r('sepia', 0, 1, 0.05), r('saturate', 0, 2, 0.1), { key: 'invert', type: 'checkbox' as const }] }], ttsItems: [{ key: 'enabled', type: 'checkbox' as const }, r('rate', 0.5, 2.0, 0.1, 'x'), r('pitch', 0.5, 1.5, 0.1), r('sentenceGap', 0, 3, 0.1, 's'), r('paragraphGap', 0, 5, 0.1, 's')], ttsOptions: [{ key: 'autoTurnPage', type: 'checkbox' as const }, { key: 'highlightText', type: 'checkbox' as const }] }
+export const UI_CONFIG = { interfaceItems: [{ key: 'openMode', opts: ['newTab', 'rightTab', 'bottomTab', 'newWindow'] }, { key: 'openDocAssets', type: 'checkbox' as const }, { key: 'showWereadTopBar', type: 'checkbox' as const }, { key: 'epubOpeningSplash', type: 'checkbox' as const }, { key: 'navPosition', opts: ['left', 'right', 'top', 'bottom'] }, { key: 'viewMode', opts: ['single', 'double', 'scroll'] }, { key: 'pageAnimation', opts: ['slide', 'none'] }, r('bookshelfCoverSize', 80, 160, 10, 'px'), r('toolbarOpacity', 0, 100, 5, '%')], customThemeItems: [{ key: 'color', label: 'textColor', type: 'color' }, { key: 'bg', label: 'bgColor', type: 'color' }, { key: 'bgImg', label: 'bgImage', type: 'text' }], appearanceGroups: [{ title: 'textSettings', items: [r('fontSize', 12, 32, 1, 'px'), r('fontWeight', 300, 900, 100), r('letterSpacing', 0, 0.2, 0.01, 'em')] }, { title: 'paragraphSettings', items: [r('lineHeight', 1.0, 3.0, 0.1), r('paragraphSpacing', 0, 2, 0.1, 'em'), r('textIndent', 0, 4, 0.5, 'em')] }, { title: 'layoutSettings', items: [r('gap', 0, 20, 1, '%'), r('headerFooterMargin', 0, 60, 5, 'px'), r('maxInlineSize', 0, 2000, 50, 'px'), r('maxBlockSize', 0, 3000, 50, 'px')] }, { title: 'visualSettings', items: [r('brightness', 0.5, 1.5, 0.05), r('contrast', 0.5, 1.5, 0.05), r('sepia', 0, 1, 0.05), r('saturate', 0, 2, 0.1), { key: 'invert', type: 'checkbox' as const }] }], ttsItems: [{ key: 'enabled', type: 'checkbox' as const }, r('rate', 0.5, 2.0, 0.1, 'x'), r('pitch', 0.5, 1.5, 0.1), r('sentenceGap', 0, 3, 0.1, 's'), r('paragraphGap', 0, 5, 0.1, 's')] as Array<{ key: string; type: 'checkbox' | 'range'; min?: number; max?: number; step?: number; unit?: string; desc?: string }>, ttsOptions: [{ key: 'autoTurnPage', type: 'checkbox' as const }, { key: 'highlightText', type: 'checkbox' as const }] as Array<{ key: string; type: 'checkbox'; desc?: string }> }
 export const DEFAULT_NAV_ITEMS: NavItem[] = [
   { id: 'bookshelf', icon: 'lucide-library-big', tip: 'bookshelf', enabled: true, order: 0 },
   { id: 'search', icon: 'lucide-book-search', tip: 'search', enabled: true, order: 1 },
@@ -174,13 +197,53 @@ export const scanCustomFonts = async (force = false): Promise<FontFileInfo[]> =>
   })().finally(() => fontScanTask = null)
   return fontScanTask
 }
-export const loadFonts = (fonts: FontFileInfo[]) => {
+const isSupportedFont = (buffer: ArrayBuffer): boolean => {
+  if (buffer.byteLength < 4) return false
+  const magic = new DataView(buffer).getUint32(0, false)
+  return magic === 0x00010000 || magic === 0x4F54544F || magic === 0x774F4646 || magic === 0x774F4632
+}
+const getFontMimeType = (buffer: ArrayBuffer): string => {
+  const magic = new DataView(buffer).getUint32(0, false)
+  if (magic === 0x00010000) return 'font/truetype'
+  if (magic === 0x4F54544F) return 'font/opentype'
+  if (magic === 0x774F4646) return 'font/woff'
+  if (magic === 0x774F4632) return 'font/woff2'
+  return 'font/truetype'
+}
+
+const fontCache = new Map<string, Promise<FontFace | null>>()
+
+const loadSingleFont = async (f: FontFileInfo): Promise<FontFace | null> => {
+  const cached = fontCache.get(f.name)
+  if (cached) return cached
+
+  const promise = (async () => {
+    try {
+      const url = `${location.origin}/plugins/custom-fonts/${encodeURI(f.name)}`
+      const response = await fetch(url)
+      if (!response.ok) return null
+      const buffer = await response.arrayBuffer()
+      if (!isSupportedFont(buffer)) return null
+      const blob = new Blob([buffer], { type: getFontMimeType(buffer) })
+      const blobUrl = URL.createObjectURL(blob)
+      const font = new FontFace(f.displayName, `url("${blobUrl}")`, { display: 'swap' })
+      await font.load()
+      document.fonts.add(font)
+      return font
+    } catch {
+      return null
+    }
+  })()
+
+  fontCache.set(f.name, promise)
+  return promise
+}
+
+export const loadFonts = async (fonts: FontFileInfo[]) => {
   const key = fonts.map(f => f.name).join('|')
   if (key === loadedFontKey) return
   loadedFontKey = key
-  const s = document.getElementById('sr-fonts') || Object.assign(document.createElement('style'), { id: 'sr-fonts' })
-  s.parentNode || document.head.appendChild(s)
-  s.textContent = fonts.map(f => `@font-face{font-family:"${f.displayName}";src:url("/plugins/custom-fonts/${f.name}");font-display:swap}`).join('')
+  await Promise.all(fonts.map(f => loadSingleFont(f)))
 };
 export const resetToDefaults = (s: any) => Object.assign(s, { textSettings: DEFAULT_SETTINGS.textSettings, paragraphSettings: DEFAULT_SETTINGS.paragraphSettings, layoutSettings: DEFAULT_SETTINGS.layoutSettings, visualSettings: DEFAULT_SETTINGS.visualSettings });
 
@@ -236,13 +299,17 @@ export function useSetting(plugin: Plugin) {
   const load = () => loadTask ||= (async () => { try { settings.value = await settingsManager.get() } catch { settings.value = { ...DEFAULT_SETTINGS }; (window as any).__sireader_settings = settings.value } finally { isLoaded.value = true } })()
   const save = async () => { try { await settingsManager.save(settings.value), msg.success(i18n?.saved || '设置已保存') } catch { msg.error(i18n?.saveError || '保存失败') } };
   const loadCustomFonts = async (force = false) => {
-    if (!force && customFonts.value.length) return
+    if (!force && customFonts.value.length && fontCache.size === customFonts.value.length) return
     if (!force && fontLoadTask) return fontLoadTask
     isLoadingFonts.value = true
-    fontLoadTask = (async () => { customFonts.value = await scanCustomFonts(force); loadFonts(customFonts.value) })().finally(() => (isLoadingFonts.value = false, fontLoadTask = null))
+    fontLoadTask = (async () => { 
+      customFonts.value = await scanCustomFonts(force)
+      await loadFonts(customFonts.value)
+    })().finally(() => (isLoadingFonts.value = false, fontLoadTask = null))
     return fontLoadTask
   };
   const resetStyles = () => resetToDefaults(settings.value);
   load(); 
+  loadCustomFonts();
   return { settings, isLoaded, save, customFonts, isLoadingFonts, loadCustomFonts, resetStyles };
 }

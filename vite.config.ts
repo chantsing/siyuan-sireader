@@ -70,6 +70,15 @@ export default defineConfig(({
           if (id !== VIRTUAL_PRIVATE_SOURCES_ID) return null
           return PUBLIC_PRIVATE_SOURCES_STUB
         },
+        transform(code, id) {
+          if (/[\\/]foliate-js[\\/](paginator|fixed-layout)\.js$/.test(id)) {
+            return code.replace(
+              /\.setAttribute\('sandbox', 'allow-same-origin allow-scripts'\)/g,
+              ''
+            )
+          }
+          return null
+        },
       },
       vue(),
       viteStaticCopy({

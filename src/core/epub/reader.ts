@@ -30,12 +30,44 @@ const getTheme = (settings: ReaderSettings) =>
   resolveTheme(settings.theme === 'custom' ? settings.customTheme : PRESET_THEMES[settings.theme] || PRESET_THEMES.default)
 const getViewBackground = (theme: any) => theme.bgImg ? `${theme.bg} url("${theme.bgImg}") center/cover no-repeat` : theme.bg
 const isDark = (c = '') => { const m = c.match(/\d+(\.\d+)?/g)?.slice(0, 3).map(Number); return !!m && (m[0] * 299 + m[1] * 587 + m[2] * 114) / 1000 < 128 }
-const preloadedFonts = new Set<string>()
-const preloadFont = (url: string) => {
-  if (preloadedFonts.has(url)) return
-  preloadedFonts.add(url)
-  document.head.appendChild(Object.assign(document.createElement('link'), { rel: 'preload', as: 'font', href: url, crossOrigin: 'anonymous' }))
+
+const fontBlobCache = new Map<string, Promise<string | null>>()
+const isSupportedFont = (buffer: ArrayBuffer): boolean => {
+  if (buffer.byteLength < 4) return false
+  const magic = new DataView(buffer).getUint32(0, false)
+  return magic === 0x00010000 || magic === 0x4F54544F || magic === 0x774F4646 || magic === 0x774F4632
 }
+const getFontMimeType = (buffer: ArrayBuffer): string => {
+  const magic = new DataView(buffer).getUint32(0, false)
+  if (magic === 0x00010000) return 'font/truetype'
+  if (magic === 0x4F54544F) return 'font/opentype'
+  if (magic === 0x774F4646) return 'font/woff'
+  if (magic === 0x774F4632) return 'font/woff2'
+  return 'font/truetype'
+}
+const fetchFontAsBlob = async (url: string): Promise<string | null> => {
+  try {
+    const response = await fetch(url)
+    if (!response.ok) return null
+    const buffer = await response.arrayBuffer()
+    if (!isSupportedFont(buffer)) return null
+    const blob = new Blob([buffer], { type: getFontMimeType(buffer) })
+    const blobUrl = URL.createObjectURL(blob)
+    const testFont = new FontFace('__test__', `url("${blobUrl}")`)
+    await testFont.load()
+    return blobUrl
+  } catch {
+    return null
+  }
+}
+const getFontBlobUrl = async (url: string): Promise<string | null> => {
+  if (fontBlobCache.has(url)) return fontBlobCache.get(url)!
+  const promise = fetchFontAsBlob(url)
+  fontBlobCache.set(url, promise)
+  return promise
+}
+
+
 const watchTheme = (cb: () => void) => {
   const observer = new MutationObserver(() => requestAnimationFrame(cb))
   observer.observe(document.documentElement, { attributeFilter: ['data-theme-mode', 'class'] })
@@ -51,8 +83,11 @@ const footnoteSelector = `${inlineFootnoteSelector},.footnote-link,.footnote`
 const footnoteLinkClasses = ['duokan-footnote', 'footnote-link', 'footnote']
 const shouldCheckAsFootnote = (a: HTMLAnchorElement) => {
   if (!numericNotePattern.test(a.textContent?.trim() || '')) return false
-  for (let el = a.parentElement, depth = 0; el && depth < 3; el = el.parentElement, depth++) {
-    const count = Array.from(el.querySelectorAll('a')).filter(link => link !== a && numericNotePattern.test(link.textContent?.trim() || '')).length
+  // 仅在导航容器（目录/脚注列表）内才视为非脚注引用，
+  // 避免之前向上遍历到 <section> 时把正文中密集的脚注标误判为目录链接
+  const navParent = a.closest('nav, ol, ul')
+  if (navParent) {
+    const count = Array.from(navParent.querySelectorAll('a')).filter(link => link !== a && numericNotePattern.test(link.textContent?.trim() || '')).length
     if (count >= 2) return false
   }
   return true
@@ -65,10 +100,40 @@ const inlineFootnote = (target: Element | null) => {
   const text = footnoteText(el, target)
   return text.trim() ? { el, text: text.trim() } : null
 }
-const normalizeFootnoteTypes = (doc?: Document) => doc?.querySelectorAll('[type~="noteref"],[type~="footnote"],[type~="endnote"],[type~="note"],[type~="rearnote"]').forEach(el => {
-  const type = el.getAttribute('type')
-  if (type && !el.getAttribute('epub:type')) el.setAttribute('epub:type', type)
-})
+const normalizeFootnoteTypes = (doc?: Document) => {
+  if (!doc) return
+  doc.querySelectorAll('[type~="noteref"],[type~="footnote"],[type~="endnote"],[type~="note"],[type~="rearnote"]').forEach(el => {
+    const type = el.getAttribute('type')
+    if (type && !el.getAttribute('epub:type')) el.setAttribute('epub:type', type)
+  })
+  doc.querySelectorAll('aside,section').forEach(el => {
+    if (el.hasAttribute('data-sr-footnote')) return
+    const epubType = el.getAttribute('epub:type') || el.getAttributeNS('http://www.idpf.org/2007/ops', 'type') || ''
+    const role = el.getAttribute('role') || ''
+    if (/\b(footnote|endnote|rearnote)\b/.test(epubType) || /\bdoc-(footnote|endnote)\b/.test(role)) {
+      el.setAttribute('data-sr-footnote', 'true')
+    }
+  })
+  // 收集本 section 内脚注内容的 id，用于检测同 section 脚注引用链接
+  const footnoteIds = new Set<string>()
+  doc.querySelectorAll('aside[data-sr-footnote],section[data-sr-footnote]').forEach(el => {
+    if (el.id) footnoteIds.add(el.id)
+  })
+  // 为脚注引用链接补全 role="doc-noteref"，
+  // 规避 HTML 解析模式下 foliate-js getTypes 通过 getNamedItem('epub:type') 读取不稳定的问题，
+  // 让 isFootnoteReference 走 getRoles 这一可靠路径（yes 分支直接命中）
+  doc.querySelectorAll('a[href]').forEach(a => {
+    const epubType = a.getAttribute('epub:type') || a.getAttributeNS('http://www.idpf.org/2007/ops', 'type') || ''
+    const type = a.getAttribute('type') || ''
+    const hash = (a.getAttribute('href') || '').split('#')[1]
+    if (/\bnoteref\b/.test(epubType) || /\bnoteref\b/.test(type) || (hash && footnoteIds.has(hash))) {
+      const role = a.getAttribute('role') || ''
+      if (!/\bdoc-noteref\b/.test(role)) {
+        a.setAttribute('role', role ? `${role} doc-noteref` : 'doc-noteref')
+      }
+    }
+  })
+}
 
 const isFootnoteClick = (target: Element | null) => {
   const a = target?.closest?.('a')
@@ -78,7 +143,7 @@ const isFootnoteClick = (target: Element | null) => {
 
 const mediaTarget = (target: Element | null) => {
   if (!target || isFootnoteClick(target)) return null
-  if (target.localName === 'img') return { type: 'image', el: target, image: (target as HTMLImageElement).currentSrc || (target as HTMLImageElement).src, text: (target as HTMLImageElement).alt || target.title || '图片标注' }
+  if (target.localName === 'img') return { type: 'image', el: target, image: (target as HTMLImageElement).currentSrc || (target as HTMLImageElement).src, text: (target as HTMLImageElement).alt || (target as HTMLElement).title || '图片标注' }
   const svgImage = target.localName === 'image' ? target : target.closest('image') || target.closest('svg')?.querySelector('image')
   const href = svgImage?.getAttribute('href') || svgImage?.getAttributeNS('http://www.w3.org/1999/xlink', 'href')
   if (href) return { type: 'image', el: svgImage as Element, image: /^data:|^blob:|^[a-z]+:/i.test(href) ? href : new URL(href, target.ownerDocument.baseURI).href, text: '图片标注' }
@@ -88,7 +153,7 @@ const mediaTarget = (target: Element | null) => {
 
 const recoverTransformErrors = (book: any) => book?.transformTarget?.addEventListener('data', (event: Event) => {
   const { detail } = event as CustomEvent
-  detail.data = Promise.resolve(detail.data).catch(e => (console.error(new Error(`Failed to load ${detail.name}`, { cause: e })), ''))
+  detail.data = Promise.resolve(detail.data).catch(e => (console.error(`Failed to load ${detail.name}:`, e), ''))
 })
 let openQueue = Promise.resolve()
 const enqueueOpen = <T>(task: () => Promise<T>) => {
@@ -172,7 +237,7 @@ function applyViewTheme(view: FoliateView, theme: any) {
   if (view.parentElement) view.parentElement.style.background = bg
 }
 
-function applyCustomCSS(view: FoliateView, settings: ReaderSettings) {
+async function applyCustomCSS(view: FoliateView, settings: ReaderSettings) {
   const {
     textSettings: text = { fontFamily: 'inherit', fontSize: 16, fontWeight: 400, letterSpacing: 0, customFont: { fontFamily: '', fontFile: '' } },
     paragraphSettings: paragraph = { lineHeight: 1.8, textIndent: 2, paragraphSpacing: 1 }
@@ -183,10 +248,34 @@ function applyCustomCSS(view: FoliateView, settings: ReaderSettings) {
   const transparentContent = theme.bgImg ? 'html,body,section,article,main,div,p,blockquote,ul,ol,li,table,thead,tbody,tr,td,th{background-color:transparent!important}' : ''
   const darkText = ['#000', '#000000', 'black', 'rgb(0,0,0)', 'rgb(0, 0, 0)'].map(c => `font[color="${c}"],[style*="color:${c}"],[style*="color: ${c}"]`).join(',')
   const customFont = text.fontFamily === 'custom' ? text.customFont?.fontFamily : ''
-  const font = customFont ? `"${customFont}", sans-serif` : text.fontFamily || 'inherit'
-  const fontUrl = customFont ? `${location.origin}/plugins/custom-fonts/${text.customFont.fontFile}` : ''
-  fontUrl && preloadFont(fontUrl)
-  const fontFace = customFont ? `@font-face{font-family:"${customFont}";src:url("${fontUrl}");font-display:swap}` : ''
+  let font = customFont ? `"${customFont}", sans-serif` : text.fontFamily || 'inherit'
+  if (font === 'inherit') {
+    try {
+      const bodyFont = getComputedStyle(document.body).fontFamily.trim()
+      if (bodyFont && bodyFont !== 'inherit') {
+        font = bodyFont
+      } else {
+        const siyuanFont = getComputedStyle(document.documentElement).getPropertyValue('--b3-font-family').trim()
+        font = siyuanFont || 'inherit'
+      }
+    } catch {
+      font = 'inherit'
+    }
+  }
+  const textSettings = text as any
+  if (textSettings.fontFamilyZh || textSettings.fontFamilyEn) {
+    const zhFont = textSettings.fontFamilyZh || font
+    const enFont = textSettings.fontFamilyEn || font
+    font = `"${zhFont}", "${enFont}", ${font}`
+  }
+  let fontFace = ''
+  if (customFont && text.customFont?.fontFile) {
+    const fontUrl = `${location.origin}/plugins/custom-fonts/${encodeURI(text.customFont.fontFile)}`
+    const blobUrl = await getFontBlobUrl(fontUrl)
+    if (blobUrl) {
+      fontFace = `@font-face{font-family:"${customFont}";src:url("${blobUrl}");font-display:swap}`
+    }
+  }
   const css = [
     `@namespace epub "http://www.idpf.org/2007/ops";`,
     fontFace,
@@ -239,8 +328,15 @@ function applyCustomCSS(view: FoliateView, settings: ReaderSettings) {
     section[epub|type~="footnote"],
     section[epub|type~="endnote"],
     section[epub|type~="rearnote"],
+    aside[epub\\:type~="footnote"],
+    aside[epub\\:type~="endnote"],
+    aside[epub\\:type~="rearnote"],
+    section[epub\\:type~="footnote"],
+    section[epub\\:type~="endnote"],
+    section[epub\\:type~="rearnote"],
     [role~="doc-footnote"],
-    [role~="doc-endnote"]{display:none!important}
+    [role~="doc-endnote"],
+    [data-sr-footnote]{display:none!important}
   `
   ].join('')
   const renderer = view.renderer as any
@@ -249,6 +345,7 @@ function applyCustomCSS(view: FoliateView, settings: ReaderSettings) {
     renderer && (renderer.__sireaderStyleSig = css)
   }
   Object.assign((view.renderer as HTMLElement | undefined)?.style || {}, { scrollbarWidth: 'none', msOverflowStyle: 'none' })
+  return font
 }
 
 function getCurrentLocation(view: FoliateView): Location | null {
@@ -262,17 +359,21 @@ function getCurrentLocation(view: FoliateView): Location | null {
   }
 }
 
-const applyMarginal = (el: HTMLElement | undefined, text: string, margin = 48) => {
+const applyMarginal = (el: HTMLElement | undefined, text: string, margin = 48, fontFamily?: string) => {
   if (!el) return
   el.textContent = text
-  Object.assign(el.style, {
+  const styles: Record<string, string> = {
     textAlign: 'start',
     fontSize: `${Math.max(0, Math.min(12, margin * 0.75))}px`,
     lineHeight: '1',
-  })
+  }
+  if (fontFamily) {
+    styles.fontFamily = fontFamily
+  }
+  Object.assign(el.style, styles)
 }
 
-function updateMarginals(view: FoliateView) {
+function updateMarginals(view: FoliateView, fontFamily?: string) {
   const renderer = view.renderer as any
   const head = renderer?.heads?.[0] as HTMLElement | undefined
   const foot = renderer?.feet?.[0] as HTMLElement | undefined
@@ -287,17 +388,17 @@ function updateMarginals(view: FoliateView) {
   const footer = [chapterPages, typeof totalFraction === 'number' ? `${Math.round(totalFraction * 100)}%` : '']
     .filter(Boolean)
     .join(' · ')
-  applyMarginal(head, chapter || title, margin)
-  applyMarginal(foot, footer, margin)
+  applyMarginal(head, chapter || title, margin, fontFamily)
+  applyMarginal(foot, footer, margin, fontFamily)
 }
 
-function refreshMarginals(view: FoliateView) {
-  requestAnimationFrame(() => requestAnimationFrame(() => updateMarginals(view)))
-  setTimeout(() => updateMarginals(view), 0)
+function refreshMarginals(view: FoliateView, fontFamily?: string) {
+  requestAnimationFrame(() => requestAnimationFrame(() => updateMarginals(view, fontFamily)))
+  setTimeout(() => updateMarginals(view, fontFamily), 0)
 }
 
-function refreshRenderer(view: FoliateView) {
-  requestAnimationFrame(() => { ;(view.renderer as any)?.render?.(); refreshMarginals(view) })
+function refreshRenderer(view: FoliateView, fontFamily?: string) {
+  requestAnimationFrame(() => { ;(view.renderer as any)?.render?.(); refreshMarginals(view, fontFamily) })
 }
 
 export class FoliateReader {
@@ -313,6 +414,7 @@ export class FoliateReader {
   private footnote = new FootnoteHandler()
   private footnoteAnchor: HTMLElement | null = null
   private footnoteHref = ''
+  private epubDocs = new Set<Document>()
   private footnoteHistory: any[] = []
   private footnoteIndex = -1
   private destroyed = false
@@ -349,22 +451,90 @@ export class FoliateReader {
       const renderer = this.view.renderer as any
       if (renderer && !renderer.__sireaderMarginalsBound) {
         renderer.__sireaderMarginalsBound = true
-        const refresh = () => refreshMarginals(this.view)
-        renderer.addEventListener('load', refresh)
-        renderer.addEventListener('relocate', refresh)
+        renderer.addEventListener('load', (async (event: CustomEvent) => {
+          refreshMarginals(this.view)
+          const doc = event.detail?.doc as Document | undefined
+          if (doc?.head) {
+            this.epubDocs.add(doc)
+            await this.injectFontOverride(doc)
+          }
+        }) as EventListener)
+        renderer.addEventListener('relocate', refreshMarginals.bind(null, this.view))
       }
       this.applySettings()
       await this.view.init?.({})
+      await applyCustomCSS(this.view, this.settings)
       if (this.destroyed) return this.view.close?.()
       if (this.marks) await this.marks.init()
       this.emit('loaded', { book: this.view.book })
     })
   }
 
-  private applySettings() {
+  private async applySettings() {
     configureView(this.view, this.settings)
-    applyCustomCSS(this.view, this.settings)
-    refreshRenderer(this.view)
+    const fontFamily = await applyCustomCSS(this.view, this.settings)
+    await Promise.all(Array.from(this.epubDocs).map(doc => this.injectFontOverride(doc)))
+    refreshRenderer(this.view, fontFamily)
+  }
+
+  private async injectFontOverride(doc: Document) {
+    if (!doc?.head) return
+    let styleEl = doc.querySelector('style[data-sireader-font]')
+    if (!styleEl) {
+      styleEl = doc.createElement('style')
+      styleEl.setAttribute('data-sireader-font', 'true')
+      doc.head.appendChild(styleEl)
+    }
+    const { textSettings } = this.settings
+    const customFont = textSettings.fontFamily === 'custom' ? textSettings.customFont?.fontFamily : ''
+    let fontVal = customFont ? `"${customFont}", sans-serif` : textSettings.fontFamily || 'inherit'
+    let fontFaceRules = ''
+    if (customFont && textSettings.customFont?.fontFile) {
+      const fontUrl = `${location.origin}/plugins/custom-fonts/${encodeURI(textSettings.customFont.fontFile)}`
+      const blobUrl = await getFontBlobUrl(fontUrl)
+      if (blobUrl) {
+        fontFaceRules = `@font-face{font-family:"${customFont}";src:url("${blobUrl}");font-display:swap}`
+      }
+    }
+    if (fontVal === 'inherit') {
+      fontVal = getComputedStyle(document.body).fontFamily.trim() || 'inherit'
+      const fontFamilies = fontVal.match(/"([^"]+)"|'([^']+)'|(\w[\w\s-]*)/g)?.map(f => f.replace(/["']/g, '').trim()).filter(Boolean) || []
+      const matchFontFace = (rule: string) => {
+        const match = rule.match(/font-family:\s*["']?([^"';]+)["']?/i)
+        if (!match) return false
+        const ruleFamily = match[1].replace(/["']/g, '').trim()
+        return fontFamilies.some(f => f.toLowerCase() === ruleFamily.toLowerCase())
+      }
+      const inlineFontFaces = Array.from(document.querySelectorAll('style'))
+        .map(el => (el as HTMLStyleElement).textContent || '')
+        .join('\n')
+        .match(/@font-face\s*\{[\s\S]*?\}/g) || []
+        .filter(matchFontFace)
+      fontFaceRules = inlineFontFaces.join('\n')
+      const linkHrefs = Array.from(document.querySelectorAll('link[rel="stylesheet"]'))
+        .map(el => (el as HTMLLinkElement).href)
+        .filter(href => href && href.startsWith(location.origin))
+      Promise.all(linkHrefs.map(href => fetch(href).then(r => r.text()).catch(() => '')))
+        .then(cssContents => {
+          const externalFontFaces = cssContents.join('\n').match(/@font-face\s*\{[\s\S]*?\}/g) || []
+            .filter(matchFontFace)
+          const allFontFaces = [...inlineFontFaces, ...externalFontFaces]
+          const override = `${allFontFaces.join('\n')}\nhtml,body,body *{font-family:${fontVal}!important}`
+          if (styleEl!.textContent !== override) {
+            styleEl!.textContent = override
+          }
+        })
+    }
+    const textSettingsAny = textSettings as any
+    if (textSettingsAny.fontFamilyZh || textSettingsAny.fontFamilyEn) {
+      const zhFont = textSettingsAny.fontFamilyZh || fontVal
+      const enFont = textSettingsAny.fontFamilyEn || fontVal
+      fontVal = `"${zhFont}", "${enFont}", ${fontVal}`
+    }
+    const fontOverride = `${fontFaceRules}\nhtml,body,body *{font-family:${fontVal}!important}`
+    if (styleEl.textContent !== fontOverride) {
+      styleEl.textContent = fontOverride
+    }
   }
 
   private scheduleResize() {
@@ -450,6 +620,22 @@ export class FoliateReader {
       this.footnoteAnchor = a
       this.footnoteHistory = [e.detail]
       this.footnoteIndex = 0
+      // 同文档脚注引用：直接从当前文档提取脚注内容，绕过 book.resolveHref / #showFragment 链路
+      // 规避 foliate-js 在解析同文档链接时可能返回 null 导致弹窗失败的问题
+      const rawHref = a.getAttribute('href') || ''
+      const hashIdx = rawHref.indexOf('#')
+      if (hashIdx >= 0) {
+        const id = rawHref.slice(hashIdx + 1)
+        const doc = a.ownerDocument
+        try {
+          const target = doc?.getElementById(id)
+          if (target && target.hasAttribute('data-sr-footnote')) {
+            e.preventDefault()
+            this.renderSameDocFootnote(a, target)
+            return
+          }
+        } catch {}
+      }
       if (footnoteLinkClasses.some(cls => a.classList.contains(cls))) e.detail.follow = true
       if (shouldCheckAsFootnote(a)) e.detail.check = true
       const handled = this.footnote.handle(this.view.book, e as any)
@@ -475,6 +661,17 @@ export class FoliateReader {
     tooltip.querySelector('[data-footnote-content]')!.textContent = text
     const rect = el.getBoundingClientRect()
     const frameRect = (el.ownerDocument.defaultView?.frameElement as HTMLIFrameElement | null)?.getBoundingClientRect()
+    showTooltip(tooltip, (frameRect?.left || 0) + rect.left, (frameRect?.top || 0) + rect.bottom + 8)
+  }
+
+  private renderSameDocFootnote(anchor: HTMLElement, target: Element) {
+    const tooltip = this.getFootnoteTooltip()
+    const i = this.plugin.i18n
+    tooltip.innerHTML = createTooltip({ icon: '#iconMark', iconColor: '#ef4444', title: i.footnote || '脚注', content: '<div data-footnote-content style="max-height:min(360px,calc(100vh - 120px));overflow:auto;user-select:text;padding:14px;font-size:13px;line-height:1.7"></div>' })
+    const content = tooltip.querySelector('[data-footnote-content]')!
+    content.innerHTML = target.innerHTML
+    const rect = anchor.getBoundingClientRect()
+    const frameRect = (anchor.ownerDocument.defaultView?.frameElement as HTMLIFrameElement | null)?.getBoundingClientRect()
     showTooltip(tooltip, (frameRect?.left || 0) + rect.left, (frameRect?.top || 0) + rect.bottom + 8)
   }
 
