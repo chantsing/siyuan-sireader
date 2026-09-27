@@ -55,30 +55,26 @@ export class LicenseManager {
   private static operationId(label: string) { return `${label}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}` }
 
   private static async requestJson(url: string, init: RequestInit = {}) {
-    try {
-      const response = await fetch(url, init)
-      return { ok: response.ok, status: response.status, data: await response.json().catch(() => ({})) as any }
-    }
-    catch (error) {
+    const proxyRequest = async () => {
       const proxy = await fetch('/api/network/forwardProxy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url,
-          method: init.method || 'GET',
-          contentType: String((init.headers as Record<string, string> | undefined)?.['Content-Type'] || 'application/json'),
-          headers: [],
-          payload: typeof init.body === 'string' ? init.body : {},
-          timeout: 15000,
-        }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, method: init.method || 'GET', contentType: String((init.headers as Record<string, string> | undefined)?.['Content-Type'] || 'application/json'), headers: [], payload: typeof init.body === 'string' ? init.body : {}, timeout: 15000 }),
       }).catch(() => null)
       const result = proxy?.ok ? await proxy.json().catch(() => null) : null
       const data = result?.code === 0 ? result.data : null
-      if (data) {
-        let body: any = {}
-        try { body = typeof data.body === 'string' ? JSON.parse(data.body || '{}') : data.body || {} } catch {}
-        return { ok: Number(data.status) >= 200 && Number(data.status) < 300, status: Number(data.status || 0), data: body }
-      }
+      if (!data) return null
+      let body: any = {}
+      try { body = typeof data.body === 'string' ? JSON.parse(data.body || '{}') : data.body || {} } catch {}
+      return { ok: Number(data.status) >= 200 && Number(data.status) < 300, status: Number(data.status || 0), data: body }
+    }
+    try {
+      const response = await fetch(url, init)
+      const direct = { ok: response.ok, status: response.status, data: await response.json().catch(() => ({})) as any }
+      return direct.ok ? direct : (await proxyRequest()) || direct
+    }
+    catch (error) {
+      const proxied = await proxyRequest()
+      if (proxied) return proxied
       throw error
     }
   }

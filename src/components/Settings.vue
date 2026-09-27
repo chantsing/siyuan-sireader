@@ -8,6 +8,7 @@ import { offlineDictManager, onlineDictManager } from '@/utils/dictionary'
 import { usePlugin } from '@/main'
 import { useLicense } from '@/core/license'
 import { translators } from '@/services/translator'
+import { OFFLINE_TTS_PACK, OFFLINE_TTS_VOICE, OfflineTTSManager } from '@/services/OfflineTTS'
 
 const props = defineProps<{modelValue:ReaderSettings;i18n:any;onSave:()=>Promise<void>}>()
 const emit = defineEmits<{'update:modelValue':[value:ReaderSettings]}>()
@@ -23,6 +24,16 @@ const {confirming:resetConfirm,handleClick:handleReset} = useConfirm(() => {rese
 
 // TTS
 const ttsVoices = ref<any[]>([]), loadingTTS = ref(false)
+const offlineTTS = new OfflineTTSManager(), offlineTTSProgress = ref(0), offlineTTSInstalled = ref(false), offlineTTSLoading = ref(false)
+const loadOfflineTTS = async () => { offlineTTSInstalled.value = await offlineTTS.installed() }
+const downloadOfflineTTS = async () => {
+  if (offlineTTSLoading.value) return
+  offlineTTSLoading.value = true; offlineTTSProgress.value = 0
+  try { await offlineTTS.download(value => offlineTTSProgress.value = value); offlineTTSInstalled.value = true; showMessage('离线语音包已下载', 2000, 'info') }
+  catch (e: any) { showMessage(e.message || '离线语音包下载失败', 3000, 'error') }
+  finally { offlineTTSLoading.value = false }
+}
+const formatBytes = (size: number) => size < 1024 * 1024 ? `${Math.round(size / 1024)} KB` : `${(size / 1024 / 1024).toFixed(1)} MB`
 const loadTTS = async () => {
   if (loadingTTS.value||ttsVoices.value.length) return
   loadingTTS.value = true
@@ -33,10 +44,10 @@ const loadTTS = async () => {
     if (!ttsVoices.value.length) showMessage(props.i18n.loadVoicesFailed||'加载失败',3000,'error')
   } catch (e:any) { showMessage(e.message||props.i18n.loadVoicesFailed||'加载失败',3000,'error') } finally { loadingTTS.value = false }
 }
-const selectVoice = (name:string,isLocal:boolean) => {
-  if (!isLocal&&!can.value('tts-online')) return showUpgrade('在线语音')
+const selectVoice = (voice:any) => {
+  if (!voice.isLocal && !voice.isOffline && !can.value('tts-online')) return showUpgrade('在线语音')
   if (!settings.value.tts) return
-  settings.value.tts.voice = name
+  settings.value.tts.voice = voice.name
   save()
 }
 const toggleFav = (voice:any) => {
@@ -47,7 +58,11 @@ const toggleFav = (voice:any) => {
   settings.value.tts.favoriteVoices = fav; showMessage(idx>=0?(props.i18n.deleted||'已删除'):(props.i18n.ttsVoiceFavorited||'已收藏'),1500,'info'); save()
 }
 const isFav = (name:string) => (settings.value.tts?.favoriteVoices||[]).some(v => v.name===name)
-const myVoices = computed(() => [...ttsVoices.value.filter(v => v.isLocal),...(settings.value.tts?.favoriteVoices||[]).filter(v => !v.isLocal)])
+const myVoices = computed(() => [
+  ...ttsVoices.value.filter(v => v.isLocal),
+  ...(offlineTTSInstalled.value ? [OFFLINE_TTS_VOICE] : []),
+  ...(settings.value.tts?.favoriteVoices||[]).filter(v => !v.isLocal && !v.isOffline),
+])
 const onlineVoices = computed(() => ttsVoices.value.filter(v => !v.isLocal))
 watch(() => props.modelValue,v => settings.value=v,{immediate:true})
 const syncAnnotationTagPresets = (e: Event) => {
@@ -111,12 +126,12 @@ const dictSections = computed(() => [
 const voiceSections = computed(() => [
   {
     key: 'ttsFavorites', title: props.i18n.ttsFavoriteVoices||'我的语音', hint: `${props.i18n.ttsCurrentVoice||'当前'}: ${settings.value.tts?.voice||''}`,
-    rows: myVoices.value.map((v:any) => ({ key: v.name, text: v.displayName, meta: v.isLocal ? (props.i18n.localVoice || '本地') : v.locale, active: settings.value.tts?.voice === v.name, pick: () => selectVoice(v.name,v.isLocal), action: v.isLocal ? undefined : () => toggleFav(v), actionTitle: props.i18n.delete || '删除' })),
+    rows: myVoices.value.map((v:any) => ({ key: v.name, text: v.displayName, meta: v.isOffline ? '离线包' : (v.isLocal ? (props.i18n.localVoice || '本地') : v.locale), active: settings.value.tts?.voice === v.name, pick: () => selectVoice(v), action: v.isLocal || v.isOffline ? undefined : () => toggleFav(v), actionTitle: props.i18n.delete || '删除' })),
     empty: props.i18n.ttsNoFavorites||'暂无，请点击下方加载'
   },
   {
     key: 'ttsVoices', title: props.i18n.ttsVoiceList||'在线语音', hint: props.i18n.ttsOnlineHint||'点击语音名称选择，点击星号收藏',
-    rows: onlineVoices.value.map((v:any) => ({ key: v.name, text: v.displayName, meta: v.locale, active: settings.value.tts?.voice === v.name, pick: () => selectVoice(v.name,false), action: () => toggleFav(v), actionTitle: isFav(v.name)?'取消收藏':'收藏' })),
+    rows: onlineVoices.value.map((v:any) => ({ key: v.name, text: v.displayName, meta: v.locale, active: settings.value.tts?.voice === v.name, pick: () => selectVoice(v), action: () => toggleFav(v), actionTitle: isFav(v.name)?'取消收藏':'收藏' })),
     empty: props.i18n.ttsNoVoices||'暂无语音', loadLabel: props.i18n.ttsLoadVoices || '加载语音'
   }
 ])
@@ -142,6 +157,7 @@ const toggleSub = async (key:string) => {
   openSubs.value[key] = !openSubs.value[key]
   if (key === 'customFont' && !fontsLoaded.value && openSubs.value[key]) return await loadCustomFonts(), void (fontsLoaded.value = true)
   if (['ttsFavorites','ttsVoices'].includes(key) && openSubs.value[key] && !ttsVoices.value.length) await loadTTS()
+  if (key === 'ttsOffline' && openSubs.value[key]) await loadOfflineTTS()
 }
 watch(openGroups, groups => groups.other && loadNotebooks(), { deep: true })
 const handleUpload = async (e:Event) => {
@@ -545,6 +561,11 @@ onUnmounted(() => window.removeEventListener('sireaderSettingsUpdated', syncAnno
                   <SettingRows :rows="section.rows" :empty="section.empty" :load-label="section.loadLabel" :loading="loadingTTS" :i18n="i18n" @load="!loadingTTS && loadTTS()" />
                 </template>
               </template>
+              <SectionTitle title="离线语音包" :icon="settingSectionIcon('voice', 'ttsOffline')" :open="isSubOpen('ttsOffline')" aria-label="下载后可供离线 TTS 引擎使用" @toggle="toggleSub('ttsOffline')" />
+              <div v-if="isSubOpen('ttsOffline')" class="sr-tts-pack">
+                <div class="ft__secondary">{{ OFFLINE_TTS_PACK.name }} · {{ formatBytes(OFFLINE_TTS_PACK.size) }}</div>
+                <button class="b3-button" :disabled="offlineTTSLoading || offlineTTSInstalled" @click="downloadOfflineTTS">{{ offlineTTSLoading ? `下载中 ${Math.round(offlineTTSProgress)}%` : offlineTTSInstalled ? '已下载' : '下载语音包' }}</button>
+              </div>
             </template>
             <SettingRows v-else :rows="[]" :empty="i18n.ttsNotConfigured || '语音未配置'" :i18n="i18n" />
         </SettingSection>
@@ -562,6 +583,7 @@ onUnmounted(() => window.removeEventListener('sireaderSettingsUpdated', syncAnno
 
 <style scoped lang="scss">
 .bs-view{min-height:0;height:100%;padding:0;box-sizing:border-box}
+.sr-tts-pack{display:grid;gap:8px;padding:8px 12px 12px;font-size:12px}
 .bs-tree{overflow:hidden;--bs-tree-border:color-mix(in srgb,var(--b3-theme-on-surface-light) 30%,transparent);--b3-list-hover:color-mix(in srgb,var(--b3-theme-primary) 12%,transparent)}
 .bs-tree__scroll{display:flex;flex-direction:column;gap:6px;min-height:0;overflow:auto;scrollbar-gutter:stable;padding:8px 0 8px 8px;box-sizing:border-box}
 .bs-tree :deep(ul){padding:0;list-style:none}

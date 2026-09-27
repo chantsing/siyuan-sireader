@@ -4,6 +4,7 @@ import { TTS } from 'foliate-js/tts.js'
 import { textWalker } from 'foliate-js/text-walker.js'
 import { EdgeTTSCore, loadLocalVoices, toArrayBuffer } from './TTSEngine'
 import { ttsNodeFilter } from './TTSExtractor'
+import { OFFLINE_TTS_VOICE, synthesizeOfflineTTS } from './OfflineTTS'
 
 declare const window: any
 const BLOCK_SELECTOR = 'article,aside,blockquote,div,dl,dt,dd,figure,footer,form,h1,h2,h3,h4,h5,h6,header,li,main,ol,p,pre,section,tr'
@@ -109,6 +110,7 @@ export class EdgeTTSPlayer {
 
   private async playSSML(ssml: string, ticket: number) {
     if (this.stopped || this.paused || ticket !== this.ticket || !ssml) return
+    if (this.config.voice === OFFLINE_TTS_VOICE.name) return this.playOffline(ssml, ticket)
     this.config.onBlock?.(this.textOf(ssml))
     const range = this.foliateTTS?.getLastRange?.()
     this.config.highlightText && range && this.renderer?.scrollToAnchor?.(range, true)
@@ -130,10 +132,40 @@ export class EdgeTTSPlayer {
   }
 
   private async playOnline(ssml: string, ticket: number) {
-    const buf = await this.edge.toSSMLStream(ssml, this.config.rate || 1, this.config.pitch || 1)
+    const rate = this.config.rate || 1
+    const pitch = this.config.pitch || 1
+    const buf = await this.edge.toSSMLStream(ssml, rate, pitch)
+    const audio = toArrayBuffer(buf)
     if (this.stopped || this.paused || ticket !== this.ticket) return
+    if (this.audioCtx.state !== 'running') await this.audioCtx.resume()
     const source = this.audioCtx.createBufferSource()
-    source.buffer = await this.audioCtx.decodeAudioData(toArrayBuffer(buf))
+    source.buffer = await this.audioCtx.decodeAudioData(audio.slice(0))
+    source.connect(this.audioCtx.destination)
+    return new Promise<void>((resolve) => {
+      if (this.stopped || this.paused || ticket !== this.ticket) return resolve()
+      this.currentSource = source
+      source.addEventListener('ended', () => (this.currentSource = null, resolve()), { once: true })
+      try { source.start(0) } catch { this.currentSource = null; resolve() }
+    })
+  }
+
+  private async playOffline(ssml: string, ticket: number) {
+    // Foliate's marked SSML contains the current mark and the remaining text
+    // of the block. Online engines consume the marks, but offline synthesis
+    // would read the remainder again on every mark. Synthesize only the range
+    // that was just highlighted.
+    const text = this.foliateTTS?.getLastRange?.()?.toString?.().trim() || this.textOf(ssml)
+    return this.playOfflineText(text, ticket)
+  }
+
+  private async playOfflineText(text: string, ticket: number) {
+    const audio = await synthesizeOfflineTTS(text, this.config.rate || 1)
+    if (this.stopped || this.paused || ticket !== this.ticket) return
+    if (this.audioCtx.state !== 'running') await this.audioCtx.resume()
+    const buffer = this.audioCtx.createBuffer(1, audio.samples.length, audio.sampleRate)
+    buffer.copyToChannel(audio.samples, 0)
+    const source = this.audioCtx.createBufferSource()
+    source.buffer = buffer
     source.connect(this.audioCtx.destination)
     return new Promise<void>((resolve) => {
       if (this.stopped || this.paused || ticket !== this.ticket) return resolve()
@@ -145,7 +177,23 @@ export class EdgeTTSPlayer {
 
   private async playFrom(ssml: string, ticket: number) {
     while (!this.stopped && !this.paused && ticket === this.ticket && ssml) {
-      await this.playSSML(ssml, ticket)
+      if (this.config.voice === OFFLINE_TTS_VOICE.name) {
+        // Piper inference is synchronous and single-threaded in WASM. Speak a
+        // small batch of adjacent sentences so inference happens less often
+        // and the hand-off between AudioBufferSourceNodes is inaudible.
+        let text = this.foliateTTS?.getLastRange?.()?.toString?.().trim() || this.textOf(ssml)
+        let count = 1
+        while (text.length < 240 && count < 3) {
+          const next = await this.nextSSML()
+          if (!next) break
+          const part = this.foliateTTS?.getLastRange?.()?.toString?.().trim() || this.textOf(next)
+          if (!part) break
+          text += part
+          count++
+        }
+        this.config.onBlock?.(text)
+        await this.playOfflineText(text, ticket)
+      } else await this.playSSML(ssml, ticket)
       if (this.stopped || this.paused || ticket !== this.ticket || !this.config.autoTurnPage) break
       const prev = this.foliateTTS?.getLastRange?.()
       ssml = await this.nextSSML()

@@ -1,5 +1,6 @@
 import { putFile, removeFile, renameFile } from '@/api'
 import { walCoordinator } from './wal'
+import { validateManagedFileSize } from './types'
 const verifyPath = (path: string) => {
   const normalized = path.replace(/\\/g, '/')
   if (!normalized.startsWith('/data/public/')) throw new Error(`Managed file is outside public data: ${path}`)
@@ -9,8 +10,7 @@ export const verifyManagedFileSize = async (path: string, expected: number) => {
   const response = await fetch(verifyPath(path), { method: 'HEAD', cache: 'no-store' })
   if (!response.ok) throw new Error(`Managed file verification failed: HTTP ${response.status}`)
   const header = response.headers.get('content-length')
-  const actual = header == null || header.trim() === '' ? Number.NaN : Number(header)
-  if (!Number.isFinite(actual) || actual !== expected) throw new Error(`Managed file size mismatch: expected ${expected}, got ${header || 'unknown'}`)
+  validateManagedFileSize(header, expected)
 }
 
 const TRANSACTION_ROOT = '/data/public/siyuan-sireader/.transactions'
@@ -69,16 +69,23 @@ export const writeManagedFile = (blob: Blob, destination: string, name = basenam
   const staged = `${TRANSACTION_ROOT}/${tx}/${name}`
   const destinationPath = publicDataPath(destination)
   const backup = `${TRANSACTION_ROOT}/${tx}/previous-${name}`
-  const file = new File([blob], name, { type: blob.type || 'application/octet-stream' })
-  await putFile(`${TRANSACTION_ROOT}/${tx}`, true, new File([], ''))
-  await putFile(staged, false, file)
-  await verifyManagedFileSize(staged, blob.size)
-  await walCoordinator.runAtomic('managed-file-write', [
-    { id: 'backup', kind: 'file:rename', payload: { from: destinationPath, to: backup, allowMissing: true } },
-    { id: 'publish', kind: 'file:rename', payload: { from: staged, to: destinationPath } },
-    { id: 'cleanup', kind: 'file:remove', payload: { path: `${TRANSACTION_ROOT}/${tx}` } },
-  ])
-  return destination
+  let atomicStarted = false
+  try {
+    const file = new File([blob], name, { type: blob.type || 'application/octet-stream' })
+    await putFile(`${TRANSACTION_ROOT}/${tx}`, true, new File([], ''))
+    await putFile(staged, false, file)
+    await verifyManagedFileSize(staged, blob.size)
+    atomicStarted = true
+    await walCoordinator.runAtomic('managed-file-write', [
+      { id: 'backup', kind: 'file:rename', payload: { from: destinationPath, to: backup, allowMissing: true } },
+      { id: 'publish', kind: 'file:rename', payload: { from: staged, to: destinationPath } },
+      { id: 'cleanup', kind: 'file:remove', payload: { path: `${TRANSACTION_ROOT}/${tx}` } },
+    ])
+    return destination
+  } catch (error) {
+    if (!atomicStarted) await removeFile(`${TRANSACTION_ROOT}/${tx}`).catch(() => {})
+    throw error
+  }
 })
 
 export const removeManagedFileTransactionally = (path: string) => withFileLock(publicDataPath(path), async () => {

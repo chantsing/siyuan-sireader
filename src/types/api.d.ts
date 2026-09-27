@@ -156,3 +156,12 @@ declare module '*.vue' {
   const component: DefineComponent<{}, {}, any>
   export default component
 }
+
+declare module '@/libs/sherpa-onnx/sherpa-onnx-wasm' {
+  const createModule: (options?: Record<string, unknown>) => Promise<Record<string, unknown>>
+  export default createModule
+}
+
+declare module '@/libs/sherpa-onnx/sherpa-onnx-tts' {
+  export const createOfflineTts: (module: unknown, config: Record<string, unknown>) => unknown
+}

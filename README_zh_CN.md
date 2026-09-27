@@ -7,7 +7,7 @@
 让思源笔记变身专业阅读器，支持 EPUB/PDF/TXT/在线小说  
 专业电子书阅读器，支持 EPUB/PDF/MOBI/TXT/在线小说；PDF 支持高亮、墨迹、形状、表单、印章、签名、图片、截图、搜索、打印、导出和回链，并提供标注笔记、词典、翻译、主题与书架管理
 
-[![Version](https://img.shields.io/badge/version-2.3.2-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-2.3.3-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,18 @@
 ---
 
 ## 📝 最新更新
+
+### v2.3.3（2026.9.27）
+
+### 新增
+
+- 新增可下载并使用的离线语音包。当前浏览器 WASM 为单线程推理，播放声音可能出现断断续续，后续将继续优化播放队列和推理性能。
+
+### 修复
+
+- 修复数据导入时文件大小校验报错。
+- 修复书架无法手动创建分组的问题。
+- 修复绑定小程序二维码接口返回错误时未通过思源网络代理重试的问题（Issue #56）。
 
 ### v2.3.2（2026.9.25）
 
@@ -171,6 +183,7 @@
 | | 复制设置 | 自定义链接格式，可用变量：书名/作者/章节/位置/链接/文本/笔记/图片 |
 | | 精准定位 | 使用 CFI/页码精确定位，支持跳转到原文 |
 | **🔊 朗读** | TTS模式 | Edge TTS（在线免费）、本地浏览器（离线） |
+| | 离线语音包 | 可下载并复用本地语音包；当前浏览器 WASM 播放可能出现断断续续 |
 | | 多语音支持 | 数百种在线语音和本地语音，支持收藏常用语音 |
 | | 智能播放 | 循环播放选中文本、从选中段落播放、从当前页播放、选中文本朗读 |
 | | 精准高亮 | PDF精准高亮当前文本、EPUB自动滚动到当前段落 |

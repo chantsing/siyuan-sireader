@@ -14,7 +14,13 @@ export interface StorageCommitEvent<T = unknown> {
   envelope: StoredEnvelope<T>
 }
 
-const clone = <T>(value: T): T => structuredClone(value)
+// Storage values are plain JSON data, but callers may pass Vue reactive
+// proxies. structuredClone rejects proxies; serialize only as a fallback so
+// normal typed values still use the native fast path.
+const clone = <T>(value: T): T => {
+  try { return structuredClone(value) }
+  catch { return JSON.parse(JSON.stringify(value)) as T }
+}
 const transactionId = () => globalThis.crypto?.randomUUID?.()
   || `tx-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 

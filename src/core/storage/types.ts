@@ -21,6 +21,12 @@ export interface OperationResult<T> {
   appliedOperationIds: string[]
 }
 
+export const validateManagedFileSize = (header: string | null, expected: number) => {
+  if (header == null || header.trim() === '') return
+  const actual = Number(header)
+  if (!Number.isFinite(actual) || actual !== expected) throw new Error(`Managed file size mismatch: expected ${expected}, got ${header}`)
+}
+
 const WAL_PREFIX = 'wal:'
 export const compactOperationIds = (ids: string[], limit = 512) => {
   const unique = [...new Set(ids)]

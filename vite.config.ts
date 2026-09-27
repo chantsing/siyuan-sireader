@@ -81,6 +81,12 @@ export default defineConfig(({
         name: "private-sources",
         enforce: "pre",
         transform(code, id) {
+          if (id.replace(/\\/g, "/").endsWith("/src/libs/sherpa-onnx/sherpa-onnx-wasm.js")) {
+            return code.replace(
+              "function run(){if(runDependencies>0)",
+              "function run(){if(wasmExports instanceof Promise){wasmExports.then(()=>run());return}if(runDependencies>0)",
+            )
+          }
           const matched = id.replace(/\\/g, "/").match(/\/foliate-js\/(view|fixed-layout|paginator)\.js(?:\?.*)?$/)
           if (!matched) return null
           const next = guardFoliateCustomElements(code, id)
@@ -140,6 +146,14 @@ export default defineConfig(({
           {
             src: "./node_modules/@embedpdf/default-stamps/en/*",
             dest: "./embedpdf/stamps/en/",
+          },
+          {
+            src: "./node_modules/bzip2-wasm/bzip2-1.0.8/bzip2.wasm",
+            dest: "./bzip2-wasm/",
+          },
+          {
+            src: "./src/libs/sherpa-onnx/sherpa-onnx.wasm",
+            dest: "./sherpa-onnx/",
           },
         ],
       }),

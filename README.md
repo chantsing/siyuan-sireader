@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support highlights, ink, shapes, forms, stamps, signatures, images, screenshots, search, printing, export, and backlinks, with annotation notes, dictionary, translation, themes, and bookshelf management.
 
-[![Version](https://img.shields.io/badge/version-2.3.2-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-2.3.3-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,18 @@ Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support high
 ---
 
 ## 📝 Latest Updates
+
+### v2.3.3 (2026.9.27)
+
+### Added
+
+- Added downloadable offline TTS voice packs and local voice-pack playback. Browser WASM inference is currently single-threaded, so playback may sound intermittent; queueing and inference performance will be improved in a future release.
+
+### Fixed
+
+- Fixed file-size validation errors during data import.
+- Fixed manual bookshelf group creation not responding.
+- Fixed mini-program binding QR-code requests not retrying through SiYuan's network proxy when the endpoint returned an error (Issue #56).
 
 ### v2.3.2 (2026.9.25)
 
@@ -170,6 +182,7 @@ Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support high
 | | Copy Settings | Custom link format, Variables: Title/Author/Chapter/Position/Link/Text/Note/Image |
 | | Precise Location | Use CFI/Page number for precise positioning, Jump to original text |
 | **🔊 TTS** | TTS Mode | Edge TTS (Online free), Local browser (Offline) |
+| | Offline Voice Packs | Download and reuse local voice packs; browser WASM playback may currently be intermittent |
 | | Multi-voice | Hundreds of online and local voices, Favorite commonly used voices |
 | | Smart Playback | Loop selected text, Play from selected paragraph, Play from current page, Read selected text |
 | | Precise Highlighting | PDF highlights current text precisely, EPUB auto-scrolls to current paragraph |
