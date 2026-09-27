@@ -6,6 +6,7 @@ import{Overlayer}from'foliate-js/overlayer.js'
 import { getDatabase, type Annotation, type AnnotationType } from './database'
 import { flushStorage } from './storage/engine'
 import { trackPending } from './storage/pending'
+import { cloneStorageValue } from './storage/types'
 const compactNumber = (value: number, digits = 1) => {
   const factor = 10 ** digits
   return Math.round(value * factor) / factor
@@ -179,7 +180,7 @@ export class MarkManager{
 
   private save(targetAutoSyncMark?: Mark){
     if(!this.initialized)return Promise.resolve()
-    const annotations=this.marks.map(mark=>this.toAnnotation(structuredClone(mark)))
+    const annotations=this.marks.map(mark=>this.toAnnotation(cloneStorageValue(mark)))
     this.persistenceQueue=this.persistenceQueue.catch(()=>undefined).then(async()=>{
       const database=await db()
       for(const annotation of annotations)await database.saveAnnotation(

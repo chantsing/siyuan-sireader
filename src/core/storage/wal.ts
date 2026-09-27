@@ -2,7 +2,7 @@ import { pluginStorageAdapter, type StorageAdapter } from './adapter'
 import { storageEngine, type StorageEngine, type StorageKey } from './engine'
 import type { StorageOperation } from './types'
 import { stableStringify } from './codec'
-import { walOperationId } from './types'
+import { cloneStorageValue, walOperationId } from './types'
 
 export interface WalStep {
   id: string
@@ -83,7 +83,7 @@ export class WalCoordinator {
   async runAtomic(label: string, steps: WalStep[]) {
     if (!steps.length) return
     const entryId = id()
-    const normalizedSteps = structuredClone(steps).map(step => {
+    const normalizedSteps = cloneStorageValue(steps).map(step => {
       if (step.kind !== 'storage:transact') return step
       const payload = step.payload as StorageTransactionPayload
       return {
@@ -137,13 +137,13 @@ export const registerStorageWalHandler = (coordinator: WalCoordinator, engine: S
     if (!payload?.key || !Array.isArray(payload.operations)) throw new Error('Invalid storage WAL step')
     const key: StorageKey<unknown> = {
       name: payload.key,
-      defaultValue: () => structuredClone(payload.defaultValue),
+      defaultValue: () => cloneStorageValue(payload.defaultValue),
     }
     await engine.transact(key, payload.operations)
   })
   coordinator.registerCleanup('storage:transact', async raw => {
     const payload = raw as StorageTransactionPayload
-    const key: StorageKey<unknown> = { name: payload.key, defaultValue: () => structuredClone(payload.defaultValue) }
+    const key: StorageKey<unknown> = { name: payload.key, defaultValue: () => cloneStorageValue(payload.defaultValue) }
     await engine.releaseOperationIds(key, payload.operations.map(operation => operation.id))
   })
   return coordinator
@@ -156,7 +156,7 @@ export const storageTransactionStep = <T>(
 ): WalStep => ({
   id,
   kind: 'storage:transact',
-  payload: { key: key.name, defaultValue: key.defaultValue, operations },
+  payload: { key: key.name, defaultValue: cloneStorageValue(key.defaultValue), operations: cloneStorageValue(operations) },
 })
 
 export const createWalCoordinator = (adapter: StorageAdapter) => new WalCoordinator(adapter)

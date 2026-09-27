@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support highlights, ink, shapes, forms, stamps, signatures, images, screenshots, search, printing, export, and backlinks, with annotation notes, dictionary, translation, themes, and bookshelf management.
 
-[![Version](https://img.shields.io/badge/version-2.3.3-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-2.3.4-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,20 @@ Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support high
 ---
 
 ## 📝 Latest Updates
+
+### v2.3.4 (2026.9.27)
+
+### Fixed
+
+- Fixed checksum mismatches after switching between newer and older plugin versions, and improved legacy-data recovery and migration locking.
+- Strengthened storage-version, structure, and corruption checks; storage errors now include the affected key instead of silently overwriting data.
+- Unified PDF annotation and storage-boundary data normalization, fixing `DataCloneError` when external PDF annotation objects enter a transaction.
+
+### Improved
+
+- Hardened the storage read/write flow with unified write verification and retries, improving compatibility with short-lived SiYuan file API visibility delays and concurrent writes.
+- Improved compatibility for PDFs containing large numbers of annotations from other readers, preventing reactive or engine-owned objects from reaching persistent storage directly.
+- Reduced PDF first-screen preloading so large scanned PDFs prioritize the current page, lowering initial wait time and memory use.
 
 ### v2.3.3 (2026.9.27)
 

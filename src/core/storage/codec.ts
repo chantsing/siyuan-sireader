@@ -53,7 +53,26 @@ export const encodeStoredValue = <T>(data: T, metadata: EnvelopeMetadata): Store
 const isEnvelope = (value: unknown): value is StoredEnvelope<unknown> =>
   !!value && typeof value === 'object' && (value as Record<string, unknown>).storageVersion === 2
 
+const hasStorageVersion = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'storageVersion')
+
+const envelopeKeys = new Set(['storageVersion', 'revision', 'transactionId', 'updatedAt', 'appliedOperationIds', 'data', 'checksum'])
+
+/**
+ * Versions before the transactional storage layer treated an envelope as the
+ * business object after a downgrade. They could append book/setting fields to
+ * the envelope root while leaving the old checksum in place. The non-envelope
+ * root fields are the business object written by the old version and can be
+ * recovered safely;
+ * envelopes without those rollback-only fields remain hard failures.
+ */
+const isDowngradeMutation = (value: Record<string, unknown>) =>
+  Object.keys(value).some(key => !envelopeKeys.has(key))
+
 export const decodeStoredValue = <T>(value: unknown): { legacy: boolean, envelope: StoredEnvelope<T> } => {
+  if (hasStorageVersion(value) && value.storageVersion !== 2) {
+    throw new StorageCorruptionError(`Unsupported storage version: ${String(value.storageVersion)}`)
+  }
   if (!isEnvelope(value)) {
     return {
       legacy: true,
@@ -68,13 +87,27 @@ export const decodeStoredValue = <T>(value: unknown): { legacy: boolean, envelop
   if (!Number.isSafeInteger(value.revision) || value.revision < 0
     || typeof value.transactionId !== 'string'
     || typeof value.updatedAt !== 'number'
+    || !Number.isFinite(value.updatedAt)
     || typeof value.checksum !== 'string'
+    || !Object.prototype.hasOwnProperty.call(value, 'data')
     || !Array.isArray(value.appliedOperationIds)
     || value.appliedOperationIds.some(id => typeof id !== 'string')) {
     throw new StorageCorruptionError('Invalid storage envelope')
   }
   const { checksum, ...payload } = value
   if (checksumOf(checksumPayload(payload)) !== checksum) {
+    if (isDowngradeMutation(value) && Object.prototype.hasOwnProperty.call(value, 'data')) {
+      const recoveredData = Object.fromEntries(Object.entries(value).filter(([key]) => !envelopeKeys.has(key))) as T
+      return {
+        legacy: true,
+        envelope: encodeStoredValue(recoveredData, {
+          revision: 0,
+          transactionId: '',
+          updatedAt: 0,
+          appliedOperationIds: [],
+        }),
+      }
+    }
     throw new StorageCorruptionError('Storage checksum mismatch')
   }
   return { legacy: false, envelope: value as StoredEnvelope<T> }

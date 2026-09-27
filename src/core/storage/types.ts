@@ -21,6 +21,16 @@ export interface OperationResult<T> {
   appliedOperationIds: string[]
 }
 
+/** Clone values crossing the storage/WAL boundary, including Vue proxies. */
+export const cloneStorageValue = <T>(value: T): T => {
+  if (value === undefined || value === null) return value
+  try { return structuredClone(value) }
+  catch {
+    const json = JSON.stringify(value)
+    return (json === undefined ? value : JSON.parse(json)) as T
+  }
+}
+
 export const validateManagedFileSize = (header: string | null, expected: number) => {
   if (header == null || header.trim() === '') return
   const actual = Number(header)
@@ -37,9 +47,9 @@ export const walOperationId = (entryId: string, stepId: string, index: number) =
 const isPlainObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
 const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 export const deepMerge = <T>(base: T, patch: unknown): T => {
-  if (!isPlainObject(base) || !isPlainObject(patch)) return structuredClone(patch) as T
+  if (!isPlainObject(base) || !isPlainObject(patch)) return cloneStorageValue(patch) as T
   const result: Record<string, unknown> = { ...base }
-  for (const [key, value] of Object.entries(patch)) result[key] = isPlainObject(value) && isPlainObject(result[key]) ? deepMerge(result[key], value) : structuredClone(value)
+  for (const [key, value] of Object.entries(patch)) result[key] = isPlainObject(value) && isPlainObject(result[key]) ? deepMerge(result[key], value) : cloneStorageValue(value)
   return result as T
 }
 export const diffLeaves = (current: Record<string, unknown>, baseline: Record<string, unknown>) => {
@@ -48,9 +58,9 @@ export const diffLeaves = (current: Record<string, unknown>, baseline: Record<st
     const previous = baseline[key]
     if (equal(value, previous)) continue
     if (isPlainObject(value) && isPlainObject(previous)) { const nested = diffLeaves(value, previous); if (Object.keys(nested).length) result[key] = nested }
-    else result[key] = structuredClone(value)
+    else result[key] = cloneStorageValue(value)
   }
   return result
 }
 export const leafEntries = (patch: Record<string, unknown>, prefix: string[] = []): Array<[string[], unknown]> =>
-  Object.entries(patch).flatMap(([key, value]) => { const path = [...prefix, key]; return isPlainObject(value) && Object.keys(value).length ? leafEntries(value, path) : [[path, structuredClone(value)]] })
+  Object.entries(patch).flatMap(([key, value]) => { const path = [...prefix, key]; return isPlainObject(value) && Object.keys(value).length ? leafEntries(value, path) : [[path, cloneStorageValue(value)]] })

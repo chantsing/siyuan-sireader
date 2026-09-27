@@ -21,6 +21,7 @@ import { isMobile } from '@/utils/mobile'
 import Translate from './Translate.vue'
 import { pdfQuickSendCommandId } from '@/utils/keyboard'
 import { trackPending } from '@/core/storage/pending'
+import { cloneStorageValue } from '@/core/storage/types'
 
 type EmbedPdfContainer = any
 type PluginRegistry = any
@@ -839,14 +840,15 @@ const handleReady = async (registry: PluginRegistry) => {
         const current = event.type === 'delete'
           ? null
           : annotation.getAnnotations?.().find((item: any) => item.object?.id === id)?.object || event.annotation
+        const snapshot = cloneStorageValue(event.type === 'delete' ? event.annotation : current)
         const persistedEvent = {
           type: event.type,
-          annotation: structuredClone(event.type === 'delete' ? event.annotation : current),
+          annotation: snapshot,
         }
         const onCommit = () => props.onAnnotationPersisted?.(persistedEvent)
         const task = event.type === 'delete'
           ? deleteEmbedPdfAnnotation(storageKey(), id, onCommit)
-          : upsertEmbedPdfAnnotation(storageKey(), { annotation: structuredClone(current) }, onCommit)
+          : upsertEmbedPdfAnnotation(storageKey(), { annotation: snapshot }, onCommit)
         annotationPersistenceQueue = annotationPersistenceQueue.catch(() => undefined).then(async () => {
           await task
           window.dispatchEvent(new Event('sireader:marks-updated'))
@@ -909,7 +911,10 @@ const config = computed(() => ({
     'scroll:previous-page': { id: 'scroll:previous-page', labelKey: 'page.previous', icon: 'chevronLeft', categories: ['page', 'navigation', 'navigation-previous'], action: ({ registry, documentId }: any) => registry.getPlugin('scroll')?.provides()?.forDocument(documentId)?.scrollToPreviousPage(pdfPageBehavior()) },
     'scroll:next-page': { id: 'scroll:next-page', labelKey: 'page.next', icon: 'chevronRight', categories: ['page', 'navigation', 'navigation-next'], action: ({ registry, documentId }: any) => registry.getPlugin('scroll')?.provides()?.forDocument(documentId)?.scrollToNextPage(pdfPageBehavior()) },
   },
-  scroll: { defaultBufferSize: 1 },
+  // Render only the active page initially; large scanned PDFs can contain
+  // hundreds of JPX/JBIG2 images and pre-buffering adjacent pages delays the
+  // first visible page substantially.
+  scroll: { defaultBufferSize: 0 },
   zoom: { defaultZoomLevel: pdfInitialZoomLevel() ?? 'fit-width' },
   redaction: { useAnnotationMode: true, drawBlackBoxes: true },
   i18n: {

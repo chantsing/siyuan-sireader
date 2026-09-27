@@ -78,6 +78,7 @@ import { createKeyboardHandler, setupEpubKeyboard, shouldHandleReaderKeydown } f
 import { getTTSController } from '@/services/TTSPlayer'
 import { useLicense } from '@/core/license'
 import { upsertEmbedPdfAnnotation } from '@/core/bookStore'
+import { cloneStorageValue } from '@/core/storage/types'
 const props = defineProps<{ file?: File; plugin: Plugin; settings?: ReaderSettings; url?: string; blockId?: string; bookInfo?: any; onReaderReady?: (r: FoliateReader) => void; i18n?: any }>()
 const i18n = computed(() => props.i18n || {})
 const { can, showUpgrade } = useLicense(i18n.value)
@@ -210,7 +211,7 @@ const imageEmbedPdfMark=async(item:any)=>{
 const pdfSyncQueues=new Map<string,Promise<void>>()
 const pdfSyncedBlocks=new Map<string,{blockId?:string;blockIds?:string[]}>()
 const syncEmbedPdfEvent=(event:any)=>{
-  const a=event?.annotation,mark=a&&embedPdfMark({annotation:structuredClone(a)})
+  const a=event?.annotation,mark=a&&embedPdfMark({annotation:cloneStorageValue(a)})
   if(!mark)return
   const key=`${getBookUrl()}:${mark.id}`,previous=pdfSyncQueues.get(key)||Promise.resolve()
   const task=previous.catch(()=>undefined).then(async()=>{

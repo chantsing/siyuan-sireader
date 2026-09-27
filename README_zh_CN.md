@@ -7,7 +7,7 @@
 让思源笔记变身专业阅读器，支持 EPUB/PDF/TXT/在线小说  
 专业电子书阅读器，支持 EPUB/PDF/MOBI/TXT/在线小说；PDF 支持高亮、墨迹、形状、表单、印章、签名、图片、截图、搜索、打印、导出和回链，并提供标注笔记、词典、翻译、主题与书架管理
 
-[![Version](https://img.shields.io/badge/version-2.3.3-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-2.3.4-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,20 @@
 ---
 
 ## 📝 最新更新
+
+### v2.3.4（2026.9.27）
+
+### 修复
+
+- 修复新旧版本来回切换后出现存储校验和不匹配的问题，并增强旧版本数据恢复与迁移互斥。
+- 增强存储版本、数据结构和损坏内容校验，错误信息会包含具体存储键，避免异常数据被静默覆盖。
+- 统一 PDF 批注和存储边界的数据净化入口，修复外部 PDF 批注对象进入事务时触发 `DataCloneError` 的问题。
+
+### 优化
+
+- 梳理并加固存储读写流程，统一写后校验与重试，提升对思源文件接口短暂延迟和并发写入的兼容性。
+- 优化其他阅读器生成的大量 PDF 批注兼容路径，避免响应式对象和引擎对象直接进入持久化存储。
+- 减少 PDF 首屏预加载范围，大型扫描 PDF 优先渲染当前页，降低打开时的等待和内存占用。
 
 ### v2.3.3（2026.9.27）
 

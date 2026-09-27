@@ -12,7 +12,12 @@ const markerKey: StorageKey<{ completedAt: number, migrated: number, keys: strin
 export const migrateLegacyStorage = async (
   adapter: StorageAdapter = pluginStorageAdapter,
   engine: StorageEngine = storageEngine,
+  locked = false,
 ) => {
+  const locks = globalThis.navigator?.locks
+  if (!locked && locks?.request) {
+    return locks.request('sireader:storage-migration', () => migrateLegacyStorage(adapter, engine, true))
+  }
   if ((await engine.readState(markerKey, true)).found) return
   const known = ['bookshelf.json', 'settings.json', 'daily.json', 'sireader_license', 'sireader_usage_report_day', 'page-scripts.json']
   const records = await adapter.list('records')

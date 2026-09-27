@@ -1,8 +1,8 @@
 import { pluginStorageAdapter, type StorageAdapter } from './adapter'
-import { decodeStoredValue, encodeStoredValue } from './codec'
+import { decodeStoredValue, encodeStoredValue, StorageCorruptionError } from './codec'
 import { applyOperations } from './reducer'
 import type { StorageOperation, StoredEnvelope } from './types'
-import { compactOperationIds } from './types'
+import { cloneStorageValue, compactOperationIds } from './types'
 
 export interface StorageKey<T> {
   name: string
@@ -14,13 +14,9 @@ export interface StorageCommitEvent<T = unknown> {
   envelope: StoredEnvelope<T>
 }
 
-// Storage values are plain JSON data, but callers may pass Vue reactive
-// proxies. structuredClone rejects proxies; serialize only as a fallback so
-// normal typed values still use the native fast path.
-const clone = <T>(value: T): T => {
-  try { return structuredClone(value) }
-  catch { return JSON.parse(JSON.stringify(value)) as T }
-}
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+const WRITE_VERIFY_ATTEMPTS = 4
+const shouldRetry = (error: unknown) => !(error instanceof StorageCorruptionError || error instanceof TypeError)
 const transactionId = () => globalThis.crypto?.randomUUID?.()
   || `tx-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 
@@ -40,7 +36,7 @@ export class StorageEngine {
       || (cached.revision === envelope.revision && cached.updatedAt > envelope.updatedAt))
       ? cached
       : envelope
-    this.cache.set(key, clone(winner))
+    this.cache.set(key, cloneStorageValue(winner))
     if (winner === envelope) {
       if (found) this.present.add(key)
       else this.present.delete(key)
@@ -49,19 +45,52 @@ export class StorageEngine {
   }
 
   private async freshState<T>(key: StorageKey<T>): Promise<{ found: boolean, envelope: StoredEnvelope<T> }> {
-    const stored = await this.adapter.read(key.name)
-    if (!stored.found) {
-      return { found: false, envelope: encodeStoredValue(clone(key.defaultValue()), {
-        revision: 0,
-        transactionId: '',
-        updatedAt: 0,
-        appliedOperationIds: [],
-      }) }
+    let lastError: unknown
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const stored = await this.adapter.read(key.name)
+        if (!stored.found) {
+        return { found: false, envelope: encodeStoredValue(cloneStorageValue(key.defaultValue()), {
+            revision: 0,
+            transactionId: '',
+            updatedAt: 0,
+            appliedOperationIds: [],
+          }) }
+        }
+        try {
+          return { found: true, envelope: decodeStoredValue<T>(stored.value).envelope }
+        } catch (error) {
+          if (error instanceof Error) error.message = `${error.message} (${key.name})`
+          throw error
+        }
+      } catch (error) {
+        lastError = error
+        if (error instanceof StorageCorruptionError || error instanceof TypeError || attempt >= 2) throw error
+        await sleep(40 * (attempt + 1))
+      }
     }
-    return { found: true, envelope: decodeStoredValue<T>(stored.value).envelope }
+    throw lastError
   }
 
   private async freshEnvelope<T>(key: StorageKey<T>) { return (await this.freshState(key)).envelope }
+
+  private async writeAndVerify<T>(key: StorageKey<T>, next: StoredEnvelope<T>) {
+    await this.adapter.write(key.name, next)
+    let lastError: unknown
+    for (let attempt = 0; attempt < WRITE_VERIFY_ATTEMPTS; attempt++) {
+      try {
+        const verified = await this.freshEnvelope(key)
+        if (verified.revision === next.revision
+          && verified.transactionId === next.transactionId
+          && verified.checksum === next.checksum) return verified
+        lastError = new Error('Concurrent storage write detected')
+      } catch (error) {
+        lastError = error
+      }
+      if (attempt + 1 < WRITE_VERIFY_ATTEMPTS) await sleep(40 * (attempt + 1))
+    }
+    throw lastError || new Error('Storage write verification failed')
+  }
 
   private withCrossContextLock<T>(key: string, task: () => Promise<T>): Promise<T> {
     const locks = globalThis.navigator?.locks
@@ -86,7 +115,7 @@ export class StorageEngine {
       try {
         return await this.withCrossContextLock(key, task)
       } catch (error) {
-        this.failures.set(key, { error, retry: task })
+        if (shouldRetry(error)) this.failures.set(key, { error, retry: task })
         throw error
       }
     })
@@ -100,10 +129,10 @@ export class StorageEngine {
   async read<T>(key: StorageKey<T>, fresh = false): Promise<T> {
     if (!fresh) {
       const cached = this.cache.get(key.name) as StoredEnvelope<T> | undefined
-      if (cached) return clone(cached.data)
+      if (cached) return cloneStorageValue(cached.data)
     }
     const { found, envelope } = await this.freshState(key)
-    return clone(this.publishCache(key.name, envelope, found).data)
+    return cloneStorageValue(this.publishCache(key.name, envelope, found).data)
   }
 
   async readState<T>(key: StorageKey<T>, fresh = false): Promise<{ found: boolean, value: T }> {
@@ -112,17 +141,23 @@ export class StorageEngine {
     }
     const { found, envelope } = await this.freshState(key)
     const published = this.publishCache(key.name, envelope, found)
-    return { found: this.present.has(key.name), value: clone(published.data) }
+    return { found: this.present.has(key.name), value: cloneStorageValue(published.data) }
   }
 
   transact<T>(key: StorageKey<T>, operations: StorageOperation[], onCommit?: (data: T) => void): Promise<T> {
     if (!this.accepting) return Promise.reject(new Error('Storage is shutting down'))
-    const captured = clone(operations)
+    const captured = cloneStorageValue(operations)
     let notified = false
     return this.enqueue(key.name, async () => {
       let lastError: unknown
       for (let attempt = 0; attempt < 3; attempt++) {
-        const current = await this.freshEnvelope(key)
+        let current: StoredEnvelope<T>
+        try { current = await this.freshEnvelope(key) }
+        catch (error) {
+          lastError = error
+          if (attempt < 2) await sleep(40 * (attempt + 1))
+          continue
+        }
         const result = applyOperations(current.data, captured, current.appliedOperationIds)
         const next = encodeStoredValue(result.data, {
           revision: current.revision + 1,
@@ -130,29 +165,21 @@ export class StorageEngine {
           updatedAt: Date.now(),
           appliedOperationIds: result.appliedOperationIds,
         })
-        try { await this.adapter.write(key.name, next) }
-        catch (error) { lastError = error; continue }
         let verified: StoredEnvelope<T>
-        try { verified = await this.freshEnvelope(key) }
+        try { verified = await this.writeAndVerify(key, next) }
         catch (error) { lastError = error; continue }
-        if (verified.revision !== next.revision
-          || verified.transactionId !== next.transactionId
-          || verified.checksum !== next.checksum) {
-          lastError = new Error('Concurrent storage write detected')
-          continue
-        }
         this.publishCache(key.name, verified, true)
-        const event = { key: key.name, envelope: clone(verified) }
+        const event = { key: key.name, envelope: cloneStorageValue(verified) }
         for (const listener of this.listeners) {
           try { listener(event) }
           catch (error) { console.error(`[Storage commit listener] ${key.name}`, error) }
         }
         if (!notified && onCommit) {
           notified = true
-          try { onCommit(clone(verified.data)) }
+          try { onCommit(cloneStorageValue(verified.data)) }
           catch (error) { console.error(`[Storage commit callback] ${key.name}`, error) }
         }
-        return clone(verified.data)
+        return cloneStorageValue(verified.data)
       }
       const verificationError = new Error(`Storage verification failed for ${key.name}`)
       ;(verificationError as Error & { cause?: unknown }).cause = lastError
@@ -165,31 +192,31 @@ export class StorageEngine {
     return this.enqueue(key.name, async () => {
       let lastError: unknown
       for (let attempt = 0; attempt < 3; attempt++) {
-        const current = await this.freshEnvelope(key)
-        if (current.appliedOperationIds.includes(mutationId)) return clone(current.data)
-        const data = update(clone(current.data))
+        let current: StoredEnvelope<T>
+        try { current = await this.freshEnvelope(key) }
+        catch (error) {
+          lastError = error
+          if (attempt < 2) await sleep(40 * (attempt + 1))
+          continue
+        }
+        if (current.appliedOperationIds.includes(mutationId)) return cloneStorageValue(current.data)
+        const data = update(cloneStorageValue(current.data))
         const next = encodeStoredValue(data, {
           revision: current.revision + 1,
           transactionId: transactionId(),
           updatedAt: Date.now(),
           appliedOperationIds: compactOperationIds([...current.appliedOperationIds, mutationId]),
         })
-        try { await this.adapter.write(key.name, next) }
-        catch (error) { lastError = error; continue }
         let verified: StoredEnvelope<T>
-        try { verified = await this.freshEnvelope(key) }
+        try { verified = await this.writeAndVerify(key, next) }
         catch (error) { lastError = error; continue }
-        if (verified.revision !== next.revision || verified.transactionId !== next.transactionId || verified.checksum !== next.checksum) {
-          lastError = new Error('Concurrent storage write detected')
-          continue
-        }
         this.publishCache(key.name, verified, true)
-        const event = { key: key.name, envelope: clone(verified) }
+        const event = { key: key.name, envelope: cloneStorageValue(verified) }
         for (const listener of this.listeners) {
           try { listener(event) }
           catch (error) { console.error(`[Storage commit listener] ${key.name}`, error) }
         }
-        return clone(verified.data)
+        return cloneStorageValue(verified.data)
       }
       const error = new Error(`Storage verification failed for ${key.name}`) as Error & { cause?: unknown }
       error.cause = lastError
@@ -211,24 +238,26 @@ export class StorageEngine {
     return this.enqueue(key.name, async () => {
       let lastError: unknown
       for (let attempt = 0; attempt < 3; attempt++) {
-        const current = await this.freshEnvelope(key)
+        let current: StoredEnvelope<T>
+        try { current = await this.freshEnvelope(key) }
+        catch (error) {
+          lastError = error
+          if (attempt < 2) await sleep(40 * (attempt + 1))
+          continue
+        }
         const retained = current.appliedOperationIds.filter(id => !remove.has(id))
-        if (retained.length === current.appliedOperationIds.length) return clone(current.data)
+        if (retained.length === current.appliedOperationIds.length) return cloneStorageValue(current.data)
         const next = encodeStoredValue(current.data, {
           revision: current.revision + 1,
           transactionId: transactionId(),
           updatedAt: Date.now(),
           appliedOperationIds: retained,
         })
-        try { await this.adapter.write(key.name, next) }
+        let verified: StoredEnvelope<T>
+        try { verified = await this.writeAndVerify(key, next) }
         catch (error) { lastError = error; continue }
-        const verified = await this.freshEnvelope(key).catch(error => { lastError = error; return null })
-        if (verified?.transactionId !== next.transactionId || verified.checksum !== next.checksum) {
-          lastError = new Error('Concurrent storage write detected')
-          continue
-        }
         this.publishCache(key.name, verified, true)
-        return clone(verified.data)
+        return cloneStorageValue(verified.data)
       }
       const error = new Error(`Storage operation ID cleanup failed for ${key.name}`) as Error & { cause?: unknown }
       error.cause = lastError

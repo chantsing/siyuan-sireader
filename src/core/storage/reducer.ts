@@ -1,5 +1,5 @@
 import type { OperationResult, StorageOperation } from './types'
-import { compactOperationIds } from './types'
+import { cloneStorageValue, compactOperationIds } from './types'
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
@@ -37,12 +37,12 @@ const updateAtPath = (root: unknown, path: string[], update: (value: unknown) =>
 const applyOperation = (data: unknown, operation: StorageOperation): unknown => {
   switch (operation.type) {
     case 'set':
-      return updateAtPath(data, operation.path, () => structuredClone(operation.value))
+      return updateAtPath(data, operation.path, () => cloneStorageValue(operation.value))
     case 'patch':
       return updateAtPath(data, operation.path, current => {
-        if (current === undefined) return structuredClone(operation.value)
+        if (current === undefined) return cloneStorageValue(operation.value)
         if (!isObject(current)) throw new TypeError(`Patch target is not an object: ${operation.path.join('.')}`)
-        return { ...current, ...structuredClone(operation.value) }
+        return { ...current, ...cloneStorageValue(operation.value) }
       }, true)
     case 'upsert':
       return updateAtPath(data, operation.path, current => {
@@ -51,7 +51,7 @@ const applyOperation = (data: unknown, operation: StorageOperation): unknown => 
         if (keyValue === undefined) throw new TypeError(`Upsert value is missing key: ${operation.itemKey}`)
         const index = current.findIndex(item => itemValue(item, operation.itemKey) === keyValue)
         const clone = current.slice()
-        const value = structuredClone(operation.value)
+        const value = cloneStorageValue(operation.value)
         if (index < 0) clone.push(value)
         else clone[index] = value
         return clone
