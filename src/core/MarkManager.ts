@@ -4,9 +4,8 @@
 import type{Plugin}from'siyuan'
 import{Overlayer}from'foliate-js/overlayer.js'
 import { getDatabase, type Annotation, type AnnotationType } from './database'
-import { flushStorage } from './storage/engine'
-import { trackPending } from './storage/pending'
-import { cloneStorageValue } from './storage/types'
+import { flushStorage, cloneStorageValue } from './storage'
+import { trackPending } from './storage'
 const compactNumber = (value: number, digits = 1) => {
   const factor = 10 ** digits
   return Math.round(value * factor) / factor

@@ -1,8 +1,9 @@
 ﻿/**
  * 书架管理 - 极简架构
  */
-import { getDatabase } from './database';
-import { loadBookFile, materializeNativeFile, normalizeBookTitle, normalizeNativePath, normalizeSiyuanCloudUrl, readDirEntries, removeManagedFile, saveBookFile, saveCoverFile, saveOptionalCover, SIYUAN_CLOUD_BASE, toFileUrl } from './bookStore';
+import { getDatabase, type Book } from './database';
+import { loadBookFile, materializeNativeFile, normalizeBookTitle, normalizeNativePath, normalizeSiyuanCloudUrl, readDirEntries, removeManagedFile, saveBookFile, saveCoverFile, saveOptionalCover, SIYUAN_CLOUD_BASE, toFileUrl } from './storage';
+import { diagnosticLog } from './diagnostics';
 
 export type BookFormat = 'pdf' | 'epub' | 'mobi' | 'azw3' | 'txt';
 export type BookStatus = 'unread' | 'reading' | 'finished';
@@ -137,8 +138,12 @@ export class BookshelfManager {
   private db = async () => { await this.init(); return getDatabase(); };
   private async useDb<T>(task: (db: Awaited<ReturnType<typeof getDatabase>>) => Promise<T>) { return task(await this.db()); }
   private saveBookData = async (book: any, notify = true) => {
-    await this.useDb(db => db.saveBook(book));
-    if (notify) this.notify();
+    diagnosticLog('info', 'bookshelf.save.start', { format: book?.format, size: Number(book?.size || 0), hasPath: !!book?.path, hasDataId: !!book?.dataId });
+    try {
+      await this.useDb(db => db.saveBook(book));
+      diagnosticLog('info', 'bookshelf.save.done', { format: book?.format });
+      if (notify) this.notify();
+    } catch (error) { diagnosticLog('error', 'bookshelf.save.failed', { format: book?.format, error }); throw error }
   };
   private withBook = async <T>(url: string, task: (book: any) => Promise<T>, fallback: T) => {
     const book = await this.getBook(url);
@@ -202,7 +207,6 @@ export class BookshelfManager {
   private saveCover = (blob: Blob | undefined, url: string) => blob ? Promise.race([saveOptionalCover(blob, url), new Promise<undefined>(resolve => setTimeout(resolve, 8000))]).catch(() => undefined) : undefined
   
   async init() { if (this.ready) return; await getDatabase(); this.ready = true; }
-  async reload() { await (await getDatabase()).reload(); this.ready = true; }
   async getBooks() { return this.useDb(db => db.getBooks()); }
   async getBook(url: string) { return this.useDb(async db => { for (const key of bookUrlCandidates(url)) { const book = await db.getBook(key); if (book) return book } return null }); }
   async getSetting<T = any>(key: string, fallback?: T) { const value = await this.useDb(db => db.getSetting<T>(key)); return (value ?? fallback) as T; }
@@ -217,10 +221,14 @@ export class BookshelfManager {
   hasBook = async (url: string) => !!(await this.getBook(url))
   
   async addBook(info: any) {
-    if (!info.url) throw new Error('URL required');
-    if (await this.useDb(db => db.getBook(info.url))) throw new Error('已存在');
-    const now = Date.now();
-    await this.saveBookData(this.buildBookPayload({ ...info, added: now, read: now, finished: 0 }));
+    diagnosticLog('info', 'bookshelf.add.start', { format: info?.format, size: Number(info?.size || 0), hasPath: !!info?.path, hasDataId: !!info?.dataId });
+    try {
+      if (!info.url) throw new Error('URL required');
+      if (await this.useDb(db => db.getBook(info.url))) throw new Error('已存在');
+      const now = Date.now();
+      await this.saveBookData(this.buildBookPayload({ ...info, added: now, read: now, finished: 0 }));
+      diagnosticLog('info', 'bookshelf.add.done', { format: info?.format });
+    } catch (error) { diagnosticLog('error', 'bookshelf.add.failed', { format: info?.format, error }); throw error }
   }
 
   async updateBook(url: string, updates: any) { return this.mutateBook(url, () => updates); }
@@ -244,25 +252,28 @@ export class BookshelfManager {
   }
   async getBookshelfState(opt: BookshelfStateOptions = {}) {
     const { currentGroup = null, keyword = '', sortBy = 'time', reverse = false, status, rating, formats, tags } = opt
-    if (currentGroup) {
-      const group = (await this.getGroups()).find(g => g.id === currentGroup)
-      if (group?.type === 'smart') return { books: await this.getGroupBooks(currentGroup), stats: await this.getStats() }
-    }
-    return { books: await this.filterBooks({ groups: currentGroup ? [currentGroup] : (!keyword ? [] : undefined), sortBy, reverse, status: status?.length ? status : undefined, rating: rating || undefined, formats: formats?.length ? formats : undefined, tags: tags?.length ? tags : undefined }), stats: await this.getStats() }
+    const db = await this.db()
+    const [source, groups] = await Promise.all([db.getBooks(), this.getGroups()])
+    const group = groups.find(g => g.id === currentGroup)
+    let books = await db.filterBooks({ sortBy, reverse, status, rating, formats, tags }, source)
+    if (group) books = books.filter(book => this.matchGroup(book, group))
+    else if (currentGroup) books = books.filter(book => book.groups?.includes(currentGroup))
+    const query = keyword.trim().toLowerCase()
+    if (query) books = books.filter(book => [book.title, book.author, ...(book.tags || [])].some(value => value?.toLowerCase().includes(query)))
+    const counts = Object.fromEntries(groups.map(group => [group.id, source.filter(book => this.matchGroup(book, group)).length]))
+    return { books, groups, counts, tags: await db.getAllTags(source), stats: await db.getStats(source, false) }
   }
   
-  async getStats(): Promise<BookStats> { return { total: (await this.getBooks()).length, ...await this.useDb(db => db.getStats()) }; }
+  async getStats(books?: Book[]): Promise<BookStats> { return this.useDb(db => db.getStats(books)); }
   async getTodayReading() { return this.useDb(db => db.getTodayReading()); }
   async getDailyReading(year: number, month?: number) { return this.useDb(db => db.getDailyReading(year, month)); }
   
   // ===== 进度管理 =====
   // 更新阅读进度
-  async updateProgress(url:string,progress:number,chapter?:number,cfi?:string){
-    const b=await this.getBook(url);if(!b)return false
-    const p=Math.max(0,Math.min(100,progress)),now=Date.now()
-    // 状态逻辑：手动标注为finished后不再自动更新状态
-    const s=b.status==='finished'?'finished':p>0&&p<100?'reading':p===100?'finished':'unread'
-    return this.updateBook(url,{progress:p,status:s,read:now,pos:{...b.pos,chapter:chapter??b.pos.chapter,timestamp:now,cfi},...(chapter!==undefined&&{chapter}),...(p===100&&{finished:now})})
+  async updateProgress(url:string,progress:number,chapter?:number,cfi?:string,pdf?:{key:string;totalPages:number}){
+    const changed = await this.useDb(db => db.updateProgress(url, progress, chapter, cfi, pdf))
+    if (changed) this.notify()
+    return changed
   }
   
   // 自动更新进度（防抖）
@@ -300,6 +311,7 @@ export class BookshelfManager {
   };
   
   getAllTags = async () => this.useDb(db => db.getAllTags());
+  getSettings = async () => this.useDb(db => db.getSettings());
   
   // ===== 分组管理 =====
   private sortGroups = (groups: GroupConfig[]) => groups.map((group, i) => ({ ...group, order: Number.isFinite(group.order) ? group.order : i })).sort((a, b) => a.order - b.order)
@@ -490,7 +502,7 @@ export class BookshelfManager {
     return this.savePreparedBook({ url, path: assetPath, format, meta, name, cover: await this.saveCover(meta.coverBlob, url), dataId, fingerprint })
   }
   
-  // 对阅读器保留统一入口，底层实现已下沉到 bookStore。
+  // 对阅读器保留统一入口，底层实现已下沉到 storage。
   async loadFile(path: string): Promise<File> { return loadBookFile(path) }
   
   private buildMetadata = buildBookMetadata

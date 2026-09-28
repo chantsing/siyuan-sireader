@@ -372,7 +372,7 @@ export const showLinkedMarkPreview = (parsed: { bookUrl: string; cfi: string; id
       const bookUrl = book?.url || parsed.bookUrl
       let mark: any = null
       if (pdfPageFromCfi(parsed.cfi)) {
-        const stored = await (await import('@/core/bookStore')).readEmbedPdfAnnotations(book?.dataId || bookUrl).catch(() => []) || []
+        const stored = await (await import('@/core/storage')).readEmbedPdfAnnotations(book?.dataId || bookUrl).catch(() => []) || []
         mark = embedPdfTransferMark(stored, parsed, book)
       } else {
         const annotations = await (await (await import('@/core/database')).getDatabase()).getAnnotations(bookUrl)

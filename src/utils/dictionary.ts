@@ -1,6 +1,6 @@
 import type { Plugin } from 'siyuan'
 import { getFile } from '@/api'
-import { removeManagedFileTransactionally, writeManagedFile } from '@/core/storage/files'
+import { removeManagedFileTransactionally, writeManagedFile } from '@/core/storage'
 
 const BASE_URL='https://dictionary.cambridge.org'
 const MXNZP_ID='guuhjloujpkfenn1',MXNZP_SECRET='izYrfPlqfRMxrXHUCf5vEbD4WSxnjSow'

@@ -90,7 +90,7 @@ export class OfflineTTSManager {
     while (true) {
       try { tar = bz.decompress(archive, length); break } catch (error) { if (length > archive.length * 128) throw error; length *= 2 }
     }
-    const { writeManagedFile } = await import('@/core/storage/files')
+    const { writeManagedFile } = await import('@/core/storage')
     const files = tarEntries(tar!)
     for (const file of files) {
       const name = file.name.replace(/^\.?\/?[^/]+\//, '')

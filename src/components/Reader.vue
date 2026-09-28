@@ -51,7 +51,7 @@
   <MarkPanel v-if="!isEmbedPdfMode" ref="markPanelRef" :root="containerRef" :book-url="getBookUrl()" :manager="markManager" :reader="reader" :current-view="currentView" :read-only="false" :i18n="i18n" :tts-controller="ttsController" :tts-config="currentSettings?.tts" :quick-mark-mode="quickMarkMode" :quick-mark-color="COLORS[quickMarkColor].color" :quick-mark-style="quickMarkStyle" :can="can" :show-upgrade="showUpgrade" @copy="(text,sel)=>handleCopy({text,cfi:sel?.cfi,page:sel?.page,section:sel?.section,rects:sel?.rects,textOffset:sel?.textOffset})" @dict="handleOpenDict" @copy-mark-only="handleCopyToClipboard" />
 </template>
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { Menu, showMessage } from 'siyuan'
 import type { Plugin } from 'siyuan'
 import type { ReaderSettings } from '@/composables/useSetting'
@@ -71,14 +71,14 @@ import DockShell from './ui/DockShell.vue'
 import { gotoEPUB, pdfPageFromCfi } from '@/utils/jump'
 import { copyMark as copyMarkUtil } from '@/utils/copy'
 import { capturePdfAnnotationImage, isPdfImageAnnotation, taskToPromise } from '@/utils/embedPdfActions'
-import { flushStorage } from '@/core/storage/engine'
-import { trackPending } from '@/core/storage/pending'
+import { cloneStorageValue } from '@/core/storage'
+import { diagnosticLog } from '@/core/diagnostics'
+import { trackPending } from '@/core/storage'
 import { isUserEmbedPdfAnnotation } from '@/core/dataMigration'
 import { createKeyboardHandler, setupEpubKeyboard, shouldHandleReaderKeydown } from '@/utils/keyboard'
 import { getTTSController } from '@/services/TTSPlayer'
 import { useLicense } from '@/core/license'
-import { upsertEmbedPdfAnnotation } from '@/core/bookStore'
-import { cloneStorageValue } from '@/core/storage/types'
+import { upsertEmbedPdfAnnotation } from '@/core/storage'
 const props = defineProps<{ file?: File; plugin: Plugin; settings?: ReaderSettings; url?: string; blockId?: string; bookInfo?: any; onReaderReady?: (r: FoliateReader) => void; i18n?: any }>()
 const i18n = computed(() => props.i18n || {})
 const { can, showUpgrade } = useLicense(i18n.value)
@@ -192,7 +192,11 @@ const embedPdfMark=(item:any)=>{
 }
 const uniquePdfItems=(items:any[]=[])=>[...new Map(items.map((item:any)=>[(item.annotation||item)?.id,item]).filter(([id])=>id)).values()]
 const compact=(value:Record<string,any>)=>Object.fromEntries(Object.entries(value).filter(([,v])=>v!==undefined))
-const readEmbedPdfMarkItems=async(scope:any)=>scope?.getAnnotations?.()?.map((item:any)=>({annotation:item.object})).filter((item:any)=>item.annotation)||await scope?.exportAnnotations?.().toPromise().catch(()=>[])||[]
+const readEmbedPdfMarkItems=async(scope:any)=>{
+  const tracked=scope?.getAnnotations?.()
+  if(Array.isArray(tracked))return tracked.map((item:any)=>({annotation:item.object})).filter((item:any)=>item.annotation)
+  try{return await taskToPromise<any[]>(scope?.exportAnnotations?.())||[]}catch{return []}
+}
 const loadEmbedPdfMarks=async()=>{
   if(!embedPdfAnnotations.value)return
   embedPdfMarks.value=uniquePdfItems(await readEmbedPdfMarkItems(embedPdfAnnotations.value)).filter(isUserEmbedPdfAnnotation).map(embedPdfMark)
@@ -282,7 +286,7 @@ const handleEmbedPdfReady=(registry:any)=>{
   const emitPage=(page:number)=>window.dispatchEvent(new CustomEvent('sireader:pdf-page',{detail:{bookUrl:getBookUrl(),page}}))
   const offPage=scroll.onPageChange?.((event:any)=>event.documentId===documentId&&emitPage(event.pageNumber))
   const rememberNative=()=>embedPdfNativeIds=new Set(embedPdfAnnotations.value?.getAnnotations?.().map((item:any)=>item.object?.id).filter(Boolean)||[])
-  const offAnno=embedPdfAnnotations.value.onAnnotationEvent?.((event:any)=>{if(event?.type==='loaded')rememberNative();if(['loaded','create','update','delete'].includes(event?.type))requestAnimationFrame(()=>void loadEmbedPdfMarks())})
+  const offAnno=embedPdfAnnotations.value.onAnnotationEvent?.((event:any)=>{if(event?.type==='loaded')rememberNative();if(event?.type==='loaded'||event.committed===true)requestAnimationFrame(()=>void loadEmbedPdfMarks())})
   cleanupEmbedPdfEvents?.()
   cleanupEmbedPdfEvents=()=>{offPage?.();offAnno?.()}
   emitPage(embedPdfPages.value?.getCurrentPage?.()||1)
@@ -500,11 +504,16 @@ const resize=()=>{
 }
 defineExpose({ resize })
 onMounted(()=>{init();containerRef.value?.focus();events.forEach(([e,h])=>window.addEventListener(e,h as any));window.addEventListener('keydown',handleKeydown);window.addEventListener('unhandledrejection',suppressError);window.addEventListener('blur',handleWindowBlur);window.addEventListener('focus',handleWindowFocus);document.addEventListener('visibilitychange',handleVisibilityChange);setupTabObserver();const c=containerRef.value;c&&(c.addEventListener('focusin',handleFocusIn),c.addEventListener('focusout',handleFocusOut));bindTouchPaging(c);bindTouchPaging(viewerContainerRef.value);window.dispatchEvent(new CustomEvent('reader:open',{detail:{bookUrl:getBookUrl()}}));syncReaderFocus(true)})
-onUnmounted(()=>{void trackPending((async()=>{
+onBeforeUnmount(()=>{void trackPending((async()=>{
   const view=currentView.value,c=containerRef.value
-  syncReaderFocus(false);window.dispatchEvent(new CustomEvent('reader:close'));await Promise.resolve(savePosition());await embedPdfReaderRef.value?.flushAnnotations?.().catch(()=>undefined);await flushStorage().catch(error=>console.error('[Reader storage flush]',error));readerSplashRef.value?.cleanup();clearActiveReader(view);closeMediaMenu()
+  syncReaderFocus(false);window.dispatchEvent(new CustomEvent('reader:close'))
+  const saving = Promise.resolve(savePosition())
+  const closing = reader?.destroy()
+  const closingTasks = Promise.allSettled([saving, closing, embedPdfReaderRef.value?.flushAnnotations?.()])
+  readerSplashRef.value?.cleanup();clearActiveReader(view);closeMediaMenu()
   events.forEach(([e,h])=>window.removeEventListener(e,h as any));window.removeEventListener('keydown',handleKeydown);window.removeEventListener('unhandledrejection',suppressError);window.removeEventListener('blur',handleWindowBlur);window.removeEventListener('focus',handleWindowFocus);document.removeEventListener('visibilitychange',handleVisibilityChange);(c as any)?.__observer?.disconnect();c&&(c.removeEventListener('focusin',handleFocusIn),c.removeEventListener('focusout',handleFocusOut));unbindTouchPaging()
-  try{await reader?.destroy();view?.cleanup?.()}catch{}
+  for (const result of await closingTasks) if (result.status === 'rejected') diagnosticLog('error', 'reader.close.failed', { error: result.reason })
+  try{view?.cleanup?.()}catch{}
   await markManager.value?.destroy()
   const{bookshelfManager}=await import('@/core/bookshelf');await bookshelfManager.cleanup();await bookshelfManager.flush()
   setTimeout(()=>viewerContainerRef.value&&(viewerContainerRef.value.innerHTML=''),50)
@@ -513,7 +522,7 @@ onUnmounted(()=>{void trackPending((async()=>{
 <style scoped lang="scss">
 .reader-container{position:relative;width:100%;height:100%;outline:none;user-select:text;-webkit-user-select:text;isolation:isolate;display:flex;flex-direction:column;background:var(--b3-theme-background)}
 .reader-overlay{position:absolute;inset:0;z-index:999;background:transparent}
-.viewer-container{flex:1;position:relative;overflow:hidden;background:var(--b3-theme-background)}
+.viewer-container{flex:1;min-width:0;min-height:0;position:relative;overflow:hidden;background:var(--b3-theme-background)}
 .reader-progress{position:absolute;left:0;right:0;bottom:0;height:2px;z-index:1000;pointer-events:none;background:color-mix(in srgb,var(--b3-theme-primary) 14%,transparent);overflow:hidden;span{display:block;width:100%;height:100%;transform-origin:left center;background:var(--b3-theme-primary);transition:transform .18s ease-out}}
 .reader-loading{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:16px;color:var(--b3-theme-on-background);z-index:10;pointer-events:none}
 .spinner{width:48px;height:48px;border:4px solid var(--b3-theme-primary-lighter);border-top-color:var(--b3-theme-primary);border-radius:50%;animation:spin 1s linear infinite}

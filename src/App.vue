@@ -27,7 +27,7 @@ import Weread from '@/weread/Weread.vue'
 import { getTTSController } from '@/services/TTSPlayer'
 import { bookshelfManager } from '@/core/bookshelf'
 import { getOrAddAssetBook, openOnlineReaderTab, openOrActivateBook, openReaderTab } from '@/utils/bookOpen'
-import { normalizeSiyuanCloudUrl } from '@/core/bookStore'
+import { normalizeSiyuanCloudUrl } from '@/core/storage'
 
 const plugin = usePlugin()
 const { settings, isLoaded } = useSetting(plugin)

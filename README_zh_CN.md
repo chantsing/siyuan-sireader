@@ -7,7 +7,7 @@
 让思源笔记变身专业阅读器，支持 EPUB/PDF/TXT/在线小说  
 专业电子书阅读器，支持 EPUB/PDF/MOBI/TXT/在线小说；PDF 支持高亮、墨迹、形状、表单、印章、签名、图片、截图、搜索、打印、导出和回链，并提供标注笔记、词典、翻译、主题与书架管理
 
-[![Version](https://img.shields.io/badge/version-2.3.4-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-2.3.6-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,28 @@
 ---
 
 ## 📝 最新更新
+
+### v2.3.6（2026.9.29）
+
+### 修复
+
+- 修复新旧版本切换、设备同步后出现 `Storage checksum mismatch`、书籍信息或 PDF 批注不显示的问题；移除旧校验和、预写日志和内存缓存，统一通过思源文件 API 直接读写。
+- 增加一次性旧数据恢复：仅处理当前书架中的书籍，从旧记录路径和迁移备份补充缺失内容；同 ID 冲突保留当前数据，写入前保存原记录，成功后不再重复恢复。
+- 修复自动恢复遇到旧记录异常时中断插件启动，导致顶部按钮和侧栏不显示的问题；兼容可识别的无版本记录，其余异常按书隔离并记录日志。
+- 修复创建分组、编辑书籍信息和处理外部 PDF 批注时触发 `DataCloneError` 的问题。
+- 修复导入数据或书籍后提示 `Managed file size mismatch: got unknown` 的问题。
+- 修复本地文件、网盘链接和跨设备路径变化后 PDF 无法关联原有记录的问题，兼容稳定数据 ID 与旧 Book URL。
+- 修复 PDF 批注被旧快照覆盖、删除后重新出现、关闭时最后一次修改丢失，以及进度与批注并发保存互相覆盖的问题。
+- 修复思源数据变更通知触发重复恢复或写入的问题；同步通知现在只刷新界面。
+
+### 优化
+
+- 将 EmbedPDF 从 `2.14.4` 升级到 `2.15.1`，加入可编程文本选区能力；修复多区域重叠遮蔽遗漏文本或误删相邻文本，以及竖排文本、嵌套表单和残留替代文本处理不完整的问题。
+- 使用 EmbedPDF 标准 `importAnnotations()` / `exportAnnotations()` 和提交事件重构批注接入；批注按 ID 顺序持久化，导入时不重复保存。
+- 完整保存印章等批注的二进制上下文，区分 PDF 原生批注与插件批注；关闭前排空批注和进度任务。
+- 优化大型 PDF 首屏显示与阅读进度恢复，降低打开时的白屏等待、卡顿和初始页码覆盖风险。
+- 精简存储层，删除重复缓存、WAL、校验封装和无效文件，保留必要的顺序队列、跨窗口锁与结构校验。
+- 完善诊断日志，覆盖存储、迁移、恢复、同步和 PDF 批注流程，并记录耗时、来源与恢复差异。
 
 ### v2.3.4（2026.9.27）
 

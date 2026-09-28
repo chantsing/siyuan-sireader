@@ -9,6 +9,7 @@ import { usePlugin } from '@/main'
 import { useLicense } from '@/core/license'
 import { translators } from '@/services/translator'
 import { OFFLINE_TTS_PACK, OFFLINE_TTS_VOICE, OfflineTTSManager } from '@/services/OfflineTTS'
+import { exportDiagnostics } from '@/core/diagnostics'
 
 const props = defineProps<{modelValue:ReaderSettings;i18n:any;onSave:()=>Promise<void>}>()
 const emit = defineEmits<{'update:modelValue':[value:ReaderSettings]}>()
@@ -230,6 +231,7 @@ const clearBgImage = async () => {
   settings.value.backgroundImage = ''
   await save()
 }
+const exportDiagnosticLog = () => { exportDiagnostics({ source: 'settings' }); showMessage('诊断日志已导出', 2000, 'info') }
 const bgNoneRows = computed(() => [{
   key: 'bg-none',
   text: props.i18n.none || '无',
@@ -426,8 +428,10 @@ onUnmounted(() => window.removeEventListener('sireaderSettingsUpdated', syncAnno
               </div>
             </li>
             <li v-if="qr" class="b3-list-item sr-license-qr">
-              <div v-if="!qr.data" class="sr-license-qr-loading">正在获取二维码...</div>
-              <img v-else :src="qr.data" alt="思阅会员绑定小程序码">
+              <div class="sr-license-qr-frame">
+                <div v-if="!qr.data" class="sr-license-qr-loading">正在获取二维码...</div>
+                <img v-else :src="qr.data" alt="思阅会员绑定小程序码">
+              </div>
               <span class="ft__secondary">{{ license ? '扫码后自动恢复思阅会员权益' : '扫码后自动绑定并同步思阅会员权益' }}</span>
               <button class="b3-button b3-button--text" @click.stop="cancelLicenseBind">取消</button>
             </li>
@@ -576,6 +580,7 @@ onUnmounted(() => window.removeEventListener('sireaderSettingsUpdated', syncAnno
           <button class="b3-button" @click="handleReset">{{ i18n.confirm || '确认' }}</button>
         </template>
         <button v-else class="b3-button" @click="handleReset">{{ i18n.resetDefault || '恢复默认' }}</button>
+        <button class="b3-button b3-button--outline" @click="exportDiagnosticLog">导出诊断日志</button>
       </div>
     </div>
   </div>
@@ -613,7 +618,7 @@ onUnmounted(() => window.removeEventListener('sireaderSettingsUpdated', syncAnno
 .sr-license-actions .b3-button{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 .sr-license-actions svg{width:14px;height:14px}
 .sr-license-qr{display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px 12px 12px!important}
-.sr-license-qr img,.sr-license-qr-loading{display:block;width:220px;height:220px;border-radius:12px}.sr-license-qr-loading{display:flex;align-items:center;justify-content:center;color:var(--b3-theme-on-surface-light)}
+.sr-license-qr-frame{display:flex;align-items:center;justify-content:center;width:220px;height:220px;overflow:hidden;border-radius:12px;background:var(--b3-theme-surface)}.sr-license-qr-frame img,.sr-license-qr-loading{display:block;width:100%;height:100%;object-fit:contain}.sr-license-qr-loading{display:flex;align-items:center;justify-content:center;color:var(--b3-theme-on-surface-light)}
 .bs-tree :deep(input[type="color"].sr-control){height:24px;padding:0;border:none;background:transparent}
 .license-highlight{animation:license-pulse 2s ease}
 @keyframes license-pulse {

@@ -4,8 +4,7 @@ import { showMessage, fetchSyncPost } from 'siyuan'
 import type { Plugin } from 'siyuan'
 import { readDir, searchDocs as apiSearchDocs } from '@/api'
 import { bookshelfManager } from '@/core/bookshelf'
-import { removeManagedFileTransactionally, writeManagedFile } from '@/core/storage/files'
-import { diffLeaves } from '@/core/storage/types'
+import { removeManagedFileTransactionally, writeManagedFile, diffLeaves } from '@/core/storage'
 
 export type PageTurnStyle = 'push' | 'slide' | 'curl'
 export type ViewMode = 'single' | 'double' | 'scroll'
@@ -182,14 +181,16 @@ export const setCustomBackgroundFromInput = async (settings: ReaderSettings, e: 
 }
 export const licenseIcon = (type?: string) => ({ lifetime: '#iconLicenseLifetime', annual: '#iconLicenseAnnual', monthly: '#iconLicenseMonthly', trial: '#iconLicenseTrial' } as Record<string, string>)[type || ''] || '#iconLicenseTrial'
 export const licenseTypeText = (type: string | undefined, i18n: any) => {
+  if (type === 'free') return i18n?.basicVersion || '基础版'
   const key = type === 'lifetime' ? 'lifetimeVersion' : type === 'annual' ? 'annualVersion' : type === 'monthly' ? 'monthlyVersion' : 'trialVersion'
   return i18n?.[key] || ({ lifetime: '永久会员', annual: '年付会员', monthly: '月付会员', trial: '体验会员' } as Record<string, string>)[type || ''] || '会员'
 }
 export const licenseAvatar = (avatar = '') => avatar || ((globalThis as any)?.window?.siyuan?.user?.userAvatarURL || '')
 export const licenseLines = (license: any) => license ? [
   `${license.userName || '思源用户'} · ID ${license.userId}`,
+  license.type === 'free' ? '开通会员后请点击“恢复权益”同步会员状态' : '',
   license.expiresAt > 0 ? `有效期至 ${new Date(license.expiresAt).toLocaleDateString()}` : '永久有效',
-] : ['扫码绑定后自动同步会员权益']
+] .filter(Boolean) : ['扫码绑定后自动同步会员权益']
 export const getLicenseMedia = (license: any, avatar: string, i18n: any) => ({
   avatar: licenseAvatar(avatar),
   icon: licenseIcon(license?.type),

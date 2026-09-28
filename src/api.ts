@@ -400,12 +400,16 @@ export async function renameFile(path: string, newPath: string) {
   })
 }
 
-export async function readDir(path: string): Promise<IResReadDir> {
+export async function readDir(path: string, strict = false): Promise<IResReadDir> {
   let data = {
     path: path,
   };
   let url = "/api/file/readDir";
-  return request(url, data);
+  if (!strict) return request(url, data);
+  const response = await fetchSyncPost(url, data);
+  if (response.code === 404) return [] as any;
+  if (response.code !== 0) throw new Error(response.msg || `Cannot list directory: ${path}`);
+  return response.data;
 }
 
 // **************************************** Export ****************************************

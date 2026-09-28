@@ -40,7 +40,7 @@ export interface PageScriptToolbarItem {
   menu?: PageScriptMenuItem[]
 }
 
-import { storageEngine, type StorageKey } from './storage/engine'
+import { storageEngine, type StorageKey } from './storage'
 
 type PageScriptSettings = Record<string, Record<string, unknown>>
 const pageScriptSettingsKey: StorageKey<PageScriptSettings> = { name: 'page-scripts.json', defaultValue: () => ({}) }

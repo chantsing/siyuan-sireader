@@ -5,9 +5,9 @@ import { initDictModule } from '@/utils/dictionary'
 import { mountReaderIconSprite, registerReaderIcons } from '@/utils/icon'
 import { initMobile } from '@/utils/mobile'
 import { setPlugin } from '@/utils/copy'
-import { initializeStorage } from '@/core/storage/migration'
-import { flushStorage, storageEngine } from '@/core/storage/engine'
-import { drainPendingTasks, trackPending } from '@/core/storage/pending'
+import { flushStorage, storageEngine, recoverBackupRecords } from '@/core/storage'
+import { drainPendingTasks, trackPending } from '@/core/storage'
+import { installDiagnostics, diagnosticLog, disposeDiagnostics } from '@/core/diagnostics'
 
 let plugin: Plugin | null = null
 let app: any = null
@@ -22,8 +22,12 @@ export const setOpenSettingHandler = (handler: (openLicense?: boolean) => void) 
 
 export async function init(p: Plugin) {
   usePlugin(p)
+  storageEngine.startAccepting()
   setPlugin(p)
-  await initializeStorage()
+  installDiagnostics({ plugin: p.name, version: (p as any).version || '', frontend: (p as any).platform || '' })
+  diagnosticLog('info', 'plugin.init.start', { plugin: p.name })
+  // Finish recovery before mounting readers; sync notifications never trigger it.
+  await recoverBackupRecords()
   initDictModule(p)
   initMobile(p)
 
@@ -35,10 +39,12 @@ export async function init(p: Plugin) {
   registerReaderIcons(p)
   app = createApp(App)
   app.mount(div)
+  diagnosticLog('info', 'plugin.init.done', { plugin: p.name })
 }
 
 export async function destroy() {
   if (!plugin) return
+  diagnosticLog('info', 'plugin.destroy.start', { plugin: plugin.name })
   const errors: unknown[] = []
   for (const callback of cleanupCallbacks) trackPending(Promise.resolve().then(callback))
   cleanupCallbacks = []
@@ -51,6 +57,8 @@ export async function destroy() {
   storageEngine.stopAccepting()
   document.getElementById(plugin.name)?.remove()
   plugin = null
+  diagnosticLog('info', 'plugin.destroy.done', { errors: errors.length })
+  disposeDiagnostics()
   if (errors.length === 1) throw errors[0]
   if (errors.length > 1) {
     const error = new Error(`SiReader cleanup failed (${errors.length} errors)`) as Error & { errors?: unknown[] }

@@ -1,8 +1,80 @@
+diff --git a/fixed-layout.js b/fixed-layout.js
+index ce0185429b714bee7dbec7c41db1f451382e78a8..99af6c52fe54d053c6f9866acb6a810f672fce38 100644
+--- a/fixed-layout.js
++++ b/fixed-layout.js
+@@ -1,4 +1,5 @@
+ import 'construct-style-sheets-polyfill'
++import { observeResize } from './resize-observer.js'
+ 
+ const parseViewport = str => str
+     ?.split(/[,;\s]/) // NOTE: technically, only the comma is valid
+@@ -187,7 +188,7 @@ export const applyOverlayerViewBox = (frame, overlayer) => {
+ export class FixedLayout extends HTMLElement {
+     static observedAttributes = ['zoom', 'scale-factor', 'spread', 'flow', 'scroll-gap']
+     #root = this.attachShadow({ mode: 'open' })
+-    #observer = new ResizeObserver(() => this.#render())
++    #observer = observeResize(() => this.#render())
+     #spreads
+     #index = -1
+     defaultViewport
+@@ -1609,7 +1610,7 @@ export class FixedLayout extends HTMLElement {
+         return this.#scrollMode ? 'height' : 'width'
+     }
+     destroy() {
+-        this.#observer.unobserve(this)
++        this.#observer.disconnect()
+         if (this.#scrollMode) {
+             this.removeEventListener('scroll', this.#handleScrollEvent)
+             if (this.#scrollObserver) {
 diff --git a/paginator.js b/paginator.js
-index 8c3f99c855e50cbe81238e36258c3fe4d5e4ab28..cd5931bf4714cae7fae5d193ce50305b235a442e 100644
+index 8c3f99c855e50cbe81238e36258c3fe4d5e4ab28..2ecc88615dfda3ec620403f93bff4441138630f9 100644
 --- a/paginator.js
 +++ b/paginator.js
-@@ -1486,8 +1486,7 @@ export class Paginator extends HTMLElement {
+@@ -1,3 +1,5 @@
++import { observeResize } from './resize-observer.js'
++
+ const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
+ 
+ const debounce = (f, wait, immediate) => {
+@@ -566,7 +568,8 @@ const setStylesImportant = (el, styles) => {
+ }
+ 
+ class View {
+-    #observer = new ResizeObserver(() => this.expand())
++    #destroyed = false
++    #observer = observeResize(() => this.expand())
+     #element = document.createElement('div')
+     #iframe = document.createElement('iframe')
+     #contentRange = document.createRange()
+@@ -920,7 +923,7 @@ class View {
+         return 1.0
+     }
+     expand() {
+-        if (!this.document?.documentElement) return
++        if (this.#destroyed || !this.document?.documentElement) return
+         const { documentElement } = this.document
+         if (this.#column) {
+             const side = this.#vertical ? 'height' : 'width'
+@@ -1147,7 +1150,8 @@ class View {
+             this.#overlayer.clearHole()
+     }
+     destroy() {
+-        if (this.document?.body) this.#observer.unobserve(this.document.body)
++        this.#destroyed = true
++        this.#observer.disconnect()
+         this.destroyLoupe()
+     }
+ }
+@@ -1160,7 +1164,7 @@ export class Paginator extends HTMLElement {
+         'no-preload', 'no-background', 'no-continuous-scroll',
+     ]
+     #root = this.attachShadow({ mode: 'open' })
+-    #observer = new ResizeObserver(() => this.render())
++    #observer = observeResize(() => this.render())
+     #top
+     #background
+     #container
+@@ -1486,8 +1490,7 @@ export class Paginator extends HTMLElement {
                  if (!range) return
                  const sel = doc.getSelection()
                  if (!sel.rangeCount) return
@@ -12,3 +84,54 @@ index 8c3f99c855e50cbe81238e36258c3fe4d5e4ab28..cd5931bf4714cae7fae5d193ce50305b
                      checkPointerSelection(range, sel)
                  else if (isKeyboardSelecting) {
                      const selRange = sel.getRangeAt(0).cloneRange()
+@@ -3490,7 +3493,7 @@ export class Paginator extends HTMLElement {
+             this.#vtCleanup()
+             this.#isAnimating = false
+         }
+-        this.#observer.unobserve(this)
++        this.#observer.disconnect()
+         this.#destroyAllViews()
+         this.#mediaQuery.removeEventListener('change', this.#mediaQueryListener)
+     }
+diff --git a/resize-observer.js b/resize-observer.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..e12e400a6582aab7aa6896a3066f317d792937c6
+--- /dev/null
++++ b/resize-observer.js
+@@ -0,0 +1,36 @@
++// Do not perform layout writes inside ResizeObserver delivery. Each observer
++// owns its pending frame, which must be cancelled before a renderer is removed.
++export const observeResize = callback => {
++    const sizes = new WeakMap()
++    let frame = 0
++    let stopped = false
++    let targets = []
++    const observer = new ResizeObserver(entries => {
++        if (stopped) return
++        let changed = false
++        for (const { target, contentRect: { width, height } } of entries) {
++            if (!target.isConnected) continue
++            const previous = sizes.get(target)
++            if (previous?.width === width && previous?.height === height) continue
++            sizes.set(target, { width, height })
++            targets.push(target)
++            changed = true
++        }
++        if (!changed || frame) return
++        frame = requestAnimationFrame(() => {
++            frame = 0
++            const connected = targets.some(target => target.isConnected)
++            targets = []
++            if (!stopped && connected) callback()
++        })
++    })
++    const disconnect = observer.disconnect.bind(observer)
++    observer.disconnect = () => {
++        stopped = true
++        if (frame) cancelAnimationFrame(frame)
++        frame = 0
++        targets = []
++        disconnect()
++    }
++    return observer
++}

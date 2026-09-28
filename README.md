@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support highlights, ink, shapes, forms, stamps, signatures, images, screenshots, search, printing, export, and backlinks, with annotation notes, dictionary, translation, themes, and bookshelf management.
 
-[![Version](https://img.shields.io/badge/version-2.3.4-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-2.3.6-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,28 @@ Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support high
 ---
 
 ## 📝 Latest Updates
+
+### v2.3.6 (2026.9.29)
+
+### Fixed
+
+- Fixed `Storage checksum mismatch`, missing book metadata, and invisible PDF annotations after switching plugin versions or syncing devices. Legacy checksums, write-ahead logs, and in-memory caches were removed in favor of direct SiYuan file API reads and writes.
+- Added a one-time legacy-data recovery for books currently on the shelf. Missing content is supplemented from legacy record paths and migration backups; current values win ID conflicts, existing records are snapshotted first, and successful recovery is not repeated.
+- Fixed startup aborting and hiding the top-bar and dock entries when automatic recovery encountered an unversioned or malformed legacy record. Recognizable unversioned records are normalized, while other failures are isolated per book and logged.
+- Fixed `DataCloneError` while creating groups, editing book metadata, or processing annotations imported from external PDF applications.
+- Fixed `Managed file size mismatch: got unknown` after importing data or books.
+- Fixed PDFs losing their record association when local paths, cloud-drive URLs, or synced device paths changed by supporting stable data IDs together with legacy Book URL aliases.
+- Fixed stale full snapshots overwriting newer PDF annotations, deleted annotations reappearing, the final edit being lost on close, and concurrent progress/annotation saves overwriting one another.
+- Fixed SiYuan data-change notifications triggering repeated recovery or writes; sync notifications now refresh consumers only.
+
+### Improved
+
+- Upgraded EmbedPDF from `2.14.4` to `2.15.1`, adding programmable text selection and fixing overlapping redactions that missed targeted text or removed adjacent text, including vertical text, transformed nested forms, and stale replacement text.
+- Reworked annotation integration around EmbedPDF's standard `importAnnotations()` / `exportAnnotations()` and committed-event APIs. Annotation changes are serialized and persisted by ID without duplicate saves during import.
+- Preserved binary contexts for stamps and similar annotations, separated native PDF annotations from plugin-managed annotations, and drained annotation/progress work before closing a reader.
+- Improved first-page rendering and progress restoration for large PDFs, reducing blank-screen waits, stalls, and initial page-state overwrites.
+- Simplified storage by removing duplicate caches, WAL, checksum wrappers, and obsolete files while retaining ordered per-file writes, cross-window locking, schema validation, and corrupt-data protection.
+- Expanded diagnostics across storage, migration, recovery, sync, and PDF annotation flows with timing, source, and recovery-difference statistics.
 
 ### v2.3.4 (2026.9.27)
 

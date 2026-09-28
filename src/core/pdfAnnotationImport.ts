@@ -1,5 +1,5 @@
 import { migratePdfRecord, normalizeEmbedPdfAnnotations } from './dataMigration'
-import type { BookRecord } from './bookStore'
+import type { BookRecord } from './storage'
 
 const color = (value: any, fallback = '#FFCD45') => String(value || fallback)
 const text = (value: any) => String(value || '').trim()
@@ -92,7 +92,7 @@ const pickAnnotationFiles = () => new Promise<File[]>((resolve) => {
 export const importPdfAnnotationsForBook = async (url: string) => {
   const files = await pickAnnotationFiles()
   if (!files.length) return { canceled: true, imported: 0, skipped: 0, total: 0 }
-  const { readEmbedPdfAnnotations, writeEmbedPdfAnnotations } = await import('./bookStore')
+  const { readEmbedPdfAnnotations, upsertEmbedPdfAnnotation } = await import('./storage')
   const incoming = (await Promise.all(files.map(async file => parsePdfAnnotationImport(await file.text(), file.name)))).flat()
   const current = await readEmbedPdfAnnotations(url) || []
   const seen = new Set(current.map(item => item?.annotation?.id).filter(Boolean))
@@ -100,6 +100,6 @@ export const importPdfAnnotationsForBook = async (url: string) => {
     const key = item?.annotation?.id
     return !key || !seen.has(key) && seen.add(key)
   })
-  if (added.length) await writeEmbedPdfAnnotations(url, [...current, ...added])
+  for (const item of added) await upsertEmbedPdfAnnotation(url, item)
   return { canceled: false, imported: added.length, skipped: incoming.length - added.length, total: incoming.length }
 }

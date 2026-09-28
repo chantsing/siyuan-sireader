@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { buildBookMetadata, bookshelfManager, dataIdFromFingerprint, fileFingerprint, hasBookBulkPatch, type BookBulkPatch, type BookFormat, urlFingerprint } from '@/core/bookshelf'
-import { createLocalFileRef, filterSupportedBookFiles, materializeNativeFile, normalizeBookTitle, saveBookFile, saveCoverFile, toFileUrl } from '@/core/bookStore'
+import { createLocalFileRef, filterSupportedBookFiles, materializeNativeFile, normalizeBookTitle, saveBookFile, saveCoverFile, toFileUrl } from '@/core/storage'
 
 export interface BookImportItem {
   id: string

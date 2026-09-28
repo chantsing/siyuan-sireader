@@ -13,7 +13,7 @@ Use this file as the first-stop map before opening large Vue files.
 - Language: TypeScript
 - UI: Vue 3 single-file components
 - Build: Vite library build, output as a CommonJS SiYuan plugin bundle
-- Storage: verified transaction envelopes over SiYuan plugin data plus recoverable files under `/public/siyuan-sireader`
+- Storage: plain JSON through SiYuan file APIs plus managed files under `/public/siyuan-sireader`
 - Local data layer: JSON-backed `ReaderDatabase` in [`src/core/database.ts`](../src/core/database.ts)
 - Ebook parsing/rendering: `foliate-js`, EmbedPDF, `jszip`
 - Tests: Vitest
@@ -71,25 +71,19 @@ Important files:
 
 - Book and annotation schema/types: [`src/core/database.ts`](../src/core/database.ts)
 - Bookshelf operations: [`src/core/bookshelf.ts`](../src/core/bookshelf.ts)
-- Managed file/storage helpers: [`src/core/bookStore.ts`](../src/core/bookStore.ts)
+- Managed file/storage helpers: [`src/core/storage.ts`](../src/core/storage.ts)
 - PDF migration/EmbedPDF annotation normalization: [`src/core/dataMigration.ts`](../src/core/dataMigration.ts)
 - Mark manager: [`src/core/MarkManager.ts`](../src/core/MarkManager.ts)
 
 ## Storage Model
 
-There are two storage layers, both coordinated by `src/core/storage`:
+Structured JSON uses the official SiYuan file endpoints under /data/storage/petal/siyuan-sireader. Files remain compatible with the former plugin data API paths. The adapter rejects transport/API/JSON errors instead of returning stale Plugin.loadData cache values. Keep per-key serialization and optional same-origin Web Locks; these are not cross-device transactions. There is no active WAL or checksum envelope writer.
 
-- Structured plugin data uses per-key ordered operations, revisioned envelopes, checksums, write-after-read verification, and Web Locks when available.
-  - main keys: `bookshelf.json`, `settings.json`, `daily.json`
-  - per-book records: `records/<hash>.json`
-  - other feature keys include license/OCR/source/settings records
-- Binary/public assets under `/public/siyuan-sireader` are staged and published through a recoverable write-ahead log.
-  - stored book files: `/public/siyuan-sireader/books`
-  - covers/backgrounds: `/public/siyuan-sireader/covers` and related folders
+ReaderDatabase reads current books/settings/daily files rather than retaining database snapshots. Per-book records remain version 1 at records/<legacy-hash>.json. Releases must not change file identity or trigger automatic backup merges. Unknown future schemas must not be overwritten.
 
-Legacy naked JSON remains readable. Startup recovery runs before repository/UI initialization, backs up legacy values under `backups/storage-v1`, migrates them to verified envelopes, and resumes incomplete file transactions. Sync and plugin-data change events invalidate committed caches; pending operations always reread and rebase on the latest disk revision while holding the key lock.
+The user-authorized 2026-09-29 repair supplements current shelf records once before mounting readers. Current values win ID conflicts; valid empty lists may receive backup annotations for this repair. Snapshot existing records first, preserve sources, and persist migration.backupRecovery only with a successful record write. Never recover merely because a current read failed. Do not bump this marker for ordinary releases.
 
-Business code must submit `set`, `patch`, `upsert`, `delete`, `increment`, or `max` operations through the storage engine. Do not add direct `Plugin.saveData`, `putFile`, or whole-record annotation saves outside `src/core/storage`. PDF and EPUB annotation changes are ID-based operations; full annotation replacement is reserved for validated import/migration/repair.
+PDF uses EmbedPDF transfer items, a single manual commit queue (autoCommit:false), and ID-based persistence of committed events. Preserve binary ctx, unknown legacy records, and standard annotation geometry. URL aliases migrate once. Sync/dataChanges handlers must not restore backups or write data.
 
 When modifying import/storage logic, preserve the current `/public/siyuan-sireader` managed-file model and backward compatibility for old stored paths.
 
@@ -171,8 +165,8 @@ For most tasks, read in this order:
 Examples:
 
 - Reader bug: `Reader.vue` -> relevant EmbedPDF wrapper, `src/core/epub`, or `src/core/txt` module -> `jump.ts` / `keyboard.ts`.
-- PDF/EmbedPDF bug: read `docs/embedpdf.md` first, then `EmbedPdfReader.vue`, `Reader.vue`, `bookStore.ts`, and `dataMigration.ts`.
-- Import/open bug: `bookOpen.ts` -> `bookshelf.ts` -> `bookStore.ts`.
+- PDF/EmbedPDF bug: read `docs/embedpdf.md` first, then `EmbedPdfReader.vue`, `Reader.vue`, `storage.ts`, and `dataMigration.ts`.
+- Import/open bug: `bookOpen.ts` -> `bookshelf.ts` -> `storage.ts`.
 - Settings bug: `useSetting.ts` -> impacted component.
 - Annotation bug: `MarkManager.ts` -> `MarkPanel.vue` / `useReaderMarks.ts` -> format-specific code.
 - Online/WeRead bug: `BookSearch.vue` / `OnlineReader.vue` -> `HttpSources.ts` or `src/weread`.
@@ -196,7 +190,7 @@ Examples:
 - Plugin-global access is provided through `usePlugin()`.
 - Cleanup hooks are registered through `registerCleanup()`.
 - Runtime events use names like `sireader:*`, `reader:*`, `tts:*`, and `stats:*`.
-- Prefer existing helpers in `bookStore.ts`, `bookshelf.ts`, `useSetting.ts`, and `bookOpen.ts` before adding new storage/opening utilities.
+- Prefer existing helpers in `storage.ts`, `bookshelf.ts`, `useSetting.ts`, and `bookOpen.ts` before adding new storage/opening utilities.
 
 ## Current Audit Notes
 

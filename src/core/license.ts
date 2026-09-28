@@ -1,6 +1,6 @@
 import { computed, onScopeDispose, ref } from 'vue'
 import { showMessage } from 'siyuan'
-import { storageEngine, type StorageKey } from './storage/engine'
+import { storageEngine, type StorageKey } from './storage'
 
 export interface LicenseInfo {
   userId: string
@@ -86,18 +86,22 @@ export class LicenseManager {
     return (LEVELS[license.type] || 0) >= (LEVELS[required] || 0)
   }
 
-  static async getLicense(): Promise<LicenseInfo | null> {
+  private static licenseTask: Promise<LicenseInfo | null> | null = null
+  static getLicense(): Promise<LicenseInfo | null> {
+    return this.licenseTask ||= this.readLicense().finally(() => { this.licenseTask = null })
+  }
+
+  private static async readLicense(): Promise<LicenseInfo | null> {
     try {
       const license = await this.loadStored()
       if (!license || !this.isUsable(license)) return null
-      if (Date.now() - license.lastVerifiedAt < this.REFRESH_INTERVAL) {
+      if (license.type !== 'free' && Date.now() - license.lastVerifiedAt < this.REFRESH_INTERVAL) {
         void this.reportUsage(license.userId)
         return license
       }
       const fresh = await this.verifyFromServer()
       if (!fresh) return license
       await this.save(fresh)
-      void this.reportUsage(fresh.userId)
       return fresh
     }
     catch {
@@ -132,7 +136,15 @@ export class LicenseManager {
     return license
   }
 
-  private static async reportUsage(userId: string) {
+  private static usageTasks = new Map<string, Promise<void>>()
+  private static reportUsage(userId: string) {
+    const existing = this.usageTasks.get(userId)
+    if (existing) return existing
+    const task = this.sendUsage(userId).finally(() => this.usageTasks.delete(userId))
+    this.usageTasks.set(userId, task)
+    return task
+  }
+  private static async sendUsage(userId: string) {
     const day = new Date().toISOString().slice(0, 10)
     const reportedDay = await storageEngine.read(this.usageDayKey).catch(() => '')
     if (reportedDay === day) return
@@ -277,7 +289,10 @@ export class LicenseManager {
       if (bExpiry === 0 && aExpiry !== 0) return 1
       return bExpiry - aExpiry
     })[0]
-    if (!item) return null
+    if (!item) {
+      const binding = data.binding || data.data?.binding
+      return binding?.accountId ? this.normalizeLicense({ userId: account.userId, userName: String(binding.accountName || account.userName), type: 'free', activatedAt: 0, expiresAt: 0, features: [], licenseVersion: 1, lastVerifiedAt: Date.now() }) : null
+    }
 
     const binding = data.binding || data.data?.binding
     return this.normalizeLicense({
@@ -340,11 +355,9 @@ export function useLicense(_i18n?: any) {
       if (controller.signal.aborted) return
       qr.value = null
       if (!synced) return showMessage('绑定二维码已失效，请重新生成', 3000, 'error')
-      if (synced.type !== 'free') {
-        await LicenseManager.save(synced)
-        await updateLicense(synced)
-        showMessage('绑定成功，会员权益已同步', 2500, 'info')
-      } else showMessage('账号已绑定，当前未开通思阅会员', 2500, 'info')
+      await LicenseManager.save(synced)
+      await updateLicense(synced)
+      showMessage(synced.type !== 'free' ? '绑定成功，会员权益已同步' : '账号已绑定，当前为基础版', 2500, 'info')
     }
     catch (error) {
       if (!controller.signal.aborted) {

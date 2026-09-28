@@ -12,6 +12,7 @@ import { EPUBSearch } from './search'
 import { createTxtBook, isTxtSource } from '@/core/txt/book'
 import { isMobile } from '@/utils/mobile'
 import { FootnoteHandler } from 'foliate-js/footnotes.js'
+import { diagnosticLog } from '@/core/diagnostics'
 
 const groupBy = (iterable: Iterable<any>, callback: (value: any, index: number) => any, map = false) => {
   const groups: any = map ? new Map() : Object.create(null)
@@ -308,7 +309,7 @@ function getCurrentLocation(view: FoliateView): Location | null {
 
 const applyMarginal = (el: HTMLElement | undefined, text: string, margin = 48) => {
   if (!el) return
-  el.textContent = text
+  if (el.textContent !== text) el.textContent = text
   Object.assign(el.style, {
     textAlign: 'start',
     fontSize: `${Math.max(0, Math.min(12, margin * 0.75))}px`,
@@ -349,8 +350,14 @@ function updateMarginals(view: FoliateView, settings: ReaderSettings) {
   feet.forEach(foot => applyMarginal(foot, layout.showFooter ? footer : '', bottomMargin))
 }
 
+const marginalFrames = new WeakMap<FoliateView, number>()
 function refreshMarginals(view: FoliateView, settings: ReaderSettings) {
-  requestAnimationFrame(() => updateMarginals(view, settings))
+  const previous = marginalFrames.get(view)
+  if (previous) cancelAnimationFrame(previous)
+  marginalFrames.set(view, requestAnimationFrame(() => {
+    marginalFrames.delete(view)
+    if (view.isConnected) updateMarginals(view, settings)
+  }))
 }
 
 export class FoliateReader {
@@ -365,6 +372,8 @@ export class FoliateReader {
   private footnoteAnchor: HTMLElement | null = null
   private footnoteHref = ''
   private destroyed = false
+  private layoutActivity = { hostResizes: 0, relocations: 0 }
+  private onSettingsChanged = (event: Event) => this.updateSettings((event as CustomEvent).detail)
   private closeFootnote = () => document.querySelectorAll<HTMLElement>('[data-footnote-tooltip]').forEach(el => Object.assign(el.style, { display: 'none', opacity: '0', transform: 'translateY(-8px)' }))
   private closeFloaters = () => { this.closeFootnote(); this.emit('content-interaction') }
   private syncThemeObserver = (auto: boolean) => auto
@@ -405,11 +414,13 @@ export class FoliateReader {
       await this.view.init?.({})
       if (this.destroyed) return this.view.close?.()
       if (this.marks) await this.marks.init()
+      diagnosticLog('debug', 'epub.opened', { title: readText(this.view.book?.metadata?.title) })
       this.emit('loaded', { book: this.view.book })
     })
   }
 
   private applySettings() {
+    if (this.destroyed) return
     configureView(this.view, this.settings)
     applyCustomCSS(this.view, this.settings)
     refreshMarginals(this.view, this.settings)
@@ -422,7 +433,8 @@ export class FoliateReader {
   }
 
   resize = () => {
-    if (!this.container.isConnected) return
+    if (this.destroyed || !this.container.isConnected) return
+    this.layoutActivity.hostResizes++
     configureView(this.view, this.settings)
     ;(this.view.renderer as any)?.render?.()
     refreshMarginals(this.view, this.settings)
@@ -496,6 +508,8 @@ export class FoliateReader {
     }) as EventListener)
     this.footnote.addEventListener('render', ((e: CustomEvent) => this.renderFootnote(e.detail)) as EventListener)
     this.view.addEventListener('relocate', ((e: CustomEvent) => {
+      if (this.destroyed) return
+      this.layoutActivity.relocations++
       refreshMarginals(this.view, this.settings)
       this.emit('relocate', e.detail)
     }) as EventListener)
@@ -587,7 +601,7 @@ export class FoliateReader {
   }
 
   private listenToSettingsChanges() {
-    window.addEventListener('sireaderSettingsUpdated', ((e: CustomEvent) => this.updateSettings(e.detail)) as EventListener)
+    window.addEventListener('sireaderSettingsUpdated', this.onSettingsChanged)
     this.syncThemeObserver(this.settings.theme === 'auto')
   }
 
@@ -649,6 +663,7 @@ export class FoliateReader {
   }
 
   updateSettings(settings: ReaderSettings) {
+    if (this.destroyed) return
     this.syncThemeObserver(settings.theme === 'auto')
     this.settings = settings
     this.applySettings()
@@ -658,14 +673,23 @@ export class FoliateReader {
   getView = () => this.view
 
   async destroy() {
+    if (this.destroyed) return
     this.destroyed = true
-    await this.marks?.destroy()
+    window.removeEventListener('sireaderSettingsUpdated', this.onSettingsChanged)
     this.themeObserver?.disconnect()
     clearInterval(this.clockTimer)
     this.eventListeners.clear()
+    const frame = marginalFrames.get(this.view)
+    if (frame) cancelAnimationFrame(frame)
+    marginalFrames.delete(this.view)
+    // Stop layout synchronously, before waiting for persistence or network work.
     this.view.close?.()
-    this.view.book?.destroy?.()
-    try { this.view.remove() } catch {}
+    diagnosticLog('debug', 'epub.closed', { title: readText(this.view.book?.metadata?.title), ...this.layoutActivity })
+    try { await this.marks?.destroy() }
+    finally {
+      this.view.book?.destroy?.()
+      this.view.remove()
+    }
   }
 }
 

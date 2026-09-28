@@ -3,7 +3,7 @@ import '@/index.scss'
 import PluginInfoString from '@/../plugin.json'
 import { destroy, init, usePlugin } from '@/main'
 import { PDF_SHORTCUT_COMMANDS } from '@/utils/keyboard'
-import { invalidateStorage } from '@/core/storage/engine'
+import { diagnosticLog } from '@/core/diagnostics'
 
 const { version } = PluginInfoString
 
@@ -15,9 +15,14 @@ export default class PluginSample extends Plugin {
   public isInWindow: boolean
   public platform: ReturnType<typeof getFrontend>
   public readonly version = version
+  private storageChangeTask: Promise<void> | null = null
   private readonly handleStorageChanged = () => {
-    invalidateStorage()
-    window.dispatchEvent(new CustomEvent('sireader:storage-changed'))
+    if (this.storageChangeTask) return this.storageChangeTask
+    this.storageChangeTask = (async () => {
+      diagnosticLog('info', 'sync.completed', { source: 'syncMergeResult' })
+      window.dispatchEvent(new CustomEvent('sireader:storage-changed'))
+    })().finally(() => { this.storageChangeTask = null })
+    return this.storageChangeTask
   }
 
   async onload() {
@@ -44,11 +49,17 @@ export default class PluginSample extends Plugin {
     this.addHotkeys()
   }
 
-  onDataChanged() { this.handleStorageChanged() }
+  // SiYuan may emit this once per file while a sync is still in progress.
+  onDataChanged() {
+    // SiYuan calls this for dataChanges without unloading the plugin.
+    // Refresh consumers only; never write or recover in this notification.
+    window.dispatchEvent(new CustomEvent('sireader:storage-changed'))
+  }
 
   private handleWsMain = (event: CustomEvent) => {
     const cmd = event.detail?.cmd
-    if (cmd === 'syncMergeResult' || cmd === 'reloadPlugin') this.handleStorageChanged()
+    if (cmd) diagnosticLog('debug', 'ws-main.command', { cmd })
+    if (cmd === 'syncMergeResult') void this.handleStorageChanged()
   }
 
   private addHotkeys() {
@@ -77,7 +88,7 @@ export default class PluginSample extends Plugin {
   }
 
   async uninstall() {
-    const { clearStoredPluginData } = await import('@/core/bookStore')
+    const { clearStoredPluginData } = await import('@/core/storage')
     const { getDatabase } = await import('@/core/database')
     const books = await (await getDatabase()).getBooks().catch(() => [])
     await clearStoredPluginData(books)
@@ -86,6 +97,6 @@ export default class PluginSample extends Plugin {
   }
 
   openSetting() {
-    ;(window as any)._sy_plugin_sample.openSetting()
+    ;(window as any)._sy_plugin_sample?.openSetting?.()
   }
 }

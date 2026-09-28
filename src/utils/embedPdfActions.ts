@@ -1,6 +1,14 @@
 import { LicenseManager } from '@/core/license'
 import pluginInfo from '@/../plugin.json'
 import { inlineLinkText, sendMarkToDoc } from '@/utils/copy'
+import { cloneStorageValue } from '@/core/storage'
+
+// EmbedPDF's uncommitted update carries the old annotation plus its patch.
+export const snapshotPdfAnnotationEvent = (event: any, previous?: any) => cloneStorageValue({
+  type: event.type,
+  annotation: event.type === 'update' ? { ...event.annotation, ...event.patch } : event.annotation,
+  ...((event.ctx || previous?.ctx) ? { ctx: event.ctx || previous.ctx } : {}),
+})
 
 const PDF_PLUGIN_DIR = `/plugins/${pluginInfo.name}/embedpdf`
 const PDF_PLUGIN_WASM_URL = `${PDF_PLUGIN_DIR}/pdfium.wasm`

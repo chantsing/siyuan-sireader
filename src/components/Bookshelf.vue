@@ -167,6 +167,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { showMessage, Menu } from 'siyuan'
+import { diagnosticLog } from '@/core/diagnostics'
 import { bookInGroup, bookshelfManager, SORTS, STATUS_OPTIONS, STATUS_MAP, RATING_OPTIONS, VIEW_MODES, VIEW_MODE_ICONS, MODAL_TITLES, STAR_OPTIONS, createDefaultGroupRules, createDefaultEditForm, filterGroupsByKeyword, getNextViewMode, buildFilterSections, buildEditFields, buildGroupFields, buildDetailFields, hasBookBulkPatch, normalizeCloudPath, siyuanCloudUrl, mergeCloudNodes, listCloudNodes, searchCloudNodes, cloudNodesToItems, isCloudBookPath, type BookBulkPatch, type SortType, type Book, type BookStatus, type BookFormat, type GroupConfig, type BookshelfViewMode, type BookshelfModalMode, type SiyuanCloudNode } from '@/core/bookshelf'
 import View from '@/components/bookshelf/View.vue'
 import DockShell from './ui/DockShell.vue'
@@ -203,7 +204,7 @@ const bindSearch = ref(''), bindResults = ref<any[]>([])
 const cloudInput = ref(''), cloudKeyword = ref(''), cloudLoading = ref(false), cloudError = ref(''), cloudResults = ref<SiyuanCloudNode[]>([]), cloudSelectedPaths = ref<string[]>([]), cloudImportGroups = ref<Record<string, string[]>>({})
 const { items: importItems, draft: importDraft, parsing: importParsing, importing, progress: importProgress, hasItems: importHasItems, selectedCount: importSelectedCount, linkSelectedCount: importLinkSelectedCount, allSelected: importAllSelected, reset: resetImport, pickAndParseFiles, parseDraftUrls, importSelected } = useBookImport()
 
-let settingsLoaded = false, reloading = false, lastReloadAt = 0, activeMenu: any = null
+let settingsLoaded = false, activeMenu: any = null
 const settingTimers = new Map<string, number>()
 const closeMenu = () => { activeMenu?.close?.(); activeMenu = null }
 const openMenu = (menu: any, e: MouseEvent) => { closeMenu(); activeMenu = menu; menu.open({ x: e.clientX, y: e.clientY }) }
@@ -328,25 +329,35 @@ const syncSelection = () => {
   if (next.length !== selectedBookUrls.value.length) setSelectedUrls(next)
 }
 const refreshGroups = async () => { const { groups: nextGroups, counts } = await bookshelfManager.getGroupDisplayState(); groups.value = nextGroups; groupCounts.value = counts }
-const loadBooks = async (group = currentGroup.value) => {
+const readBooks = async (group = currentGroup.value) => {
   const state = await bookshelfManager.getBookshelfState({ currentGroup: group, keyword: keyword.value, sortBy: sortType.value, reverse: sortReverse.value, status: filterStatus.value, rating: filterRating.value, formats: filterFormats.value, tags: filterTags.value })
   books.value = state.books
   stats.value = state.stats
+  groups.value = state.groups
+  groupCounts.value = state.counts
+  allTags.value = state.tags
   syncSelection()
 }
-const refresh = () => Promise.all([loadBooks(), refreshGroups()])
-const reloadStorage = async (force = false) => {
-  const now = Date.now()
-  if (reloading || (!force && now - lastReloadAt < 3000)) return
-  reloading = true
+let refreshTask: Promise<void> | null = null
+let refreshRequested = false
+const loadBooks = (_group = currentGroup.value): Promise<void> => {
+  refreshRequested = true
+  return refreshTask ||= (async () => {
+    // Coalesce notifications and the action's explicit refresh, without caching data.
+    do {
+      await new Promise(resolve => setTimeout(resolve, 80))
+      refreshRequested = false
+      await readBooks()
+    } while (refreshRequested)
+  })().finally(() => { refreshTask = null })
+}
+const refresh = () => loadBooks()
+const reloadStorage = async () => {
   try {
-    await bookshelfManager.reload()
-    lastReloadAt = now
-    await Promise.all([loadBooks(), refreshGroups()])
-    allTags.value = await bookshelfManager.getAllTags()
-  }
-  finally {
-    reloading = false
+    await refresh()
+  } catch (error) {
+    diagnosticLog('error', 'bookshelf.refresh.failed', { error })
+    showMessage(`书架刷新失败：${error instanceof Error ? error.message : String(error)}`, 3000, 'error')
   }
 }
 const showResult = (success: number, failed: number, ok: string, fail = `成功${success}本，失败${failed}本`, time = 2000) => showMessage(failed ? fail : ok, time, failed ? 'error' : 'info')
@@ -492,8 +503,6 @@ const confirmImport = async (mode: 'file' | 'link') => {
   await Promise.all(res.urls.filter(url => cloudImportGroups.value[url]?.length).map(url => bookshelfManager.applyBookPatch(url, { groups: { add: cloudImportGroups.value[url] } }, false)))
   cloudImportGroups.value = {}
   await loadBooks()
-  await refreshGroups()
-  allTags.value = await bookshelfManager.getAllTags()
   showResult(res.success, res.failed, `导入${res.success}本`, `成功${res.success}本，失败${res.failed}本`, 3000)
   if (!res.failed) closePopups()
 }
@@ -532,7 +541,7 @@ const batchOp = async (op: 'rate' | 'status' | 'remove' | 'tags' | 'groups', val
   if (!can.value('batch-operation')) return showUpgrade('批量操作')
   const urls = selectedBookUrls.value
   if (!urls.length) return
-  const done = async (res: any, action: string) => { batchMode.value = null; await refresh(); allTags.value = await bookshelfManager.getAllTags(); showResult(res.success, res.failed, `${action} ${res.success} 本`); if (!res.failed) exitSelection() }
+  const done = async (res: any, action: string) => { batchMode.value = null; await refresh(); showResult(res.success, res.failed, `${action} ${res.success} 本`); if (!res.failed) exitSelection() }
   if (op === 'remove') return confirmBatchRemove()
   if (op === 'rate') return done(await bookshelfManager.batchUpdateRating(urls, Number(value || 0)), value ? '已评分' : '已清除')
   if (op === 'status') return done(await bookshelfManager.batchUpdateStatus(urls, value as BookStatus), '已更新')
@@ -548,7 +557,6 @@ const batchClearList = async (kind: 'tags' | 'groups', text: string, ok: string)
   const res = await bookshelfManager.batchUpdateBooks(selectedBookUrls.value, { [kind]: { set: [] } })
   batchMode.value = null
   await refresh()
-  if (kind === 'tags') allTags.value = await bookshelfManager.getAllTags()
   showResult(res.success, res.failed, `${ok} ${res.success} 本`)
   if (!res.failed) exitSelection()
 }
@@ -562,7 +570,6 @@ const saveEdit = async () => {
   const result = await bookshelfManager.updateBookInfo(editingBook.value, editForm.value)
   if (!result.success) return showMessage(result.error || '保存失败', 2000, 'error')
   await refresh()
-  allTags.value = await bookshelfManager.getAllTags()
   showMessage('保存成功', 2000, 'info')
   closePopups()
 }
@@ -575,32 +582,24 @@ const unbindDoc = () => { editForm.value.bindDocId = ''; editForm.value.bindDocN
 const detailFields = computed(() => !panelBook.value || modalMode.value !== 'detail' ? [] : buildDetailFields(panelBook.value, groups.value))
 
 const handleBookshelfUpdated = () => { void reloadStorage() }
-const handleStorageChanged = () => { void reloadStorage(true) }
+const handleStorageChanged = () => { void reloadStorage() }
 const handleVisibilityChange = () => { if (!document.hidden) void reloadStorage() }
 onMounted(async () => {
-  await bookshelfManager.reload()
-  lastReloadAt = Date.now()
-  await loadBooks()
-  void (async () => {
-    const [nextSort, nextReverse, nextView] = await Promise.all([
-      bookshelfManager.getSetting('bookshelf_sortType', 'time'),
-      bookshelfManager.getSetting('bookshelf_sortReverse', false),
-      bookshelfManager.getSetting('bookshelf_viewMode', 'grid'),
-    ])
-    sortType.value = nextSort
-    sortReverse.value = nextReverse
-    viewMode.value = nextView
-    await nextTick()
-    settingsLoaded = true
-  })()
-  void refreshGroups()
-  void bookshelfManager.getAllTags().then(tags => { allTags.value = tags })
   window.addEventListener('sireader:bookshelf-updated', handleBookshelfUpdated)
   window.addEventListener('sireader:storage-changed', handleStorageChanged)
   document.addEventListener('visibilitychange', handleVisibilityChange)
+  try {
+    const saved = await bookshelfManager.getSettings()
+    sortType.value = saved.bookshelf_sortType ?? 'time'
+    sortReverse.value = saved.bookshelf_sortReverse ?? false
+    viewMode.value = saved.bookshelf_viewMode ?? 'grid'
+    await nextTick()
+  } catch (error) { diagnosticLog('error', 'bookshelf.settings.failed', { error }) }
+  settingsLoaded = true
+  await reloadStorage()
 })
 onUnmounted(() => { closeMenu(); window.removeEventListener('sireader:bookshelf-updated', handleBookshelfUpdated); window.removeEventListener('sireader:storage-changed', handleStorageChanged); document.removeEventListener('visibilitychange', handleVisibilityChange); settingTimers.forEach(timer => clearTimeout(timer)); settingTimers.clear() })
-watch([filterStatus, filterRating, filterFormats, filterTags, sortType, sortReverse], () => loadBooks(), { deep: true })
+watch([filterStatus, filterRating, filterFormats, filterTags, sortType, sortReverse], () => settingsLoaded && reloadStorage(), { deep: true })
 watch(sortType, v => settingsLoaded && saveUiSetting('bookshelf_sortType', v))
 watch(sortReverse, v => settingsLoaded && saveUiSetting('bookshelf_sortReverse', v))
 watch(viewMode, v => settingsLoaded && saveUiSetting('bookshelf_viewMode', v))
