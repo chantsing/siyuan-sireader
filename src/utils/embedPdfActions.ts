@@ -47,6 +47,78 @@ export const taskToPromise = <T>(task: any) => new Promise<T>((resolve, reject) 
   task.wait(resolve, reject)
 })
 
+export const waitForPdfDocument = (registry: any, documentId: string) => new Promise<any>((resolve, reject) => {
+  const documents = registry?.getPlugin?.('document-manager')?.provides?.()
+  const finish = () => {
+    const doc = documents?.getDocument?.(documentId)
+    if (!doc) return false
+    cleanup()
+    resolve(doc)
+    return true
+  }
+  let offOpen: (() => void) | undefined
+  let offError: (() => void) | undefined
+  const timer = setTimeout(() => {
+    cleanup()
+    reject(new Error('PDF cover render timed out'))
+  }, 15000)
+  const cleanup = () => {
+    clearTimeout(timer)
+    offOpen?.()
+    offError?.()
+  }
+  if (finish()) return
+  offOpen = documents?.onDocumentOpened?.((state: any) => (state?.id === documentId || state?.documentId === documentId) && finish())
+  offError = documents?.onDocumentError?.((event: any) => {
+    if (event?.documentId !== documentId) return
+    cleanup()
+    reject(new Error(event.message || 'PDF cover render failed'))
+  })
+})
+
+export const renderPdfFirstPage = async (source: File | Blob | string): Promise<Blob | undefined> => {
+  if (typeof document === 'undefined') return undefined
+  const host = document.createElement('div')
+  host.style.cssText = 'position:fixed;left:-100000px;top:0;width:1px;height:1px;visibility:hidden;pointer-events:none'
+  document.body.appendChild(host)
+  const documentId = `sireader-cover-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  let viewer: any
+  try {
+    const [wasmUrl, documentSource] = await Promise.all([
+      ensureEmbedPdfWasmUrl(),
+      createEmbedPdfDocumentSource(documentId, source),
+    ])
+    const config = {
+      tabBar: 'never',
+      worker: true,
+      wasmUrl,
+      documentManager: { initialDocuments: [documentSource] },
+      fonts: { ui: null, signature: null },
+      stamp: { manifests: [] },
+    }
+    try {
+      viewer = await initEmbedPdfViewer(host, config)
+      await viewer?.registry
+    } catch {
+      viewer?.remove?.()
+      viewer = await initEmbedPdfViewer(host, { ...config, worker: false })
+    }
+    const registry = await viewer?.registry
+    await waitForPdfDocument(registry, documentId)
+    const render = registry?.getPlugin?.('render')?.provides?.()?.forDocument?.(documentId)
+    if (!render?.renderPage) return undefined
+    return await taskToPromise<Blob>(render?.renderPage?.({
+      pageIndex: 0,
+      options: { imageType: 'image/png', scaleFactor: 0.5, withAnnotations: true },
+    }))
+  } catch {
+    return undefined
+  } finally {
+    viewer?.remove?.()
+    host.remove()
+  }
+}
+
 export const makePdfSelectionMark = (text: string, selection: any[] = []) => {
   const first = selection[0] || {}
   const page = Number(first.pageIndex ?? 0) + 1

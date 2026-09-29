@@ -168,7 +168,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { showMessage, Menu } from 'siyuan'
 import { diagnosticLog } from '@/core/diagnostics'
-import { bookInGroup, bookshelfManager, SORTS, STATUS_OPTIONS, STATUS_MAP, RATING_OPTIONS, VIEW_MODES, VIEW_MODE_ICONS, MODAL_TITLES, STAR_OPTIONS, createDefaultGroupRules, createDefaultEditForm, filterGroupsByKeyword, getNextViewMode, buildFilterSections, buildEditFields, buildGroupFields, buildDetailFields, hasBookBulkPatch, normalizeCloudPath, siyuanCloudUrl, mergeCloudNodes, listCloudNodes, searchCloudNodes, cloudNodesToItems, isCloudBookPath, type BookBulkPatch, type SortType, type Book, type BookStatus, type BookFormat, type GroupConfig, type BookshelfViewMode, type BookshelfModalMode, type SiyuanCloudNode } from '@/core/bookshelf'
+import { bookInGroup, bookshelfManager, SORTS, STATUS_OPTIONS, STATUS_MAP, RATING_OPTIONS, VIEW_MODES, VIEW_MODE_ICONS, MODAL_TITLES, STAR_OPTIONS, createDefaultGroupRules, createDefaultEditForm, filterGroupsByKeyword, getNextViewMode, buildFilterSections, buildEditFields, buildGroupFields, buildDetailFields, hasBookBulkPatch, normalizeCloudPath, siyuanCloudUrl, mergeCloudNodes, listCloudNodes, searchCloudNodes, cloudNodesToItems, isCloudBookPath, bookshelfSortValue, type BookBulkPatch, type SortType, type Book, type BookStatus, type BookFormat, type GroupConfig, type BookshelfViewMode, type BookshelfModalMode, type SiyuanCloudNode } from '@/core/bookshelf'
 import View from '@/components/bookshelf/View.vue'
 import DockShell from './ui/DockShell.vue'
 import { isMobile } from '@/utils/mobile'
@@ -230,7 +230,7 @@ const viewProps = computed(() => ({ items: displayItems.value, mode: viewMode.va
 
 const getSortKey = (item: any, type: string) => item.type === 'group'
   ? (type === 'name' ? item.data.name : type === 'time' ? (item.data as any).created || 0 : item.data.order)
-  : type === 'name' ? item.data.title : type === 'author' ? item.data.author || '' : type === 'progress' ? item.data.progress || 0 : type === 'rating' ? item.data.rating || 0 : type === 'readTime' ? item.data.time || 0 : type === 'update' ? item.data.read || 0 : item.data.added
+  : bookshelfSortValue(item.data, type)
 const groupedBook = (book: Book) => groups.value.some(g => g.type === 'folder' && bookInGroup(book, g))
 const matchBook = (book: Book, kw = keyword.value.toLowerCase()) => !kw || book.title.toLowerCase().includes(kw) || book.author?.toLowerCase().includes(kw) || book.tags.some(t => t.toLowerCase().includes(kw))
 
@@ -606,7 +606,7 @@ watch(viewMode, v => settingsLoaded && saveUiSetting('bookshelf_viewMode', v))
 </script>
 
 <style scoped lang="scss">
-.sr-bookshelf{--sr-gap:6px;position:relative;display:flex;flex-direction:column;height:100%;overflow:hidden}
+.sr-bookshelf{--sr-gap:6px;position:relative;display:flex;flex-direction:column;height:100%;overflow:hidden;touch-action:manipulation}
 :deep(.sr-books){overflow:hidden}
 .sr-input,.sr-select{width:100%;min-width:0;box-sizing:border-box}
 .sr-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;height:100%;font-size:14px;opacity:.5}

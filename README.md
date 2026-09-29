@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support highlights, ink, shapes, forms, stamps, signatures, images, screenshots, search, printing, export, and backlinks, with annotation notes, dictionary, translation, themes, and bookshelf management.
 
-[![Version](https://img.shields.io/badge/version-2.3.6-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-2.5.0-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,32 @@ Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support high
 ---
 
 ## 📝 Latest Updates
+
+## v2.5.0 (2026-09-30)
+
+### 新增
+
+- 新增 [Issue #36](https://github.com/mm-o/siyuan-sireader/issues/36) 微信读书导出功能：支持自定义模板，将书籍信息、封面、阅读链接、详情链接、ISBN、出版社、分类、出版时间、字数、阅读人数、评分、简介、目录、划线、书签和想法增量同步到思源子文档，并保留章节跳转及划线与想法的关联关系。
+
+### 优化
+
+- 同步 Foliate 上游分页、脚注与 TTS 能力，保留 WebView 选区兼容和安全销毁处理。
+- 优化连续朗读衔接：当前句播放与下一句预加载协同工作，减少句间等待和播放断续。
+- 优化朗读高亮：按当前实际播放句更新高亮样式，避免预加载误触发高亮或弹出浏览器选区菜单。
+- 重构朗读播放小窗：采用紧凑的原位展开布局，统一播放、暂停、切句、停止和语音设置，与阅读器控制栏保持同一状态。
+- 优化 [Issue #48](https://github.com/mm-o/siyuan-sireader/issues/48)：恢复 EmbedPDF 原生页面缓冲策略，预加载相邻页面，减少滚动时页面短暂模糊。
+
+### 修复
+
+- 修复在线语音请求产生无效音频、导致语音无法播放的问题，并完善异常连接的恢复处理。
+- 修复文件写入时间戳单位错误，避免新写入的 JSON 文件显示为 1970 年。
+- 修复书架“最近阅读”排序误用添加时间的问题；最近阅读现在按最后阅读时间排序。
+- 修复鸿蒙端书架触摸点击响应偏慢的问题，优化移动端触摸反馈。
+- 修复 [Issue #54](https://github.com/mm-o/siyuan-sireader/issues/54)：深色模式下微信读书内嵌网页滚动条显示为白色的问题，在网页加载完成后注入跟随页面前景色的滚动条样式。
+- 修复 [Issue #51](https://github.com/mm-o/siyuan-sireader/issues/51)：EPUB 阅读器内容位于 iframe 时，点击正文无法关闭思源原生页签弹窗的问题；现在会将阅读器内容交互同步给宿主页面。
+- 修复 [Issue #53](https://github.com/mm-o/siyuan-sireader/issues/53)：PDF 导入时自动渲染第一页并保存为默认封面。
+- 修复 [Issue #47](https://github.com/mm-o/siyuan-sireader/issues/47)：从思源文档打开附件时，书架标题自动去除时间戳和随机后缀。
+- 修复 [Issue #49](https://github.com/mm-o/siyuan-sireader/issues/49)：整理 EPUB 阅读器主题样式注入逻辑，修复暗色和自定义主题下背景与文字颜色互相覆盖导致的白底浅字问题。
 
 ### v2.3.6 (2026.9.29)
 

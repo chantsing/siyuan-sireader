@@ -162,34 +162,28 @@ const getCreateDocPath = async (parentID?: string, notebook?: string) => {
   const parentPath = (await api.getPathByID(parentID, notebook)).path
   return { docId, path: `${parentPath.replace(/\.sy$/, '')}/${docId}.sy` }
 }
-const appendToNoteDoc = async (title: string, settings: ReaderSettings, text: string, key: string, parentID?: string) => {
+export const ensureNoteDocument = async (title: string, settings: ReaderSettings, key: string, parentID?: string) => {
   const notebook = parentID ? getNotebookId(settings) : await ensureNotebookId(settings)
   if (!notebook) throw new Error('未设置目标笔记本')
-  const id = await getDocIdByAttr(key)
-  if (id) {
-    if (key.startsWith('book:')) {
-      const bookUrl = key.slice(5)
-      if (bookUrl) {
-        const bindDocName = await api.getHPathByID(id).catch(() => '') || title
-        const { bookshelfManager } = await import('@/core/bookshelf')
-        await bookshelfManager.updateBook(bookUrl, { bindDocId: id, bindDocName })
-      }
-    }
-    return api.appendBlock('markdown', text, id)
-  }
+  const existing = await getDocIdByAttr(key)
+  if (existing) return existing
   const { path } = await getCreateDocPath(parentID, notebook)
   const created = String((await api.createDoc(notebook, path, sanitize(title), ''))?.id || '')
   if (!created) throw new Error('创建笔记文档失败')
   await api.setBlockAttrs(created, { [ATTR]: key })
+  return created
+}
+const appendToNoteDoc = async (title: string, settings: ReaderSettings, text: string, key: string, parentID?: string) => {
+  const id = await ensureNoteDocument(title, settings, key, parentID)
   if (key.startsWith('book:')) {
     const bookUrl = key.slice(5)
     if (bookUrl) {
-      const bindDocName = await api.getHPathByID(created).catch(() => '') || title
+      const bindDocName = await api.getHPathByID(id).catch(() => '') || title
       const { bookshelfManager } = await import('@/core/bookshelf')
-      await bookshelfManager.updateBook(bookUrl, { bindDocId: created, bindDocName })
+      await bookshelfManager.updateBook(bookUrl, { bindDocId: id, bindDocName })
     }
   }
-  return api.appendBlock('markdown', text, created)
+  return api.appendBlock('markdown', text, id)
 }
 const insertDailyNote = async (settings: ReaderSettings, text: string) => {
   const notebook = getNotebookId(settings)

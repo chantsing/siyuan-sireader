@@ -224,31 +224,23 @@ function applyCustomCSS(view: FoliateView, settings: ReaderSettings) {
   const theme = getTheme(settings)
   const mobile = isMobile()
   const dark = isDark(theme.bg)
-  const forceColor = dark ? `p,li,dd,blockquote{color:${theme.color}!important}` : ''
-  const transparentContent = theme.bgImg ? 'html,body,section,article,main,div,p,blockquote,ul,ol,li,table,thead,tbody,tr,td,th{background-color:transparent!important}' : ''
-  const darkText = ['#000', '#000000', 'black', 'rgb(0,0,0)', 'rgb(0, 0, 0)'].map(c => `font[color="${c}"],[style*="color:${c}"],[style*="color: ${c}"]`).join(',')
   const customFont = text.fontFamily === 'custom' ? text.customFont?.fontFamily : ''
   const font = customFont ? `"${customFont}", sans-serif` : text.fontFamily || 'inherit'
   const fontUrl = customFont ? `${location.origin}/public/siyuan-sireader/fonts/${encodeURIComponent(text.customFont.fontFile)}` : ''
   const fontFace = customFont ? `@font-face{font-family:"${customFont}";src:url("${fontUrl}");font-display:swap}` : ''
+  const contentBackground = getViewBackground(theme)
   const css = [
     `@namespace epub "http://www.idpf.org/2007/ops";`,
     fontFace,
     `
     html{
-      --bg-texture-id:${theme.bgImg ? 'sireader' : 'none'};
-      --theme-bg-color:${theme.bg};
-      --theme-fg-color:${theme.color};
-      --theme-primary-color:var(--b3-theme-primary);
-      --override-color:${dark && !theme.bgImg};
       color-scheme:${dark ? 'dark' : 'light'};
-      background-color:var(--theme-bg-color,transparent)!important;
-      background:var(--background-set,none)!important;
+      background:${contentBackground}!important;
+      background-color:${theme.bg}!important;
       box-sizing:border-box!important;
       ${mobile ? '-webkit-touch-callout:none!important;' : ''}
     }
-    html,body{color:${theme.color}!important}
-    html[has-background],body[has-background]{--background-set:var(--theme-bg-color)}
+    html,body{color:${theme.color}!important;background:${contentBackground}!important;background-color:${theme.bg}!important}
     body{
       color:${theme.color}!important;
       font-family:${font}!important;
@@ -259,15 +251,11 @@ function applyCustomCSS(view: FoliateView, settings: ReaderSettings) {
       box-sizing:border-box!important;
       ${mobile ? 'width:100%!important;min-width:100%!important;max-width:none!important;display:block!important;' : ''}
     }
-    body,body>*{background-size:cover!important;background-position:center!important;background-repeat:no-repeat!important}
-    ${transparentContent}
     body,body *{font-family:${font}!important}
     p,li,dd,blockquote,span,div{font-size:${text.fontSize}px!important;font-weight:${text.fontWeight}!important}
     p:not(:has(img)),li,blockquote,dd{line-height:${paragraph.lineHeight}!important;text-align:start;text-indent:${paragraph.textIndent}em!important;margin-bottom:${paragraph.paragraphSpacing}em!important}
     img,svg,p:has(img),figure,figure *{background-color:transparent!important}
     p:has(img){text-indent:0!important;margin:0!important}
-    ${forceColor}
-    ${darkText}{color:${theme.color}!important}
     ${mobile ? 'body>*{max-width:100%!important}img,svg,video,table,pre,code{max-width:100%!important}' : ''}
     [align="left"]{text-align:left!important}
     [align="right"]{text-align:right!important}

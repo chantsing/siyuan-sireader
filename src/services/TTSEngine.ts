@@ -7,7 +7,6 @@ const crypto = req('crypto')
 const urlMod = req('url')
 const net = req('net')
 const tls = req('tls')
-const stream = req('stream')
 const randomBytes = crypto?.randomBytes
 const createHash = crypto?.createHash
 const NodeURL = urlMod?.URL
@@ -15,13 +14,13 @@ const NodeURL = urlMod?.URL
 const CHROMIUM_VERSION = '143.0.3650.75'
 const TRUSTED_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4'
 const WINDOWS_EPOCH = 11644473600n
-const OUTPUT_FORMAT = 'webm-24khz-16bit-mono-opus'
+const OUTPUT_FORMAT = 'audio-24khz-48kbitrate-mono-mp3'
 const VOICES_URL = `https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list?trustedclienttoken=${TRUSTED_TOKEN}`
 const CACHE_TTL = 24 * 60 * 60 * 1000
 const SSML_NS = 'http://www.w3.org/2001/10/synthesis'
 const XML_NS = 'http://www.w3.org/XML/1998/namespace'
 const ensureNodeEnv = () => {
-  if (!randomBytes || !createHash || !NodeURL || !net || !tls || !stream) {
+  if (!randomBytes || !createHash || !NodeURL || !net || !tls) {
     throw new Error('Node runtime is unavailable in current environment')
   }
 }
@@ -34,7 +33,8 @@ const generateToken = () => {
 }
 
 // 组合 URL
-const combineUrl = (url: string) => `${url}?TrustedClientToken=${TRUSTED_TOKEN}&Sec-MS-GEC=${generateToken()}&Sec-MS-GEC-Version=1-${CHROMIUM_VERSION}`
+const combineUrl = (url: string, connectionId = randomBytes(16).toString('hex')) => `${url}?TrustedClientToken=${TRUSTED_TOKEN}&ConnectionId=${connectionId}&Sec-MS-GEC=${generateToken()}&Sec-MS-GEC-Version=1-${CHROMIUM_VERSION}`
+const generateMuid = () => randomBytes(16).toString('hex').toUpperCase()
 
 // Buffer 转 ArrayBuffer
 export const toArrayBuffer = (buf: Buffer) => {
@@ -68,13 +68,17 @@ class NodeWebSocket {
     const isSecure = this.url.protocol === 'wss:'
     const port = this.url.port || (isSecure ? 443 : 80)
     const connectOptions = { host: this.options.host || this.url.hostname, port, rejectUnauthorized: this.options.rejectUnauthorized !== false }
-    
+
     this.socket = (isSecure ? tls : net).connect(connectOptions, () => this._sendHandshake())
     this.socket.on('data', (data: Buffer) => {
       this.buffer = Buffer.concat([this.buffer, data])
       this.isHandshakeComplete ? this._processFrames() : this._handleHandshake()
     })
-    this.socket.on('close', () => (this.readyState = 3, this.onclose?.()))
+    this.socket.on('close', () => {
+      if (this.readyState === 3) return
+      this.readyState = 3
+      this.onclose?.()
+    })
     this.socket.on('error', (err: any) => {
       if (err.code === 'ECONNRESET' || err.code === 'EPIPE') return (this.readyState = 3, this.onclose?.())
       this.readyState = 3
@@ -204,7 +208,9 @@ class NodeWebSocket {
           opcode === 0x1 ? this.onmessage?.({ data: payload.toString('utf8') }) : this.onmessage?.({ data: new Blob([payload]) })
         }
       } else if (opcode === 0x8) {
-        this.close()
+        this.readyState = 3
+        this.onclose?.()
+        this.socket.end()
       }
     }
   }
@@ -287,120 +293,103 @@ export async function loadLocalVoices(): Promise<TTSVoice[]> {
 // ============ Edge TTS 核心 ============
 export class EdgeTTSCore {
   private ws: any
-  private queue: any = {}
-  private end: any = {}
-  private wsPromise: any = null
   private voice = ''
 
-  async init(voice: string) {
-    if (this.wsPromise && this.voice === voice) return this.wsPromise
-    if (this.ws) this.ws.close()
-    this.voice = voice
-    this.queue = {}
-    this.end = {}
-
-    this.wsPromise = new Promise((resolve, reject) => {
-      const msgQueue: any[] = []
-      let i = 0
-      
-      const checkSend = (id: string, idx: number) => {
-        if (!this.end[id] || msgQueue.slice(0, idx + 1).some(m => !m || m.id === null)) return
-        msgQueue.slice(0, idx + 1).filter(m => m?.id === id && m.data).forEach(m => this.queue[id].push(m.data))
-        this.queue[id].push(null)
-      }
-
-      this.ws = new NodeWebSocket(combineUrl('wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1'), {
+  private createSocket(connectionId: string) {
+    return new NodeWebSocket(combineUrl('wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1', connectionId), {
         host: 'speech.platform.bing.com',
         origin: 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
         headers: {
           'User-Agent': `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROMIUM_VERSION.split('.')[0]}.0.0.0 Safari/537.36 Edg/${CHROMIUM_VERSION.split('.')[0]}.0.0.0`,
-          'Origin': 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold'
+          'Origin': 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
+          'Accept-Encoding': 'gzip, deflate, br',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache',
+          'Cookie': `muid=${generateMuid()};`
         },
         rejectUnauthorized: false
       })
-
-      this.ws.connect()
-      this.ws.onmessage = (m: any) => {
-        if (typeof m.data === 'string') {
-          const id = /X-RequestId:(.*?)\r\n/.exec(Buffer.from(m.data).toString())?.[1]
-          if (id) {
-            msgQueue[i] = m.data.includes('Path:turn.end') ? (this.end[id] = i, { id, type: 'end' }) : { id, type: m.data.includes('Path:turn.start') || m.data.includes('Path:response') ? 'ignore' : undefined }
-            checkSend(id, i)
-          }
-        } else if (m.data instanceof Blob) {
-          const cur = i
-          msgQueue[cur] = { id: null }
-          m.data.arrayBuffer().then((buf: ArrayBuffer) => {
-            const data = Buffer.from(buf)
-            const id = /X-RequestId:(.*?)\r\n/.exec(data.toString())?.[1]
-            msgQueue[cur] = id && !(data[0] === 0x00 && data[1] === 0x67 && data[2] === 0x58) 
-              ? { id, data: Buffer.from(data.subarray(data.indexOf('Path:audio\r\n') + 12)) }
-              : { id, type: 'ignore' }
-            checkSend(id, this.end[id] || -1)
-          })
-        }
-        i++
-      }
-
-      this.ws.onclose = () => this.wsPromise = null
-      this.ws.onopen = () => {
-        this.ws.send(`Content-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n{"context":{"synthesis":{"audio":{"outputFormat":"${OUTPUT_FORMAT}"}}}}`)
-        resolve(this.ws)
-      }
-      this.ws.onerror = reject
-    })
-
-    return this.wsPromise
   }
 
-  async toStream(text: string, rate = 1, pitch = 1): Promise<Buffer> {
-    return this.sendSSML(this.wrapSSML(text, rate, pitch))
+  async toStream(text: string, rate = 1): Promise<Buffer> {
+    return this.sendSSML(this.wrapSSML(text, rate))
   }
 
-  async toSSMLStream(ssml: string, rate = 1, pitch = 1): Promise<Buffer> {
-    return this.sendSSML(this.wrapSSML(ssml, rate, pitch))
+  async toSSMLStream(ssml: string, rate = 1): Promise<Buffer> {
+    return this.sendSSML(this.wrapSSML(ssml, rate))
   }
 
-  private wrapSSML(input: string, rate = 1, pitch = 1) {
+  private wrapSSML(input: string, rate = 1) {
     const doc = document.implementation.createDocument(SSML_NS, 'speak')
     const speak = doc.documentElement
     const voice = doc.createElementNS(SSML_NS, 'voice')
     const prosody = doc.createElementNS(SSML_NS, 'prosody')
-    const rateVal = Math.round((rate - 1) * 100)
     speak.setAttribute('version', '1.0')
     speak.setAttributeNS(XML_NS, 'xml:lang', /([a-z]{2}-[A-Z]{2})/.exec(this.voice)?.[1] || 'zh-CN')
     voice.setAttribute('name', this.voice)
-    prosody.setAttribute('rate', `${rateVal >= 0 ? '+' : ''}${rateVal}%`)
-    prosody.setAttribute('pitch', `${Math.round((pitch - 1) * 100)}%`)
+    prosody.setAttribute('rate', String(rate))
     try {
       const parsed = new DOMParser().parseFromString(input, 'application/xml').documentElement
-      if (parsed?.localName === 'speak' && !parsed.querySelector('parsererror'))
-        Array.from(parsed.childNodes).forEach(child => prosody.appendChild(doc.importNode(child, true)))
-      else prosody.appendChild(doc.createTextNode(input))
-    } catch { prosody.appendChild(doc.createTextNode(input)) }
+      const text = parsed?.localName === 'speak' && !parsed.querySelector('parsererror')
+        ? parsed.textContent || ''
+        : input
+      prosody.appendChild(doc.createTextNode(text))
+    } catch { prosody.appendChild(doc.createTextNode(input.replace(/<[^>]*>/g, ' '))) }
     voice.appendChild(prosody)
     speak.appendChild(voice)
     return new XMLSerializer().serializeToString(doc)
   }
 
   private async sendSSML(ssml: string): Promise<Buffer> {
-    await this.init(this.voice)
     const id = randomBytes(16).toString('hex')
-    const readable = new stream.Readable({ read() {} })
-    this.queue[id] = readable
-    this.ws.send(`X-RequestId:${id}\r\nContent-Type:application/ssml+xml\r\nPath:ssml\r\n\r\n${ssml}`)
-    
     return new Promise((resolve, reject) => {
       const buffers: Buffer[] = []
-      const timeout = setTimeout(() => reject(new Error('TTS timeout')), 30000)
-      const cleanup = () => clearTimeout(timeout)
-      
-      readable.on('data', (d: Buffer) => buffers.push(d))
-      readable.on('close', () => (cleanup(), buffers.length ? resolve(Buffer.concat(buffers)) : reject(new Error('No audio'))))
-      readable.on('error', (e: any) => (cleanup(), reject(e)))
+      let settled = false
+      let ended = false
+      let pendingBinary: Promise<void> = Promise.resolve()
+      const ws = this.createSocket(id)
+      this.ws = ws
+      const timestamp = new Date().toString()
+      const finish = (error?: Error) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeout)
+        try { ws.close() } catch {}
+        error ? reject(error) : resolve(Buffer.concat(buffers))
+      }
+      const timeout = setTimeout(() => finish(new Error('TTS timeout')), 60000)
+      const finalize = () => pendingBinary.then(() => {
+        finish(buffers.length ? undefined : new Error('No audio'))
+      }).catch(e => finish(e instanceof Error ? e : new Error(String(e))))
+      const appendBinary = async (value: any) => {
+        const raw = value?.arrayBuffer ? await value.arrayBuffer() : value
+        const data = Buffer.from(raw)
+        if (data.length < 2) return
+        const headerLength = data.readInt16BE(0)
+        const bodyStart = 2 + headerLength
+        const body = data.subarray(bodyStart)
+        if (body.length) buffers.push(body)
+      }
+      ws.onopen = () => {
+        ws.send(`Content-Type:application/json; charset=utf-8\r\nPath:speech.config\r\nX-Timestamp:${timestamp}\r\n\r\n{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":false,"wordBoundaryEnabled":true},"outputFormat":"${OUTPUT_FORMAT}"}}}}`)
+        ws.send(`X-RequestId:${id}\r\nContent-Type:application/ssml+xml\r\nPath:ssml\r\nX-Timestamp:${timestamp}\r\n\r\n${ssml}`)
+      }
+      ws.onmessage = (message: any) => {
+        if (typeof message.data === 'string') {
+          const path = /^Path:\s*([^\r\n]+)/im.exec(message.data)?.[1]?.trim().toLowerCase()
+          if (path === 'turn.end') { ended = true; finalize() }
+          return
+        }
+        pendingBinary = pendingBinary.then(() => appendBinary(message.data))
+        if (ended) finalize()
+      }
+      ws.onerror = (error: any) => finish(error instanceof Error ? error : new Error('WebSocket error'))
+      ws.onclose = () => !settled && (buffers.length ? finish() : finish(new Error('No audio')))
+      ws.connect()
     })
   }
 
   setVoice(voice: string) { this.voice = voice }
-  close() { this.ws?.close(); this.wsPromise = null }
+  close() { this.ws?.close(); this.ws = null }
 }

@@ -4,6 +4,7 @@
 import { getDatabase, type Book } from './database';
 import { loadBookFile, materializeNativeFile, normalizeBookTitle, normalizeNativePath, normalizeSiyuanCloudUrl, readDirEntries, removeManagedFile, saveBookFile, saveCoverFile, saveOptionalCover, SIYUAN_CLOUD_BASE, toFileUrl } from './storage';
 import { diagnosticLog } from './diagnostics';
+import { renderPdfFirstPage } from '@/utils/embedPdfActions';
 
 export type BookFormat = 'pdf' | 'epub' | 'mobi' | 'azw3' | 'txt';
 export type BookStatus = 'unread' | 'reading' | 'finished';
@@ -24,6 +25,7 @@ export interface BookBulkPatch { tags?: BookArrayPatch; groups?: BookArrayPatch;
 
 // ===== 常量 =====
 export const SORTS = [['time','最近阅读'],['added','最近添加'],['progress','阅读进度'],['rating','评分'],['readTime','阅读时长'],['name','书名'],['author','作者'],['update','最近更新']] as const;
+export const bookshelfSortValue = (book: any, type: SortType | string) => type === 'name' ? book?.title || '' : type === 'author' ? book?.author || '' : type === 'progress' ? book?.progress || 0 : type === 'rating' ? book?.rating || 0 : type === 'readTime' ? book?.time || 0 : type === 'time' || type === 'update' ? book?.read || 0 : book?.added || 0
 export const STATUS_OPTIONS = [['unread','未读'],['reading','在读'],['finished','读完']] as const;
 export const STATUS_MAP: Record<BookStatus,string> = {unread:'未读',reading:'在读',finished:'读完'};
 export const RATING_OPTIONS = [[0,'☆☆☆☆☆ 全部'],[5,'★★★★★ 仅5星'],[4,'★★★★☆ 4星及以上'],[3,'★★★☆☆ 3星及以上']] as const;
@@ -158,7 +160,7 @@ export class BookshelfManager {
       return true;
     }, fallback);
   
-  private prepareLocalBook = async (file: File, parsedMeta?: any) => { const format = this.getFormat(file.name), name = file.name.replace(/\.[^.]+$/, ''); const source = parsedMeta || format === 'pdf' || format === 'txt' ? file : materializeNativeFile(file); const meta = parsedMeta || await this.extractMeta(source, format, name), title = normalizeBookTitle(meta.title || name) || name; return { file: source, format, name, meta, title } }
+  private prepareLocalBook = async (file: File, parsedMeta?: any) => { const format = this.getFormat(file.name), name = file.name.replace(/\.[^.]+$/, ''); const source = materializeNativeFile(file); const meta = parsedMeta || await this.extractMeta(source, format, name), title = normalizeBookTitle(meta.title || name) || name; return { file: source, format, name, meta, title } }
   private downloadCover = async (coverUrl: string | undefined, url: string) => {
     if (!coverUrl) return '';
     try {
@@ -549,6 +551,7 @@ export class BookshelfManager {
   }
   private async extractMeta(file: File, format: BookFormat, defaultName: string) {
     const def = this.metaDef(defaultName)
+    if (format === 'pdf') return { ...def, coverBlob: await renderPdfFirstPage(file) }
     if (!['epub', 'mobi', 'azw3', 'txt'].includes(format)) return def
     if (format === 'txt') return def
     try {

@@ -315,6 +315,7 @@ const loadViewer=()=>document.getElementById('protyleViewerScript')?Promise.reso
 })
 let activeMediaMenu:any=null
 const closeMediaMenu=()=>{activeMediaMenu?.element?.remove?.();activeMediaMenu=null}
+const notifyHostClick=()=>document.body?.dispatchEvent(new MouseEvent('click',{bubbles:true,view:window}))
 const openMediaMenu=(x:number,y:number,setup:(m:Menu)=>void)=>{closeMediaMenu();const m=new Menu('sireader-media-menu',()=>activeMediaMenu=null);setup(m);activeMediaMenu=m;m.open({x,y})}
 const openImageMenu = ({ item, x, y }: any) => openMediaMenu(x, y, m => {
   m.addItem({ icon: 'iconCopy', label: '复制图片', click: () => handleCopyToClipboard(item) })
@@ -362,6 +363,7 @@ const init=async()=>{
     const bookUrl=props.bookInfo?.url||props.url||(props.file?`file://${props.file.name}`:`book-${Date.now()}`)
     currentBookUrl.value=bookUrl
     ;(window as any).__currentBookUrl=bookUrl
+    ;(window as any).__sireader_bookInfo=props.bookInfo || { url: bookUrl, title: getBookName() }
     const isPdf=isPdfBook.value
     const isTemporary=!!props.bookInfo?.temporary
     const{bookshelfManager}=await import('@/core/bookshelf')
@@ -388,7 +390,7 @@ const init=async()=>{
       reader.on('image-menu', openImageMenu)
       reader.on('table-menu', openTableMenu)
       reader.on('table-open', openTableMenu)
-      reader.on('content-interaction', closeMediaMenu)
+      reader.on('content-interaction', () => { closeMediaMenu(); notifyHostClick() })
       !isTemporary&&bookshelfManager.restoreProgress(bookUrl,reader).catch(()=>{})
       reader.on('relocate',onProgress)
       setupEpubKeyboard(
@@ -485,6 +487,7 @@ const getScrollStep=()=>{
 const keyboardHandler=createKeyboardHandler({handlePrev,handleNext,handleUndo,getScrollStep})
 const handleKeydown=(e:KeyboardEvent)=>shouldHandleReaderKeydown(isEmbedPdfMode.value,isThisActiveReader())&&keyboardHandler(e)
 const events=[
+  ['tts:start-reader',()=>{if(isEmbedPdfMode.value||!isThisActiveReader()||ttsController.isActive.value)return;toggleTTS()}],
   ['sireaderSettingsUpdated',handleSettingsUpdate],
   ['sireader:goto',handleGoto],
   ['sireader:marks-updated',refreshEmbedPdfMarks],
@@ -504,7 +507,9 @@ const resize=()=>{
 }
 defineExpose({ resize })
 onMounted(()=>{init();containerRef.value?.focus();events.forEach(([e,h])=>window.addEventListener(e,h as any));window.addEventListener('keydown',handleKeydown);window.addEventListener('unhandledrejection',suppressError);window.addEventListener('blur',handleWindowBlur);window.addEventListener('focus',handleWindowFocus);document.addEventListener('visibilitychange',handleVisibilityChange);setupTabObserver();const c=containerRef.value;c&&(c.addEventListener('focusin',handleFocusIn),c.addEventListener('focusout',handleFocusOut));bindTouchPaging(c);bindTouchPaging(viewerContainerRef.value);window.dispatchEvent(new CustomEvent('reader:open',{detail:{bookUrl:getBookUrl()}}));syncReaderFocus(true)})
-onBeforeUnmount(()=>{void trackPending((async()=>{
+onBeforeUnmount(()=>{
+  if (isThisActiveReader()) ttsController.destroy()
+  void trackPending((async()=>{
   const view=currentView.value,c=containerRef.value
   syncReaderFocus(false);window.dispatchEvent(new CustomEvent('reader:close'))
   const saving = Promise.resolve(savePosition())

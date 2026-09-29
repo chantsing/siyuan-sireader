@@ -565,7 +565,7 @@ export const normalizeBookTitle = (title = '') => {
   const trimmed = title.trim()
   if (!trimmed) return ''
   const withoutExt = trimmed.replace(/\.(epub|pdf|mobi|azw3|azw|txt|fb2|cbz)$/i, '')
-  return withoutExt.replace(/_[a-z0-9]{4,12}$/i, '') || withoutExt || trimmed
+  return withoutExt.replace(/(?:_[a-z0-9]{4,12}|-\d{14}-[a-z0-9]{7,})$/i, '') || withoutExt || trimmed
 }
 
 const compatibilityKey = <T>(key: string): StorageKey<T | null> => ({ name: key, defaultValue: () => null })

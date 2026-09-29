@@ -52,7 +52,7 @@ const recordInsertedBlocks = async (item: any, result: any, ctx: any) => {
   return blockId
 }
 const syncingMarks = new Set<string>()
-const imageSrcToMarkdown = async (src: string | Blob, name = 'mark') => {
+export const imageSrcToMarkdown = async (src: string | Blob, name = 'mark') => {
   if (!src) return ''
   try {
     const blob = typeof src === 'string' ? await fetch(src).then(r => r.blob()) : src

@@ -377,19 +377,21 @@ export async function putFile(path: string, isDir: boolean, file: any) {
   let form = new FormData();
   form.append("path", path);
   form.append("isDir", isDir.toString());
-  form.append("modTime", Math.floor(Date.now() / 1000).toString());
+  form.append("modTime", fileModificationTime().toString());
   form.append("file", file);
   form.append("app", (window as any).siyuan?.appId || "");
   return checkedRequest("/api/file/putFile", form);
 }
 
+export const fileModificationTime = () => Date.now()
+
 export async function removeFile(path: string) {
-  let data = {
-    path: path,
+  const response: IWebSocketData = await fetchSyncPost('/api/file/removeFile', {
+    path,
     app: (window as any).siyuan?.appId || '',
-  };
-  let url = "/api/file/removeFile";
-  return checkedRequest(url, data);
+  })
+  if (response.code !== 0 && !/path does not exist|not found|404/i.test(response.msg || '')) throw new Error(response.msg || `SiYuan API failed (${response.code}): /api/file/removeFile`)
+  return response.data
 }
 
 export async function renameFile(path: string, newPath: string) {

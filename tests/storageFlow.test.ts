@@ -9,7 +9,7 @@ vi.mock('@/utils/copy', () => ({ inlineLinkText: vi.fn(), sendMarkToDoc: vi.fn()
 
 import { usePlugin } from '@/main'
 import { putFile, removeFile, readDir } from '@/api'
-import { bookRecordKey, createStorageEngine, pluginStorageAdapter, readEmbedPdfAnnotations, readEmbedPdfProgress, deleteEmbedPdfAnnotation, recoverBackupRecords, storageEngine, cloneStorageValue, writeEmbedPdfProgress, createLatestSaver } from '@/core/storage'
+import { bookRecordKey, createStorageEngine, pluginStorageAdapter, readEmbedPdfAnnotations, readEmbedPdfProgress, deleteEmbedPdfAnnotation, recoverBackupRecords, storageEngine, cloneStorageValue, writeEmbedPdfProgress, createLatestSaver, normalizeBookTitle } from '@/core/storage'
 import { ensurePdfRecordMigrated } from '@/core/dataMigration'
 import { ReaderDatabase } from '@/core/database'
 import { diagnosticLog } from '@/core/diagnostics'
@@ -310,6 +310,11 @@ test('database settings read synced changes and do not skip a stale equal-value 
   expect(JSON.parse(files.get('settings.json')!)).toEqual({ x: 1, remote: true })
 })
 
+test('normalizes Siyuan document attachment suffixes in book titles', () => {
+  expect(normalizeBookTitle('bert-acl-two-column-20260929204441-983j8fw.pdf')).toBe('bert-acl-two-column')
+  expect(normalizeBookTitle('bert-acl-two-column.pdf')).toBe('bert-acl-two-column')
+})
+
 test('patching nested settings works on a clean installation', async () => {
   const db = new ReaderDatabase()
   await db.patchSetting('reader_settings', { nested: { font: 16 } })
@@ -457,6 +462,11 @@ describe('storage flow', () => {
     await saver.flush()
     expect(writes).toEqual([2, 3])
     vi.useRealTimers()
+  })
+
+  test('PDF cover rendering is safe when no browser document is available', async () => {
+    const { renderPdfFirstPage } = await import('@/utils/embedPdfActions')
+    expect(await renderPdfFirstPage(new Blob(['%PDF-'], { type: 'application/pdf' }))).toBeUndefined()
   })
 
 })

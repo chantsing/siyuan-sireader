@@ -57,6 +57,10 @@ let frame: any = null
 let readerApp: any = null
 let tabObserver: MutationObserver | null = null
 let pageScriptRunId = 0
+let frameReady = false
+let resolveFrameReady: (() => void) | null = null
+const frameReadyPromise = new Promise<void>(resolve => { resolveFrameReady = resolve })
+let navigationTask = Promise.resolve()
 
 const actionText = computed(() => {
   if (turning.value === 'next') return '下一页'
@@ -75,11 +79,11 @@ const createFrame = (url: string) => {
   el.setAttribute('src', url)
   el.setAttribute(isWebview ? 'allowpopups' : 'allowfullscreen', 'true')
   if (isWebview) {
-    el.addEventListener('dom-ready', () => runPageScripts())
+    el.addEventListener('dom-ready', () => { frameReady = true; resolveFrameReady?.(); resolveFrameReady = null; void runPageScripts() })
     el.addEventListener('did-finish-load', () => runPageScripts())
     el.addEventListener('did-navigate-in-page', () => runPageScripts())
   } else {
-    el.addEventListener('load', () => runPageScripts())
+    el.addEventListener('load', () => { frameReady = true; resolveFrameReady?.(); resolveFrameReady = null; void runPageScripts() })
   }
   return el
 }
@@ -124,6 +128,16 @@ const executableScripts = async (url: string) => [
   ...await contextScripts(url),
 ]
 
+const applyWereadScrollbarTheme = async (url: string) => {
+  if (!/^https:\/\/weread\.qq\.com\/web\//i.test(url)) return
+  await executePageScript(`(() => {
+    const id = 'sireader-weread-scrollbar-theme'
+    let style = document.getElementById(id)
+    if (!style) { style = document.createElement('style'); style.id = id; (document.head || document.documentElement).appendChild(style) }
+    style.textContent = ':root{color-scheme:light dark}*{scrollbar-width:thin;scrollbar-color:color-mix(in srgb,currentColor 34%,transparent) transparent}*::-webkit-scrollbar{width:8px;height:8px}*::-webkit-scrollbar-track{background:transparent}*::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background-clip:padding-box;background-color:color-mix(in srgb,currentColor 34%,transparent)}*::-webkit-scrollbar-thumb:hover{background-color:color-mix(in srgb,currentColor 52%,transparent)}'
+  })()`).catch(() => {})
+}
+
 const syncPageBridge = async () => {
   const snapshot = await executePageScript('window.__sireaderPageBridge?.dump?.() || null').catch(() => null)
   if (!snapshot || typeof snapshot !== 'object') return
@@ -140,6 +154,7 @@ const runPageScripts = async () => {
   await waitForPage()
   if (runId !== pageScriptRunId || !frame) return
   const url = currentFrameUrl()
+  await applyWereadScrollbarTheme(url)
   const scripts = await executableScripts(url)
   const storedSettings = await loadPageScriptSettings().catch(() => ({}))
   await executePageScript(createPageBridgeScript(storedSettings)).catch(() => {})
@@ -216,11 +231,26 @@ const openToolbarMenu = async (item: PageScriptToolbarItem, event: MouseEvent) =
   menu.open({ x: rect?.right ?? event.clientX, y: rect?.bottom ?? event.clientY })
 }
 
-const loadFrameUrl = async (url: string) => {
+const navigateFrame = async (url: string) => {
   if (!url) return
-  if (typeof frame?.loadURL === 'function') frame.loadURL(url)
-  else frame?.setAttribute?.('src', url)
+  if (!frame?.isConnected) return
+  if (!frameReady && typeof frame?.loadURL === 'function') await Promise.race([frameReadyPromise, new Promise(resolve => setTimeout(resolve, 3000))])
+  if (!frameReady && typeof frame?.loadURL === 'function') throw new Error('在线阅读页面尚未准备好，请稍后重试')
+  const current = currentFrameUrl()
+  if (current === url) return
+  if (typeof frame?.loadURL === 'function') {
+    try { await frame.loadURL(url) }
+    catch (error: any) {
+      const message = String(error?.message || error || '')
+      if (!/ERR_ABORTED|error code -3|\(-3\)/i.test(message)) throw error
+    }
+  } else frame?.setAttribute?.('src', url)
   await waitForPage()
+}
+const loadFrameUrl = (url: string) => {
+  const task = navigationTask.then(() => navigateFrame(url))
+  navigationTask = task.catch(() => {})
+  return task
 }
 
 const getSnapshot = async () => {
@@ -385,7 +415,7 @@ const convert = async () => {
 const resize = () => readerApp?.resize?.()
 const handleGoto = (event: Event) => {
   const cfi = (event as CustomEvent).detail?.cfi
-  if (/^https:\/\/weread\.qq\.com\/web\/reader\//i.test(cfi || '')) navigateWeread({ url: cfi })
+  if (/^https:\/\/weread\.qq\.com\/web\/reader\//i.test(cfi || '')) void navigateWeread({ url: cfi }).catch((error: any) => showMessage(error?.message || '微信读书章节跳转失败', 3000, 'error'))
 }
 
 const activateContext = () => {

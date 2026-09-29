@@ -383,15 +383,19 @@ ttsBar.id = 'tts-btn'
 ttsBar.innerHTML = '<svg class="toolbar__icon"><use xlink:href="#lucide-volume-2"></use></svg>'
 ttsBar.setAttribute('aria-label', '朗读播放')
 ttsBar.style.cssText = 'cursor:pointer;display:none'
-const toggleTts = () => window.dispatchEvent(new CustomEvent('tts:toggle-mini'))
+const toggleTts = () => window.dispatchEvent(new CustomEvent('tts:toggle-mini', { detail: { open: true } }))
 ttsBar.addEventListener('click', toggleTts)
 plugin.addStatusBar({ element: ttsBar, position: 'right' })
-watch([ttsController.isActive, ttsController.paused], ([active, paused]) => {
-  ttsBar.style.display = active ? '' : 'none'
-  ttsBar.classList.toggle('toolbar__item--active', !!active && !paused)
-  ttsBar.setAttribute('aria-label', active ? (paused ? '继续朗读' : '朗读中') : '朗读播放')
-}, { immediate: true })
-registerCleanup(() => ttsBar.removeEventListener('click', toggleTts))
+const syncTtsBar = () => {
+  const active = !!(window as any).__sireader_active_reader
+  const playing = ttsController.isActive.value && !ttsController.paused.value
+  ttsBar.style.display = active ? 'flex' : 'none'
+  ttsBar.classList.toggle('toolbar__item--active', playing)
+  ttsBar.setAttribute('aria-label', ttsController.isActive.value ? (ttsController.paused.value ? '继续朗读' : '朗读中') : '朗读播放')
+}
+watch([ttsController.isActive, ttsController.paused], syncTtsBar, { immediate: true })
+window.addEventListener('sireader:reader-state', syncTtsBar)
+registerCleanup(() => { ttsBar.removeEventListener('click', toggleTts); window.removeEventListener('sireader:reader-state', syncTtsBar) })
 
 // 处理统计面板切换
 const handleStatsToggle = () => showStats.value = !showStats.value

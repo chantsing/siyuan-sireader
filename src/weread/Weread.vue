@@ -20,6 +20,7 @@
       <input v-model.trim="keyword" class="b3-text-field" :placeholder="activeTab === 'shelf' ? '搜索当前书架' : '搜索微信读书书城'" @keyup.enter="handleSearch">
       <button class="wr-btn primary b3-tooltips b3-tooltips__s" :aria-label="activeTab === 'shelf' ? '筛选当前书架' : '按关键词搜索微信读书书城'" :disabled="activeTab !== 'shelf' && loading.search" @click="handleSearch"><svg><use xlink:href="#lucide-search"/></svg>{{ activeTab === 'shelf' ? '筛选' : '搜索' }}</button>
       <button class="wr-btn b3-tooltips b3-tooltips__s" aria-label="同步书架、笔记、统计和推荐" :disabled="loading.all" @click="refreshAll"><svg><use xlink:href="#lucide-refresh-cw"/></svg>同步</button>
+      <button v-if="activeTab === 'shelf'" class="wr-btn b3-tooltips b3-tooltips__s" aria-label="批量同步微信读书到思源文档" :disabled="loading.sync" @click="syncShelfToDocs"><svg><use xlink:href="#iconDownload"/></svg>同步到思源</button>
     </div>
 
     <div class="wr-tabs">
@@ -302,6 +303,7 @@ import { exportBookLink, copyMark as copyMarkUtil } from '@/utils/copy'
 import MarkCard from '@/components/MarkCard.vue'
 import { callWereadAgentDirect, createWereadOnlineBookInfo, getWereadChapterReadUrl, getWereadReadUrl, testWereadAgentKey } from '@/weread/agent'
 import { createWereadReaderContext, getWereadChapterTitle, getWereadChapterUid, toWereadBookmarkMark, toWereadHighlightMark, toWereadReviewMark } from '@/weread/context'
+import { syncWereadBook, syncWereadBooks } from '@/weread/sync'
 
 defineProps<{ i18n: any }>()
 
@@ -349,7 +351,7 @@ const expandedShelfGroups = ref(new Set<string>())
 const expandedChapters = ref(new Set<string>())
 const leftWidth = ref(Number(localStorage.getItem('sireader.weread.leftWidth') || 520))
 const raw = reactive<Record<string, any>>({})
-const loading = reactive({ all: false, search: false, shelf: false, recommend: false, detail: false, test: false, stats: false, extra: false })
+const loading = reactive({ all: false, search: false, shelf: false, recommend: false, detail: false, test: false, stats: false, extra: false, sync: false })
 
 const keyReady = computed(() => !!apiKey.value)
 const apiCount = computed(() => Object.keys(raw).length)
@@ -410,6 +412,7 @@ const detailActions = computed(() => [
   { text: '阅读', icon: '#lucide-book-open-text', label: '在 SiReader 阅读器中打开微信读书网页', primary: true, run: () => readBook(selectedBook.value) },
   { text: isInShelf(selectedBook.value) ? '已在书架' : '加入书架', icon: isInShelf(selectedBook.value) ? '#lucide-check' : '#lucide-book-plus', label: isInShelf(selectedBook.value) ? '已添加到 SiReader 书架' : '添加到 SiReader 书架', done: isInShelf(selectedBook.value), run: () => addBook(selectedBook.value) },
   { text: '导出', icon: '#iconUpload', label: '导出书籍信息链接', run: exportBookInfo },
+  { text: '同步到思源', icon: '#iconDownload', label: '将当前微信读书内容增量同步到思源文档', run: syncSelectedBook },
 ])
 const introCollapsible = computed(() => String(detail.value?.intro || '').length > 90)
 const bestBookmarksTotal = computed(() => Number(raw.bestBookmarks?.totalCount || bestBookmarks.value.length || 0))
@@ -716,6 +719,33 @@ const refreshAll = async () => {
   const failed = results.filter(item => item.status === 'rejected').length
   showMessage(failed ? `同步完成，${failed} 项失败` : '微信读书同步完成', 2000, failed ? 'error' : 'info')
 }
+const wereadSettings = () => ({ ...((window as any).__sireader_settings || {}) })
+const syncSelectedBook = async () => {
+  if (!selectedBook.value) return
+  if (!apiKey.value) return showMessage('请先填写微信读书 API Key', 2500, 'error')
+  loading.sync = true
+  try {
+    const result = await syncWereadBook(selectedBook.value, apiKey.value, wereadSettings())
+    showMessage(`已同步：${result.title}`, 2200, 'info')
+  } catch (error: any) {
+    showMessage(`同步失败：${error?.message || '未知错误'}`, 3500, 'error')
+  } finally {
+    loading.sync = false
+  }
+}
+const syncShelfToDocs = async () => {
+  if (!apiKey.value) return showMessage('请先填写微信读书 API Key', 2500, 'error')
+  const books = filteredShelfBooks.value
+  if (!books.length) return showMessage('当前书架没有可导入的书籍', 2200, 'info')
+  loading.sync = true
+  try {
+    const results = await syncWereadBooks(books, apiKey.value, wereadSettings())
+    const failed = results.filter(item => !item.ok).length
+    showMessage(failed ? `同步完成，${failed} 本失败` : `已同步 ${results.length} 本书`, 3000, failed ? 'error' : 'info')
+  } finally {
+    loading.sync = false
+  }
+}
 const selectBook = async (book: any) => {
   book = mergeBook(book)
   selectedBook.value = sourceBook(book)
@@ -856,7 +886,7 @@ onUnmounted(() => localStorage.setItem('sireader.weread.leftWidth', String(leftW
 .wr-tabs{overflow:auto;padding:1px 1px 2px;button{height:30px;padding:0 10px;display:inline-flex;align-items:center;gap:5px;font-size:12px;white-space:nowrap;svg{width:14px;height:14px}em{font-style:normal;font-size:10px;color:inherit;opacity:.68}&.active{background:var(--wr-green);border-color:var(--wr-green);color:var(--b3-theme-on-primary,#fff)}}}
 .wr-overview{display:flex;align-items:center;gap:10px;min-height:28px;padding:0 2px;flex:0 0 auto;overflow:auto;div{display:flex;align-items:baseline;gap:4px;min-width:max-content;padding:0 8px;border-left:1px solid var(--wr-line)}div:first-child{border-left:0;padding-left:0}span{font-size:11px;color:var(--b3-theme-on-surface-variant)}strong{font-size:13px;color:var(--wr-ink);font-weight:800;white-space:nowrap}}
 .wr-grid{min-height:0;flex:1;display:grid;grid-template-columns:minmax(0,1fr);gap:0;overflow:hidden;&.has-detail{grid-template-columns:minmax(360px,var(--wr-left-width)) 8px minmax(360px,1fr)}&.is-stats{grid-template-columns:minmax(0,1fr)}&:not(.has-detail),&.is-stats{.wr-main{border-radius:8px}.wr-resizer,.wr-detail{display:none}}}
-.wr-main,.wr-detail{min-width:0;min-height:0;border:1px solid var(--wr-line);background:var(--wr-panel)}
+.wr-main,.wr-detail{min-width:0;min-height:0;border:1px solid var(--wr-line);background:var(--wr-panel);scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--b3-theme-on-background) 30%,transparent) transparent;&::-webkit-scrollbar{width:8px;height:8px}&::-webkit-scrollbar-track{background:transparent}&::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background-clip:padding-box;background-color:color-mix(in srgb,var(--b3-theme-on-background) 30%,transparent)}&::-webkit-scrollbar-thumb:hover{background-color:color-mix(in srgb,var(--b3-theme-on-background) 48%,transparent)}}
 .wr-main{overflow:auto;border-radius:8px 0 0 8px}.wr-detail{border-radius:0 8px 8px 0}
 .wr-resizer{width:8px;cursor:col-resize;background:transparent}
 .wr-resizer:hover{background:color-mix(in srgb,var(--wr-green) 10%,transparent)}
@@ -888,7 +918,7 @@ onUnmounted(() => localStorage.setItem('sireader.weread.leftWidth', String(leftW
 .wr-book-section{padding:10px;border:1px solid var(--wr-line);border-radius:8px;background:var(--b3-theme-background)}
 .wr-section-title{margin-bottom:7px;font-size:12px;font-weight:800;color:var(--wr-ink)}
 .wr-intro-section{flex:0 0 auto}
-.wr-intro{margin:0;max-height:62px;overflow:hidden;padding:0 3px 0 0;font-size:12px;line-height:1.72;color:var(--b3-theme-on-surface-variant);white-space:pre-wrap;&.expanded{max-height:180px;overflow:auto}}
+.wr-intro{margin:0;max-height:62px;overflow:hidden;padding:0 3px 0 0;font-size:12px;line-height:1.72;color:var(--b3-theme-on-surface-variant);white-space:pre-wrap;&.expanded{max-height:180px;overflow:auto;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--b3-theme-on-background) 30%,transparent) transparent;&::-webkit-scrollbar{width:6px}&::-webkit-scrollbar-track{background:transparent}&::-webkit-scrollbar-thumb{border-radius:999px;background-color:color-mix(in srgb,var(--b3-theme-on-background) 30%,transparent)}}}
 .wr-intro-more{align-self:flex-start;margin-top:6px;padding:0;border:0;background:transparent;color:var(--b3-theme-primary);font-size:12px;line-height:18px;cursor:pointer}
 .wr-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;div{padding:9px 6px;border-radius:8px;background:var(--wr-soft);border:1px solid var(--wr-line);text-align:center;min-width:0}strong,span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}strong{font-size:14px;color:var(--wr-ink)}span{margin-top:3px;font-size:10px;color:var(--b3-theme-on-surface-variant)}}
 .wr-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;span{min-width:0;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--b3-theme-on-surface-variant);padding:6px 7px;border-radius:6px;background:var(--wr-soft);border:1px solid var(--wr-line);line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}em{flex:0 0 auto;font-style:normal;color:var(--wr-green-dark);font-weight:700}}

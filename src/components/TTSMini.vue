@@ -1,68 +1,67 @@
 <template>
-  <Transition name="fade">
-    <div v-if="visible && (tts.isActive.value || tts.currentText.value)" ref="popupRef" class="tts-mini" @click.stop>
-      <div class="tts-mini-top">
-        <div class="tts-mini-icon"><svg><use xlink:href="#lucide-volume-2" /></svg></div>
-        <div class="tts-mini-info">
-          <div class="tts-mini-title">{{ tts.title.value || '朗读中' }}</div>
-          <div class="tts-mini-state">{{ tts.paused.value ? '已暂停' : '正在播放' }}</div>
-        </div>
+  <Transition name="tts-fade">
+    <section v-if="visible" ref="popupRef" class="tts-mini" :class="{ expanded }" role="status" :aria-label="tts.title.value || '朗读控制'" @click.stop>
+      <div class="tts-mini-bar">
+        <button class="tts-mini-main" :aria-expanded="expanded" aria-label="展开朗读控制" @click="expanded = !expanded">
+          <span class="tts-mini-cover">
+            <img v-if="coverUrl" :src="coverUrl" :alt="tts.title.value || '封面'" loading="lazy" decoding="async" @error="coverUrl = ''">
+            <svg v-else aria-hidden="true"><use xlink:href="#lucide-volume-2" /></svg>
+          </span>
+          <span class="tts-mini-info">
+            <strong>{{ tts.title.value || '朗读' }}</strong>
+            <span>{{ tts.currentText.value || (tts.paused.value ? '已暂停' : '正在朗读') }}</span>
+          </span>
+          <svg class="tts-mini-chevron" :class="{ rotated: expanded }" aria-hidden="true"><use xlink:href="#iconDown" /></svg>
+        </button>
         <div class="tts-mini-tools">
-          <button class="block__icon block__icon--show" aria-label="上一段" @click="tts.jump(-1)">
-            <svg><use xlink:href="#iconLeft" /></svg>
-          </button>
-          <button class="block__icon block__icon--show" :aria-label="tts.paused.value ? '继续' : '暂停'" @click="tts.togglePause()">
-            <svg><use :xlink:href="tts.paused.value ? '#iconPlay' : '#iconPause'" /></svg>
-          </button>
-          <button class="block__icon block__icon--show" aria-label="下一段" @click="tts.jump(1)">
-            <svg><use xlink:href="#iconRight" /></svg>
-          </button>
-          <button class="block__icon block__icon--show" aria-label="停止" @click="stop">
-            <svg><use xlink:href="#iconClose" /></svg>
-          </button>
+          <button aria-label="上一句" @click="tts.jump(-1)"><svg><use xlink:href="#iconLeft" /></svg></button>
+          <button class="primary" :aria-label="tts.isActive.value && !tts.paused.value ? '暂停' : '播放'" @click="playOrPause"><svg><use :xlink:href="tts.isActive.value && !tts.paused.value ? '#iconPause' : '#iconPlay'" /></svg></button>
+          <button aria-label="下一句" @click="tts.jump(1)"><svg><use xlink:href="#iconRight" /></svg></button>
+          <button aria-label="停止朗读" @click="stop"><svg><use xlink:href="#iconClose" /></svg></button>
         </div>
       </div>
-      <div class="tts-mini-text">{{ tts.currentText.value || '准备朗读...' }}</div>
-      <div v-if="ttsSettings" class="tts-mini-controls">
-        <div class="tts-mini-line">
-          <label class="tts-mini-voice">
-            <span>语音</span>
-            <select class="b3-select" :value="ttsSettings.voice" @focus="loadVoices" @change="setVoice">
-              <option v-for="voice in voiceOptions" :key="voice.name" :value="voice.name">{{ voice.displayName || voice.name }}</option>
-            </select>
-          </label>
-          <label class="tts-mini-rate">
-            <span>{{ Number(ttsSettings.rate || 1).toFixed(1) }}x</span>
-            <input class="b3-slider" type="range" min="0.5" max="2" step="0.1" :value="ttsSettings.rate || 1" @input="setRate">
-          </label>
-        </div>
-        <div class="tts-mini-line tts-mini-line--triple">
-          <label class="tts-mini-rate"><span>音调 {{ Number(ttsSettings.pitch || 1).toFixed(1) }}</span><input class="b3-slider" type="range" min="0.5" max="1.5" step="0.1" :value="ttsSettings.pitch || 1" @input="setNum('pitch', $event)"></label>
-          <label class="tts-mini-rate"><span>句 {{ Number(ttsSettings.sentenceGap || 0).toFixed(1) }}s</span><input class="b3-slider" type="range" min="0" max="3" step="0.1" :value="ttsSettings.sentenceGap || 0" @input="setNum('sentenceGap', $event)"></label>
-          <label class="tts-mini-rate"><span>段 {{ Number(ttsSettings.paragraphGap ?? 0.3).toFixed(1) }}s</span><input class="b3-slider" type="range" min="0" max="5" step="0.1" :value="ttsSettings.paragraphGap ?? 0.3" @input="setNum('paragraphGap', $event)"></label>
-        </div>
-        <div class="tts-mini-switches">
-          <label><input class="b3-switch" type="checkbox" :checked="ttsSettings.autoTurnPage" @change="setCheck('autoTurnPage', $event)"> 自动翻页</label>
-          <label><input class="b3-switch" type="checkbox" :checked="ttsSettings.highlightText" @change="setCheck('highlightText', $event)"> 高亮文本</label>
-        </div>
+
+      <div v-if="expanded" class="tts-mini-panel">
+        <div class="tts-mini-current">{{ tts.currentText.value || '准备朗读' }}</div>
+        <details v-if="ttsSettings" class="tts-mini-settings">
+          <summary>朗读设置</summary>
+          <div class="tts-mini-fields">
+            <label class="wide"><span>语音</span><select class="b3-select" :value="ttsSettings.voice" @focus="loadVoices" @change="update('voice', ($event.target as HTMLSelectElement).value)"><option v-if="loadingVoices" disabled>加载中…</option><option v-for="voice in voiceOptions" :key="voice.name" :value="voice.name">{{ voice.displayName || voice.name }}</option></select></label>
+            <label><span>语速 <b>{{ Number(ttsSettings.rate || 1).toFixed(1) }}x</b></span><input class="b3-slider" type="range" min="0.5" max="2" step="0.1" :value="ttsSettings.rate || 1" @input="update('rate', Number(($event.target as HTMLInputElement).value))"></label>
+            <label><span>音调 <b>{{ Number(ttsSettings.pitch || 1).toFixed(1) }}</b></span><input class="b3-slider" type="range" min="0.5" max="1.5" step="0.1" :value="ttsSettings.pitch || 1" @input="update('pitch', Number(($event.target as HTMLInputElement).value))"></label>
+            <label><span>句间停顿 <b>{{ Number(ttsSettings.sentenceGap || 0).toFixed(1) }}s</b></span><input class="b3-slider" type="range" min="0" max="3" step="0.1" :value="ttsSettings.sentenceGap || 0" @input="update('sentenceGap', Number(($event.target as HTMLInputElement).value))"></label>
+            <label><span>段间停顿 <b>{{ Number(ttsSettings.paragraphGap ?? 0.3).toFixed(1) }}s</b></span><input class="b3-slider" type="range" min="0" max="5" step="0.1" :value="ttsSettings.paragraphGap ?? 0.3" @input="update('paragraphGap', Number(($event.target as HTMLInputElement).value))"></label>
+          </div>
+        </details>
       </div>
-    </div>
+    </section>
   </Transition>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { settingsManager, type ReaderSettings } from '@/composables/useSetting'
+import { bookshelfManager } from '@/core/bookshelf'
 import { getTTSController } from '@/services/TTSPlayer'
 import type { TTSVoice } from '@/services/TTSEngine'
 
 const tts = getTTSController()
 const visible = ref(false)
+const expanded = ref(false)
 const popupRef = ref<HTMLElement>()
 const settings = ref<ReaderSettings | null>((window as any).__sireader_settings || null)
+const coverUrl = ref('')
 const voices = ref<TTSVoice[]>([])
 const loadingVoices = ref(false)
 let saveTimer: number | undefined
+
+const ttsSettings = computed(() => settings.value?.tts || null)
+const voiceOptions = computed(() => {
+  const current = ttsSettings.value?.voice
+  const favorites = settings.value?.tts?.favoriteVoices || []
+  const list = [...voices.value.filter(v => v.isLocal), ...favorites.filter(v => !voices.value.some(local => local.name === v.name))]
+  return current && !list.some(v => v.name === current) ? [{ name: current, displayName: current, locale: '', isLocal: false }, ...list] : list
+})
 
 const position = () => nextTick(() => {
   const btn = document.querySelector('#tts-btn') as HTMLElement | null
@@ -71,52 +70,31 @@ const position = () => nextTick(() => {
   popupRef.value.style.right = `${window.innerWidth - rect.right}px`
   popupRef.value.style.bottom = `${window.innerHeight - rect.top + 8}px`
 })
-const syncSettings = (e?: Event) => settings.value = (e as CustomEvent)?.detail || (window as any).__sireader_settings || settings.value
-const toggle = () => (visible.value = !visible.value, visible.value && (syncSettings(), position()))
-const clickOut = (e: MouseEvent) => {
-  const target = e.target as HTMLElement | null
-  if (target?.closest('#tts-btn') || target?.closest('.tts-mini')) return
-  visible.value = false
+const syncSettings = (e?: Event) => { settings.value = (e as CustomEvent)?.detail || (window as any).__sireader_settings || settings.value }
+const loadCover = async () => {
+  const info = (window as any).__sireader_bookInfo
+  if (info?.cover) { coverUrl.value = bookshelfManager.getCoverUrl(info); return }
+  const url = (window as any).__currentBookUrl
+  if (!url) return
+  try { const book = await bookshelfManager.getBook(url); if (book) coverUrl.value = bookshelfManager.getCoverUrl(book) } catch {}
 }
-const stop = () => {
-  tts.destroy()
-  visible.value = false
+const toggle = (event?: Event) => {
+  const open = (event as CustomEvent)?.detail?.open
+  visible.value = open === true ? true : !visible.value
+  if (visible.value) { syncSettings(); loadCover(); position() }
 }
-const ttsSettings = computed(() => settings.value?.tts)
-const voiceOptions = computed(() => {
-  const current = ttsSettings.value?.voice
-  const favorites = settings.value?.tts?.favoriteVoices || []
-  const list = [...voices.value.filter(v => v.isLocal), ...favorites.filter(v => !voices.value.some(local => local.name === v.name))]
-  return current && !list.some(v => v.name === current) ? [{ name: current, displayName: current, locale: '', isLocal: false }, ...list] : list
-})
+const clickOut = (e: MouseEvent) => { const target = e.target as HTMLElement | null; if (!target?.closest('#tts-btn,.tts-mini')) { visible.value = false; expanded.value = false } }
+const stop = () => { tts.destroy(); visible.value = false; expanded.value = false }
+const playOrPause = () => tts.isActive.value ? tts.togglePause() : window.dispatchEvent(new CustomEvent('tts:start-reader'))
 const loadVoices = async () => {
   if (loadingVoices.value || voices.value.length) return
   loadingVoices.value = true
-  try {
-    const { loadLocalVoices } = await import('@/services/TTSEngine')
-    voices.value = await loadLocalVoices()
-  } finally { loadingVoices.value = false }
+  try { const { loadLocalVoices, loadOnlineVoices } = await import('@/services/TTSEngine'); voices.value = [...await loadLocalVoices(), ...await loadOnlineVoices()] } finally { loadingVoices.value = false }
 }
-const saveSettings = () => {
-  if (!settings.value) return
-  clearTimeout(saveTimer)
-  saveTimer = window.setTimeout(() => settings.value && settingsManager.save(settings.value).catch(() => {}), 200)
-}
-const setTTS = (key: string, value: any) => {
-  if (!settings.value?.tts) return
-  ;(settings.value.tts as any)[key] = value
-  tts.updateConfig(settings.value.tts)
-  saveSettings()
-}
-const setNum = (key: string, e: Event) => setTTS(key, Number((e.target as HTMLInputElement).value))
-const setRate = (e: Event) => setTTS('rate', Number((e.target as HTMLInputElement).value))
-const setVoice = (e: Event) => setTTS('voice', (e.target as HTMLSelectElement).value)
-const setCheck = (key: 'autoTurnPage' | 'highlightText', e: Event) => setTTS(key, (e.target as HTMLInputElement).checked)
+const saveSettings = () => { if (!settings.value) return; clearTimeout(saveTimer); saveTimer = window.setTimeout(() => settings.value && settingsManager.save(settings.value).catch(() => {}), 200) }
+const update = (key: string, value: unknown) => { if (!settings.value?.tts) return; (settings.value.tts as any)[key] = value; tts.updateConfig(settings.value.tts); saveSettings() }
 
-watch(tts.isActive, active => {
-  if (!active) visible.value = false
-})
-
+watch(tts.isActive, active => { if (!active) { visible.value = false; expanded.value = false } })
 onMounted(() => {
   !settings.value && settingsManager.get().then(v => settings.value = v).catch(() => {})
   window.addEventListener('tts:toggle-mini', toggle)
@@ -124,35 +102,13 @@ onMounted(() => {
   window.addEventListener('resize', position)
   document.addEventListener('click', clickOut)
 })
-onUnmounted(() => {
-  clearTimeout(saveTimer)
-  window.removeEventListener('tts:toggle-mini', toggle)
-  window.removeEventListener('sireaderSettingsUpdated', syncSettings)
-  window.removeEventListener('resize', position)
-  document.removeEventListener('click', clickOut)
-})
+onUnmounted(() => { clearTimeout(saveTimer); window.removeEventListener('tts:toggle-mini', toggle); window.removeEventListener('sireaderSettingsUpdated', syncSettings); window.removeEventListener('resize', position); document.removeEventListener('click', clickOut) })
 </script>
 
 <style scoped>
-.tts-mini{position:fixed;z-index:99999;width:min(320px,calc(100vw - 16px));border:1px solid var(--b3-border-color);border-radius:var(--b3-border-radius-b);background:var(--b3-theme-surface);box-shadow:0 8px 24px #0002;backdrop-filter:blur(16px);pointer-events:auto;overflow:hidden}
-.tts-mini-top{display:flex;align-items:center;gap:10px;min-width:0;padding:10px 10px 6px}
-.tts-mini-icon{width:38px;height:38px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border-radius:var(--b3-border-radius);background:var(--b3-theme-background-light);color:var(--b3-theme-primary)}
-.tts-mini-icon svg{width:18px;height:18px}
-.tts-mini-info{flex:1;min-width:0;line-height:1.35}
-.tts-mini-title{font-size:12px;font-weight:600;color:var(--b3-theme-on-surface);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tts-mini-state{font-size:11px;color:var(--b3-theme-on-surface-variant)}
-.tts-mini-tools{display:flex;align-items:center;gap:2px;flex-shrink:0}
-.tts-mini-tools .block__icon{width:26px;height:26px}
-.tts-mini-text{margin:0 10px 10px;padding:8px;border-radius:6px;background:var(--b3-theme-background);font-size:12px;line-height:1.55;color:var(--b3-theme-on-surface-variant);max-height:140px;overflow:auto;word-break:break-word}
-.tts-mini-controls{border-top:1px solid var(--b3-border-color);padding:8px 10px 10px;display:grid;gap:8px;font-size:12px;color:var(--b3-theme-on-surface-variant)}
-.tts-mini-line{display:grid;grid-template-columns:minmax(0,1fr) 118px;align-items:center;gap:8px;min-width:0}
-.tts-mini-line--triple{grid-template-columns:1fr;gap:4px}
-.tts-mini-voice,.tts-mini-rate{display:flex;align-items:center;gap:6px;min-width:0}
-.tts-mini-voice span,.tts-mini-rate span{flex-shrink:0}
-.tts-mini-voice .b3-select{width:100%;min-width:0;max-width:150px;height:26px}
-.tts-mini-rate .b3-slider{min-width:0}
-.tts-mini-switches{display:flex;justify-content:space-between;gap:8px}
-.tts-mini-switches label{display:flex;align-items:center;gap:6px;white-space:nowrap}
-.fade-enter-active,.fade-leave-active{transition:all .18s}
-.fade-enter-from,.fade-leave-to{opacity:0;transform:translateY(8px)}
+.tts-mini{position:fixed;z-index:99999;width:min(336px,calc(100vw - 16px));overflow:hidden;border:1px solid var(--b3-border-color);border-radius:12px;background:var(--b3-theme-surface);box-shadow:0 8px 24px #0003;color:var(--b3-theme-on-surface);backdrop-filter:blur(14px)}
+.tts-mini-bar{display:flex;align-items:center;gap:2px;padding:4px 5px}.tts-mini-main{display:flex;min-width:0;flex:1;align-items:center;gap:7px;border:0;background:none;color:inherit;text-align:left;cursor:pointer}.tts-mini-cover{display:flex;width:30px;height:30px;flex:none;align-items:center;justify-content:center;overflow:hidden;border-radius:7px;background:var(--b3-theme-background-light);color:var(--b3-theme-primary)}.tts-mini-cover img{width:100%;height:100%;object-fit:cover}.tts-mini-cover svg{width:16px;height:16px}.tts-mini-info{display:flex;min-width:0;flex:1;flex-direction:column;gap:1px}.tts-mini-info strong,.tts-mini-info span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tts-mini-info strong{font-size:12px}.tts-mini-info span{font-size:10px;color:var(--b3-theme-on-surface-variant)}.tts-mini-chevron{width:14px;height:14px;color:var(--b3-theme-on-surface-variant);transition:transform .18s}.tts-mini-chevron.rotated{transform:rotate(180deg)}
+.tts-mini-tools{display:flex;flex:none;align-items:center}.tts-mini-tools button{display:flex;width:27px;height:27px;align-items:center;justify-content:center;border:0;border-radius:50%;background:transparent;color:var(--b3-theme-on-surface-variant);cursor:pointer}.tts-mini-tools button:hover{background:var(--b3-theme-background-light);color:var(--b3-theme-primary)}.tts-mini-tools button.primary{background:var(--b3-theme-primary);color:var(--b3-theme-on-primary)}.tts-mini-tools svg{width:15px;height:15px}
+.tts-mini-panel{border-top:1px solid var(--b3-border-color);padding:8px 10px}.tts-mini-current{max-height:48px;overflow:auto;font-size:12px;line-height:1.5;color:var(--b3-theme-on-surface-variant)}.tts-mini-settings{margin-top:7px;border-top:1px solid var(--b3-border-color)}.tts-mini-settings summary{padding:7px 0 3px;cursor:pointer;font-size:11px}.tts-mini-fields{display:grid;grid-template-columns:1fr 1fr;gap:7px}.tts-mini-fields label{display:grid;gap:3px;font-size:10px;color:var(--b3-theme-on-surface-variant)}.tts-mini-fields label.wide{grid-column:1/-1;display:flex;align-items:center;gap:8px}.tts-mini-fields .wide select{min-width:0;flex:1;height:26px}.tts-mini-fields label span{display:flex;justify-content:space-between}.tts-mini-fields b{font-weight:500;color:var(--b3-theme-on-surface)}.tts-fade-enter-active,.tts-fade-leave-active{transition:opacity .15s,transform .15s}.tts-fade-enter-from,.tts-fade-leave-to{opacity:0;transform:translateY(5px)}
+@media(max-width:380px){.tts-mini-fields{grid-template-columns:1fr}.tts-mini-fields label.wide{grid-column:auto}}
 </style>

@@ -2,7 +2,7 @@
 
 import { sameBookUrl } from '@/core/bookshelf'
 import { extractText } from '@/services/TTSExtractor'
-import { createEmbedPdfDocumentSource, ensureEmbedPdfWasmUrl, initEmbedPdfViewer } from '@/utils/embedPdfActions'
+import { createEmbedPdfDocumentSource, ensureEmbedPdfWasmUrl, initEmbedPdfViewer, waitForPdfDocument } from '@/utils/embedPdfActions'
 import { pdfPageFromCfi } from '@/utils/jump'
 
 type PreviewContext = {
@@ -78,37 +78,6 @@ const getOfflineView = async (ctx: PreviewContext) => {
   return offlineViewCache.get(bookUrl)!
 }
 
-const waitPdfDocument = (registry: any, documentId: string) => new Promise<any>((resolve, reject) => {
-  const documents = registry.getPlugin('document-manager')?.provides?.()
-  const done = () => {
-    const doc = documents?.getDocument?.(documentId)
-    if (doc) {
-      offOpen?.()
-      offError?.()
-      clearTimeout(timer)
-      resolve(doc)
-      return true
-    }
-    return false
-  }
-  let offOpen: any
-  let offError: any
-  const timer = setTimeout(() => {
-    offOpen?.()
-    offError?.()
-    reject(new Error('PDF preview load timeout'))
-  }, 10000)
-  if (done()) return
-  offOpen = documents?.onDocumentOpened?.((state: any) => (state.id === documentId || state.documentId === documentId) && done())
-  offError = documents?.onDocumentError?.((event: any) => {
-    if (event.documentId !== documentId) return
-    offOpen?.()
-    offError?.()
-    clearTimeout(timer)
-    reject(new Error(event.message || 'PDF preview load failed'))
-  })
-})
-
 const disposeOfflinePdfSession = () => {
   offlinePdfSession?.then(({ host }) => host?.remove?.()).catch(() => {})
 }
@@ -137,7 +106,7 @@ const getOfflinePdfSession = async (ctx: PreviewContext) => {
           stamp: { manifests: [] },
         })
         if (!viewer) throw new Error('PDF preview load failed')
-        viewer.registry?.then((registry: any) => waitPdfDocument(registry, documentId)
+        viewer.registry?.then((registry: any) => waitForPdfDocument(registry, documentId)
           .then((doc: any) => resolve({ registry, documentId, doc, host }))
           .catch(reject),
         )

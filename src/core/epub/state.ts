@@ -9,6 +9,7 @@ export const setActiveReader = (view: any, reader?: any, settings?: any) => {
   ;(window as any).__sireader_active_view = view
   ;(window as any).__sireader_active_reader = reader || null
   ;(window as any).__sireader_settings = settings || null
+  window.dispatchEvent(new CustomEvent('sireader:reader-state'))
 }
 
 export const clearActiveReader = (view?: any) => {
@@ -18,6 +19,7 @@ export const clearActiveReader = (view?: any) => {
   ;(window as any).__sireader_active_view = null
   ;(window as any).__sireader_active_reader = null
   ;(window as any).__sireader_settings = null
+  window.dispatchEvent(new CustomEvent('sireader:reader-state'))
 }
 
 export const useReaderState = () => ({

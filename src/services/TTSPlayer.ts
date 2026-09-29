@@ -2,6 +2,7 @@ import { ref } from 'vue'
 import { showMessage } from 'siyuan'
 import { TTS } from 'foliate-js/tts.js'
 import { textWalker } from 'foliate-js/text-walker.js'
+import { Overlayer } from 'foliate-js/overlayer.js'
 import { EdgeTTSCore, loadLocalVoices, toArrayBuffer } from './TTSEngine'
 import { ttsNodeFilter } from './TTSExtractor'
 import { OFFLINE_TTS_VOICE, synthesizeOfflineTTS } from './OfflineTTS'
@@ -22,6 +23,10 @@ export class EdgeTTSPlayer {
   private paused = false
   private isLocal = false
   private currentSource: any = null
+  private readonly highlightKey = 'sireader-tts-current'
+  private highlightedOverlayer: any = null
+  private prefetched: Promise<{ ssml: string; audio?: Buffer } | null> | null = null
+  private suppressHighlight = false
   private voiceTask: Promise<void>
   private ticket = 0
 
@@ -44,14 +49,32 @@ export class EdgeTTSPlayer {
   async updateConfig(config: any) {
     const voiceChanged = config.voice && config.voice !== this.config.voice
     this.config = { ...this.config, ...config }
+    if (!this.config.highlightText) this.clearHighlight()
     if (!voiceChanged) return
     this.edge.setVoice(config.voice)
     await this.checkLocalVoice(config.voice)
+    this.prefetched = null
     !this.isLocal && this.stopCurrent()
   }
 
+  private clearHighlight() {
+    this.highlightedOverlayer?.remove?.(this.highlightKey)
+    this.highlightedOverlayer = null
+  }
+
   private highlighter = (range: Range) => {
-    this.config.highlightText && this.renderer?.scrollToAnchor?.(range, true)
+    if (!this.config.highlightText || this.suppressHighlight) return
+    this.renderer?.scrollToAnchor?.(range, false)
+    const ownerDocument = range.startContainer.ownerDocument
+    const content = this.renderer?.getContents?.().find((item: any) => item.doc === ownerDocument)
+    if (!content?.overlayer) return
+    this.clearHighlight()
+    content.overlayer.add(this.highlightKey, range, Overlayer.highlight, {
+      color: '#ffd54f',
+      padding: 2,
+      radius: 3,
+    })
+    this.highlightedOverlayer = content.overlayer
   }
 
   private stopCurrent() {
@@ -78,13 +101,18 @@ export class EdgeTTSPlayer {
     if (!range) return fallback
     const doc = document.implementation.createHTMLDocument()
     doc.body.appendChild(range.cloneContents())
-    return new TTS(doc, textWalker, ttsNodeFilter, () => {}, 'sentence').start() || fallback
+    const generated = new TTS(doc, textWalker, ttsNodeFilter, () => {}, 'sentence').start() || ''
+    return this.textOf(generated).trim() ? generated : fallback
   }
 
-  private markSSML(ssml = '') {
+  private markSSML(ssml = '', highlight = true) {
     const mark = /<mark\b[^>]*\bname="([^"]+)"/.exec(ssml)?.[1]
-    mark && this.foliateTTS?.setMark(mark)
-    return this.ssmlOf(this.foliateTTS?.getLastRange?.(), ssml)
+    const previous = this.suppressHighlight
+    if (!highlight) this.suppressHighlight = true
+    try {
+      mark && this.foliateTTS?.setMark(mark)
+      return this.ssmlOf(this.foliateTTS?.getLastRange?.(), ssml)
+    } finally { this.suppressHighlight = previous }
   }
 
   private firstSSML(fromCurrent: boolean) {
@@ -93,28 +121,29 @@ export class EdgeTTSPlayer {
     this.startRange = undefined
     return this.markSSML(range
       ? this.foliateTTS?.from(range)
-      : (this.foliateTTS?.start(), this.foliateTTS?.nextMark(this.config.highlightText) || this.foliateTTS?.resume()))
+      : (this.foliateTTS?.start(), this.foliateTTS?.nextMark(false) || this.foliateTTS?.resume()), false)
   }
 
-  private async nextSSML(paused = false) {
-    const ssml = this.foliateTTS?.nextMark(paused || this.config.highlightText)
-    if (ssml || !this.view || !this.config.autoTurnPage) return ssml
+  private async nextSSML() {
+    const ssml = this.foliateTTS?.nextMark(false)
+    if (ssml) return this.markSSML(ssml, false)
+    if (!this.view || !this.config.autoTurnPage) return ssml
     const doc = this.foliateTTS?.doc
     await this.view.next()
     await this.view.initTTS('sentence', ttsNodeFilter, this.highlighter)
     this.foliateTTS = this.view.tts
     if (this.foliateTTS?.doc === doc) return ''
     this.foliateTTS?.start()
-    return this.markSSML(this.foliateTTS?.nextMark(paused || this.config.highlightText) || this.foliateTTS?.resume())
+    return this.markSSML(this.foliateTTS?.nextMark(false) || this.foliateTTS?.resume(), false)
   }
 
-  private async playSSML(ssml: string, ticket: number) {
+  private async playSSML(ssml: string, ticket: number, audio?: Buffer) {
     if (this.stopped || this.paused || ticket !== this.ticket || !ssml) return
     if (this.config.voice === OFFLINE_TTS_VOICE.name) return this.playOffline(ssml, ticket)
     this.config.onBlock?.(this.textOf(ssml))
     const range = this.foliateTTS?.getLastRange?.()
-    this.config.highlightText && range && this.renderer?.scrollToAnchor?.(range, true)
-    return this.isLocal ? this.playLocal(ssml, ticket) : this.playOnline(ssml, ticket)
+    range && this.highlighter(range)
+    return this.isLocal ? this.playLocal(ssml, ticket) : this.playOnline(ssml, ticket, audio)
   }
 
   private playLocal(ssml: string, ticket: number) {
@@ -131,10 +160,32 @@ export class EdgeTTSPlayer {
     })
   }
 
-  private async playOnline(ssml: string, ticket: number) {
+  private async synthesizeOnline(ssml: string) {
     const rate = this.config.rate || 1
-    const pitch = this.config.pitch || 1
-    const buf = await this.edge.toSSMLStream(ssml, rate, pitch)
+    try {
+      return await this.edge.toSSMLStream(ssml, rate)
+    } catch (error) {
+      if (!/timeout|no audio|websocket/i.test(String(error))) throw error
+      this.edge.close()
+      return this.edge.toSSMLStream(ssml, rate)
+    }
+  }
+
+  private prefetchNext(ticket: number) {
+    if (this.prefetched || this.stopped || this.paused || !this.config.autoTurnPage) return
+    this.prefetched = (async () => {
+      this.suppressHighlight = true
+      try {
+        const ssml = await this.nextSSML()
+        if (!ssml || this.stopped || ticket !== this.ticket) return null
+        try { return { ssml, audio: await this.synthesizeOnline(ssml) } }
+        catch { return { ssml } }
+      } finally { this.suppressHighlight = false }
+    })()
+  }
+
+  private async playOnline(ssml: string, ticket: number, prepared?: Buffer) {
+    const buf = prepared || await this.synthesizeOnline(ssml)
     const audio = toArrayBuffer(buf)
     if (this.stopped || this.paused || ticket !== this.ticket) return
     if (this.audioCtx.state !== 'running') await this.audioCtx.resume()
@@ -145,7 +196,7 @@ export class EdgeTTSPlayer {
       if (this.stopped || this.paused || ticket !== this.ticket) return resolve()
       this.currentSource = source
       source.addEventListener('ended', () => (this.currentSource = null, resolve()), { once: true })
-      try { source.start(0) } catch { this.currentSource = null; resolve() }
+      try { source.start(0); this.prefetchNext(ticket) } catch { this.currentSource = null; resolve() }
     })
   }
 
@@ -176,7 +227,9 @@ export class EdgeTTSPlayer {
   }
 
   private async playFrom(ssml: string, ticket: number) {
+    let prepared: Buffer | undefined
     while (!this.stopped && !this.paused && ticket === this.ticket && ssml) {
+      const prev = this.foliateTTS?.getLastRange?.()
       if (this.config.voice === OFFLINE_TTS_VOICE.name) {
         // Piper inference is synchronous and single-threaded in WASM. Speak a
         // small batch of adjacent sentences so inference happens less often
@@ -193,10 +246,16 @@ export class EdgeTTSPlayer {
         }
         this.config.onBlock?.(text)
         await this.playOfflineText(text, ticket)
-      } else await this.playSSML(ssml, ticket)
+      } else await this.playSSML(ssml, ticket, prepared)
+      prepared = undefined
       if (this.stopped || this.paused || ticket !== this.ticket || !this.config.autoTurnPage) break
-      const prev = this.foliateTTS?.getLastRange?.()
-      ssml = await this.nextSSML()
+      const prefetched = this.prefetched
+      this.prefetched = null
+      if (prefetched) {
+        const next = await prefetched
+        ssml = next?.ssml || ''
+        prepared = next?.audio
+      } else ssml = await this.nextSSML()
       if (ssml) await this.delay(this.gapOf(prev, this.foliateTTS?.getLastRange?.()))
     }
   }
@@ -208,9 +267,10 @@ export class EdgeTTSPlayer {
   }
 
   private gapOf(prev?: Range, next?: Range) {
-    return 1000 * (this.blockOf(prev) && this.blockOf(prev) !== this.blockOf(next)
+    const gap = this.blockOf(prev) && this.blockOf(prev) !== this.blockOf(next)
       ? this.config.paragraphGap ?? 0.3
-      : this.config.sentenceGap ?? 0)
+      : this.config.sentenceGap ?? 0
+    return 1000 * gap / (this.config.rate || 1)
   }
 
   private delay(ms: number) {
@@ -220,17 +280,19 @@ export class EdgeTTSPlayer {
   async play(fromCurrent = false) {
     await this.initPipeline()
     await this.voiceTask
+    this.prefetched = null
     this.stopped = this.paused = false
     await this.playFrom(this.firstSSML(fromCurrent), ++this.ticket)
   }
 
-  jump(delta: number) {
-    if (!this.foliateTTS) return
+  jump(delta: number): Promise<void> {
+    if (!this.foliateTTS) return Promise.resolve()
     const ticket = ++this.ticket
-    const seek = delta < 0 ? this.markSSML(this.foliateTTS.prevMark(true)) : this.nextSSML(true)
+    this.prefetched = null
+    const seek = delta < 0 ? this.markSSML(this.foliateTTS.prevMark(false), false) : this.nextSSML()
     this.stopped = this.paused = false
     this.stopCurrent()
-    Promise.resolve(seek).then(ssml => this.playFrom(ssml, ticket))
+    return Promise.resolve(seek).then(ssml => this.playFrom(ssml, ticket)).then(() => undefined)
   }
 
   pause() { this.paused = true; this.isLocal ? window.speechSynthesis.pause() : this.currentSource?.context?.suspend() }
@@ -246,6 +308,8 @@ export class EdgeTTSPlayer {
     this.paused = false
     this.ticket++
     this.stopCurrent()
+    this.clearHighlight()
+    this.prefetched = null
     this.edge.close()
   }
 }
@@ -253,6 +317,7 @@ export class EdgeTTSPlayer {
 export class TTSController {
   private player: EdgeTTSPlayer | null = null
   private loopText: string | null = null
+  private operation = 0
   public isActive = ref(false)
   public paused = ref(false)
   public title = ref('')
@@ -289,18 +354,26 @@ export class TTSController {
       if (!view && !doc?.body) throw new Error('无法获取文档内容')
       const startRange = selection?.range || (renderer && doc && this.getVisibleRange(renderer, doc, location))
       this.title.value = title
-      this.player = new EdgeTTSPlayer(view || doc, { ...config, onBlock: (text: string) => this.currentText.value = text }, startRange)
+      const operation = ++this.operation
+      const player = new EdgeTTSPlayer(view || doc, { ...config, onBlock: (text: string) => this.currentText.value = text }, startRange)
+      this.player = player
       this.isActive.value = true
-      await this.player.play()
-      this.reset()
+      await player.play()
+      if (this.operation === operation && this.player === player) this.reset()
     } catch (error) { this.reset(); showMessage((error instanceof Error ? error.message : String(error)) || 'TTS 播放失败', 3000, 'error') }
   }
 
   cancelLoop() { this.loopText && this.destroy() }
   updateConfig(config: any) { this.player?.updateConfig(config) }
-  jump(delta: number) { if (this.isActive.value) this.paused.value = false, this.player?.jump(delta) }
+  jump(delta: number) {
+    if (!this.isActive.value || !this.player) return
+    this.paused.value = false
+    const operation = ++this.operation
+    const player = this.player
+    void player.jump(delta).then(() => { if (this.operation === operation && this.player === player) this.reset() })
+  }
   togglePause() { if (this.isActive.value) this.paused.value = !this.paused.value, this.paused.value ? this.player?.pause() : this.player?.resume() }
-  stop() { this.loopText = null; this.player?.stop(); this.player = null; this.currentText.value = '' }
+  stop() { this.operation++; this.loopText = null; this.player?.stop(); this.player = null; this.currentText.value = '' }
   destroy() { this.stop(); this.reset() }
   sync(enabled: boolean) { !enabled && this.destroy() }
 

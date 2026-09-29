@@ -438,6 +438,7 @@ export class ReaderDatabase {
       progress: 'progress',
       rating: 'rating',
       readTime: 'time',
+      update: 'read',
       name: 'title',
       author: 'author',
     }

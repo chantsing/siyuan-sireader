@@ -966,10 +966,6 @@ const config = computed(() => ({
     'scroll:previous-page': { id: 'scroll:previous-page', labelKey: 'page.previous', icon: 'chevronLeft', categories: ['page', 'navigation', 'navigation-previous'], action: ({ registry, documentId }: any) => registry.getPlugin('scroll')?.provides()?.forDocument(documentId)?.scrollToPreviousPage(pdfPageBehavior()) },
     'scroll:next-page': { id: 'scroll:next-page', labelKey: 'page.next', icon: 'chevronRight', categories: ['page', 'navigation', 'navigation-next'], action: ({ registry, documentId }: any) => registry.getPlugin('scroll')?.provides()?.forDocument(documentId)?.scrollToNextPage(pdfPageBehavior()) },
   },
-  // Render only the active page initially; large scanned PDFs can contain
-  // hundreds of JPX/JBIG2 images and pre-buffering adjacent pages delays the
-  // first visible page substantially.
-  scroll: { defaultBufferSize: 0 },
   zoom: { defaultZoomLevel: pdfInitialZoomLevel() ?? 'fit-width' },
   redaction: { useAnnotationMode: true, drawBlackBoxes: true },
   i18n: {
