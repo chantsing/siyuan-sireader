@@ -11,7 +11,7 @@
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
-[🌐 官网](https://sireader.745201.xyz) · [📖 使用文档](https://my.feishu.cn/wiki/IzvVwQEhriAIIok57SQcYmfhnwm) · [💎 购买授权](https://pay.ldxp.cn/shop/J7MJJ8YR/lillyt) · [👥 QQ群](https://qm.qq.com/q/wpHDtsfxCw) · [📝 更新日志](https://my.feishu.cn/wiki/LhITwVPHWiu7UMkqPUCcE84FnGh)
+[🌐 官网](https://sireader.745201.xyz) · [📖 使用文档](https://my.feishu.cn/wiki/IzvVwQEhriAIIok57SQcYmfhnwm) · 用微信小程序“思源插件助手”购买 · [👥 QQ群](https://qm.qq.com/q/wpHDtsfxCw) · [📝 更新日志](https://my.feishu.cn/wiki/LhITwVPHWiu7UMkqPUCcE84FnGh)
 
 </div>
 

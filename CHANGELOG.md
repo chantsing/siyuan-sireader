@@ -845,7 +845,7 @@
 
 > **🎉 重大更新：会员功能正式上线！**  
 > **官网地址**：[https://sireader.745201.xyz](https://sireader.745201.xyz)  
-> **购买授权**：[https://pay.ldxp.cn/shop/J7MJJ8YR/lillyt](https://pay.ldxp.cn/shop/J7MJJ8YR/lillyt)
+> **购买方式**：请使用微信小程序“思源插件助手”购买。
 
 ### ✨ 新增功能
 
