@@ -4,7 +4,7 @@
 import type{Plugin}from'siyuan'
 import{Overlayer}from'foliate-js/overlayer.js'
 import { getDatabase, type Annotation, type AnnotationType } from './database'
-import { flushStorage, cloneStorageValue } from './storage'
+import { cloneStorageValue } from './storage'
 import { trackPending } from './storage'
 const compactNumber = (value: number, digits = 1) => {
   const factor = 10 ** digits
@@ -94,6 +94,7 @@ export class MarkManager{
   private persistenceQueue:Promise<void>=Promise.resolve()
   private autoSyncQueue:Promise<void>=Promise.resolve()
   private dirty=false
+  private savedSignature=''
   private reader:any
   private initialized=false
 
@@ -145,6 +146,7 @@ export class MarkManager{
           customOrder:data.customOrder
         })
       })
+      this.savedSignature=this.annotationSignature()
     }catch(e){console.error('[Mark]',e)}
   }
 
@@ -177,9 +179,14 @@ export class MarkManager{
         block:m.blockId||''
       })
 
+  private annotationSignature=()=>JSON.stringify(this.marks.map(mark=>{const { updated: _updated, ...annotation }=this.toAnnotation(cloneStorageValue(mark)) as any; return annotation}))
+
   private save(targetAutoSyncMark?: Mark){
     if(!this.initialized)return Promise.resolve()
     const annotations=this.marks.map(mark=>this.toAnnotation(cloneStorageValue(mark)))
+    const signature=this.annotationSignature()
+    if(signature===this.savedSignature&&!this.dirty)return this.persistenceQueue
+    this.savedSignature=signature
     this.persistenceQueue=this.persistenceQueue.catch(()=>undefined).then(async()=>{
       const database=await db()
       for(const annotation of annotations)await database.saveAnnotation(
@@ -238,13 +245,10 @@ export class MarkManager{
     this.marks.splice(idx,1)
     this.marksMap.delete(id)
     this.markIndex=null
-    // 从数据库删除
+    // 先完成本地删除，持久化沿用现有队列后台执行，避免阅读器 UI 被存储 API 阻塞。
     this.persistenceQueue=this.persistenceQueue.catch(()=>undefined).then(()=>removeAnnotation(id,this.bookUrl)).then(()=>{})
-    try{await this.persistenceQueue;return true}catch(e){
-      try{await flushStorage();return true}catch{}
-      console.error('[Mark] del:',e)
-      return false
-    }
+    this.persistenceQueue.catch(e=>console.error('[Mark] del:',e))
+    return true
   }
 
   private async loadCalibre(){
@@ -340,7 +344,7 @@ export class MarkManager{
     this.undoStack.push({...m})
     if(this.undoStack.length>10)this.undoStack.shift()
     if(m.cfi)await this.view?.addAnnotation?.({value:m.cfi,color:m.color,note:m.note}).catch(()=>{})
-    await this.save(m)
+    void this.save(m)
     window.dispatchEvent(new Event('sireader:marks-updated'))
     return m
   }
@@ -350,7 +354,7 @@ export class MarkManager{
     this.undoStack.push({...m})
     if(this.undoStack.length>10)this.undoStack.shift()
     if(m.cfi)await this.view?.addAnnotation?.({value:m.cfi,color:m.color,note:m.note}).catch(()=>{})
-    await this.save(m)
+    void this.save(m)
     window.dispatchEvent(new Event('sireader:marks-updated'))
     return m
   }
@@ -378,7 +382,7 @@ export class MarkManager{
       await this.view?.deleteAnnotation?.({value:m.cfi}).catch(()=>{})
       await this.view?.addAnnotation?.({value:m.cfi,color:m.color,note:m.note}).catch(()=>{})
     }
-    await this.save()
+    void this.save()
     window.dispatchEvent(new Event('sireader:marks-updated'))
     return true
   }
@@ -392,9 +396,6 @@ export class MarkManager{
     const m=this.marksMap.get(idOrKey)
     if(!m||!await this.del(m.id))return false
     
-    // 与新增同步共用队列，确保快速新增后删除不会留下孤儿文档块。
-    await this.queueAutoSyncDelete(m)
-    
     // 清理渲染
     {
       if(m.cfi)await this.view?.deleteAnnotation?.({value:m.cfi}).catch(()=>{})
@@ -402,6 +403,8 @@ export class MarkManager{
       this.view?.renderer?.getContents?.()?.forEach(({doc}:any)=>doc?.querySelectorAll(`[data-mark-id="${m.id}"]`).forEach((el:Element)=>el.remove()))
     }
     window.dispatchEvent(new Event('sireader:marks-updated'))
+    // 思源块同步不应阻塞阅读器 UI；本地标注和高亮先完成删除。
+    void this.queueAutoSyncDelete(m)
     return true
   }
 

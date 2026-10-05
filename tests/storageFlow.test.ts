@@ -9,11 +9,27 @@ vi.mock('@/utils/copy', () => ({ inlineLinkText: vi.fn(), sendMarkToDoc: vi.fn()
 
 import { usePlugin } from '@/main'
 import { putFile, removeFile, readDir } from '@/api'
-import { bookRecordKey, createStorageEngine, pluginStorageAdapter, readEmbedPdfAnnotations, readEmbedPdfProgress, deleteEmbedPdfAnnotation, recoverBackupRecords, storageEngine, cloneStorageValue, writeEmbedPdfProgress, createLatestSaver, normalizeBookTitle } from '@/core/storage'
+import { bookRecordKey, createStorageEngine, pluginStorageAdapter, readEmbedPdfAnnotations, readEmbedPdfProgress, deleteEmbedPdfAnnotation, recoverBackupRecords, storageEngine, cloneStorageValue, writeEmbedPdfProgress, createLatestSaver, normalizeBookTitle, readFileBlob } from '@/core/storage'
 import { ensurePdfRecordMigrated } from '@/core/dataMigration'
 import { ReaderDatabase } from '@/core/database'
 import { diagnosticLog } from '@/core/diagnostics'
-import { BookshelfManager } from '@/core/bookshelf'
+import { BookshelfManager, mergeBookCompletion, compareBookshelfValues } from '@/core/bookshelf'
+
+test('bookshelf sorting defaults to newest-first for numeric fields', () => {
+  expect(compareBookshelfValues(10, 5, 'time')).toBe(-1)
+  expect(compareBookshelfValues(10, 5, 'time', true)).toBe(1)
+  expect(compareBookshelfValues('Alpha', 'beta', 'name')).toBe(-1)
+  expect(compareBookshelfValues('Alpha', 'beta', 'name', true)).toBe(1)
+})
+
+test('completion fills only missing fields and preserves user values', () => {
+  const current = { title: '用户标题', author: '用户作者', cover: '/public/custom.jpg', meta: { isbn: 'old-isbn', description: '' }, tags: ['用户标签'], groups: ['g'], rating: 4, status: 'reading', progress: 42 }
+  const candidate = { title: '解析标题', author: '解析作者', cover: '/public/extracted.jpg', meta: { isbn: 'new-isbn', publisher: '出版社', description: '简介' }, tags: ['解析标签'] }
+  expect(mergeBookCompletion(current, candidate)).toEqual({ meta: { isbn: 'old-isbn', description: '简介', publisher: '出版社' } })
+  expect(mergeBookCompletion({ title: '', author: '', cover: '', meta: {} }, { title: '标题', author: '作者', cover: '/public/cover.jpg', meta: { isbn: 'isbn' } })).toEqual({ title: '标题', author: '作者', cover: '/public/cover.jpg', meta: { isbn: 'isbn' } })
+  expect(mergeBookCompletion({ author: '未知作者', meta: {} }, { author: '真实作者', meta: {} })).toEqual({ author: '真实作者' })
+  expect(mergeBookCompletion({ title: '用户标题', cover: '/public/siyuan-sireader/covers/deleted.jpg', meta: {} }, { title: '解析标题', cover: '/public/new.jpg', meta: {} }, { coverMissing: true })).toEqual({ cover: '/public/new.jpg' })
+})
 
 test('PDF progress writes its record once and preserves annotations and finished status', async () => {
   const key = bookRecordKey('data-id').name
@@ -67,6 +83,15 @@ test('missing files are logged as completed reads, including SiYuan JSON 404', a
   expect(missing).toHaveLength(2)
   expect(missing[0][2]).toMatchObject({ key: 'missing.json', status: 404 })
   expect(missing[1][2]).toMatchObject({ key: 'missing.json', status: 202, code: 404 })
+})
+
+test('book file failures retain HTTP and SiYuan API evidence', async () => {
+  vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ code: 403, msg: 'forbidden', data: null }), { status: 202, headers: { 'content-type': 'application/json' } }))
+  expect(await readFileBlob('/plugin/private/siyuan-cloud/p/books/a.pdf')).toBeNull()
+  expect(vi.mocked(fetch).mock.calls[0][0]).toBe('/plugin/private/siyuan-cloud/d/books/a.pdf')
+  const failure = vi.mocked(diagnosticLog).mock.calls.find(([, event]) => event === 'file.read.failed')
+  expect(failure?.[2]).toMatchObject({ kind: 'siyuan-cloud', status: 202, apiCode: 403, apiMsg: 'forbidden', contentType: 'application/json' })
+  expect(failure?.[2]?.bodyPreview).toContain('forbidden')
 })
 
 const files = new Map<string, string>()

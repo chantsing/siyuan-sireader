@@ -69,7 +69,7 @@
       <slot name="meta" />
     </div>
 
-    <textarea
+    <textarea v-if="editing"
       :class="['b3-text-field', 'sr-note-edit', { 'sr-note-edit--hidden': !editing }]"
       ref="noteInput"
       :value="note"
@@ -216,7 +216,6 @@ button.sr-tag-chip.active{opacity:1;background:var(--b3-theme-primary-lightest);
 .sr-style-icon[data-type="squiggly"]{text-decoration:underline wavy;text-decoration-thickness:1px;text-underline-offset:3px}
 .sr-note{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:var(--b3-theme-on-surface);cursor:text;white-space:normal}
 .sr-note-edit{width:100%;min-height:76px;resize:vertical;font-size:13px;line-height:1.5}
-.sr-note-edit--hidden{position:absolute;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none}
 .sr-card-foot{display:flex;align-items:center;justify-content:space-between;gap:var(--sr-gap,4px)}
 .sr-text-btn{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0;border:none;background:transparent;color:var(--b3-theme-on-surface-variant);font-size:12px;line-height:1;cursor:pointer}
 .sr-text-btn svg{width:14px;height:14px;flex-shrink:0}

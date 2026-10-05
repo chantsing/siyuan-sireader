@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support highlights, ink, shapes, forms, stamps, signatures, images, screenshots, search, printing, export, and backlinks, with annotation notes, dictionary, translation, themes, and bookshelf management.
 
-[![Version](https://img.shields.io/badge/version-2.5.0-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-2.5.1-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,27 @@ Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support high
 ---
 
 ## 📝 Latest Updates
+
+## v2.5.1 (2026-10-04)
+
+### Added
+
+- Added percentage-based quick navigation to the EPUB reader toolbar, allowing direct jumps to an approximate reading position.
+- Added batch book-data completion for PDF, EPUB, MOBI, and AZW3, including missing covers and metadata without overwriting existing user content, with progress reporting.
+- Group covers can now use a cover from a book in the group or a custom cover; the group editor follows the book editor layout.
+
+### Improved
+
+- EPUB TOC now automatically expands and scrolls to the current chapter when opened, making back-and-forth reference reading faster.
+- Unified file reading, cover parsing, cache refresh, and completion flows; the bookshelf now refreshes automatically and synchronizes filesystem timestamps for current and backup records after completion.
+- Improved batch-processing speed and bookshelf sorting, including consistent recent-reading sort direction, while reducing duplicate reads, refreshes, and UI updates.
+- Consolidated duplicate completion, sorting, file-reading, and editor logic, and expanded diagnostics for cover-loading failures.
+
+### Fixed
+
+- Fixed cloud-drive file reads that prevented PDF cover parsing.
+- Fixed missing or broken EPUB/PDF covers and covers that only appeared after a manual bookshelf refresh.
+- Fixed cancelling group editing returning to the add-content page.
 
 ## v2.5.0 (2026-09-30)
 

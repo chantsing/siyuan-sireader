@@ -64,3 +64,23 @@ test('reader stops layout and settings listeners before awaiting persistence', a
   expect(context.view.close).toHaveBeenCalledTimes(1)
   expect(context.view.remove).toHaveBeenCalledTimes(1)
 })
+
+test('mark deletion cleans the reader before waiting for block synchronization', () => {
+  const source = readFileSync('src/core/MarkManager.ts', 'utf8')
+  const method = source.match(/async deleteMark\(idOrKey:string\|any\):Promise<boolean>\{([\s\S]*?)\n  \}\r?\n\s*async addBookmark/)?.[1]
+  expect(method).toBeTruthy()
+  expect(method).toContain('void this.queueAutoSyncDelete(m)')
+  expect(method).not.toContain('await this.queueAutoSyncDelete(m)')
+  expect(method!.indexOf('cleanTooltips(m.id)')).toBeLessThan(method!.indexOf('void this.queueAutoSyncDelete(m)'))
+})
+
+test('epub toc reopens the current chapter ancestors', () => {
+  const source = readFileSync('src/components/ReaderToc.vue', 'utf8')
+  expect(source).toContain('hasCurrentDescendant(item.subitems, href) && next[key] !== true')
+})
+
+test('epub reader exposes a bottom percentage jump control', () => {
+  const source = readFileSync('src/components/Reader.vue', 'utf8')
+  expect(source).toContain('reader-progress-jump')
+  expect(source).toContain('submitProgressJump')
+})

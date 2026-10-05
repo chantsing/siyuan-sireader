@@ -1,6 +1,5 @@
 ﻿<template>
   <Teleport to="body">
-    <textarea ref="selectionEditorInput" class="sr-selection-editor-input" aria-label="评论输入" tabindex="-1" />
     <div v-if="state.showMenu || state.showPanel || state.showSendMenu" class="mark-overlay" @click="closeAll" />
 
     <div v-if="state.showMenu" class="mark-menu" :style="menuPosition" @click.stop>
@@ -114,7 +113,6 @@ const emit = defineEmits<{
 
 const sendSearch = ref('')
 const sendDocs = ref<any[]>([])
-const selectionEditorInput = ref<HTMLTextAreaElement | null>(null)
 let selectionEditorPending = false
 let quickMarkCooldown = false
 let selectionDoc: Document | null = null
@@ -251,7 +249,6 @@ const openSelectionEditor = async () => {
   setPanelState('card', markData(mark, { x: state.x, y: state.y, panelY: state.panelY, selection: null, isEditing: true }))
 }
 const startSelectionEditor = () => {
-  selectionEditorInput.value?.focus({ preventScroll: true })
   if (selectionEditorPending) return
   selectionEditorPending = true
   void openSelectionEditor().finally(() => { selectionEditorPending = false })
@@ -442,10 +439,10 @@ const handleSave = async () => {
       const updates: any = { note: state.note.trim() || undefined, color: state.color, tags: parseMarkTags(state.tags) }
       Object.assign(updates, { text: state.text.trim(), style: state.style })
       const { saveMarkEdit } = await import('@/utils/copy')
-      await saveMarkEdit(state.currentMark, updates, { ...markExportCtx(), reader: props.reader })
+      void saveMarkEdit(state.currentMark, updates, { ...markExportCtx(), reader: props.reader })
       Object.assign(state.currentMark, updates)
       showMessage(props.i18n?.saved || '已保存', 1000)
-      state.isEditing = false
+      closeAll()
       return
     }
     const args = selectionArgs()
@@ -482,7 +479,6 @@ const handleImport = async () => {
 
 <style scoped lang="scss">
 .mark-overlay{position:fixed;inset:0;z-index:949;background:transparent}
-.sr-selection-editor-input{position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none}
 .mark-menu{position:fixed;z-index:950;display:flex;gap:4px;padding:6px;background:var(--b3-theme-surface);border:1px solid var(--b3-border-color);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);button{width:32px;height:32px;padding:0;border:none;background:transparent;border-radius:6px;cursor:pointer;transition:all .15s;color:var(--b3-theme-on-surface);display:flex;align-items:center;justify-content:center;svg{width:16px;height:16px}&:hover{background:var(--b3-list-hover);color:var(--b3-theme-primary)}}}
 .send-menu{flex-direction:column;width:280px;max-height:400px;overflow-y:auto;button{width:100%;height:auto;padding:8px;justify-content:flex-start;border-radius:0;border-bottom:1px solid var(--b3-border-color);font-size:12px;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;&:last-child{border-bottom:none}}}
 .send-input{margin:8px;width:calc(100% - 16px)}

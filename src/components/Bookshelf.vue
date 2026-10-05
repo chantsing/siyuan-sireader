@@ -39,9 +39,22 @@
 
         <div class="sr-modal__body">
           <template v-if="modalMode === 'manage'">
+            <template v-if="editingGroup">
+              <div v-if="groupPanelCover" class="sr-panel-cover"><img :src="groupPanelCover" :alt="editingGroup.name || '分组封面'" /></div>
+              <template v-for="f in groupFields" :key="f.key">
+                <div v-if="f.key !== 'cover' || editingGroup.coverMode === 'custom'" class="sr-form-item">
+                  <span class="ft__secondary">{{ f.label }}</span>
+                  <input v-if="f.type === 'text'" v-model="editingGroup[f.key]" class="b3-text-field sr-input" :placeholder="f.placeholder" />
+                  <div v-else class="sr-chips"><button v-for="opt in f.options" :key="opt.value" class="sr-chip" :class="{ 'is-active': isGroupRuleActive(f, opt.value) }" type="button" @click="toggleGroupRule(f, opt.value)">{{ opt.label }}</button></div>
+                </div>
+              </template>
+              <div class="sr-row sr-actions-end sr-section-line"><button class="b3-button b3-button--outline" type="button" @click="closePopups">取消</button><button class="b3-button b3-button--outline" type="button" @click="saveGroup">保存</button></div>
+            </template>
+
+            <template v-else>
             <div class="sr-form-item"><span class="ft__secondary">快捷操作</span><div class="sr-grid2"><button class="b3-button b3-button--outline" type="button" title="从电脑选择 EPUB、PDF 等电子书文件，导入后由插件托管文件和封面。" @click="openLocalImport">本地导入</button><button class="b3-button b3-button--outline" type="button" title="浏览或搜索思源同步盘中的电子书，并添加到书架。" @click="setImportMode('cloud')">思盘导入</button><button class="b3-button b3-button--outline" type="button" title="创建普通文件夹分组。书籍加入后会从首页独立书籍区移出，属于实际归类。" @click="startEditGroup()">手动分组</button><button class="b3-button b3-button--outline" type="button" title="创建按标签、格式、状态、评分等条件动态显示的分组。智能分组不移动书籍归属，也不会把书从首页隐藏。" @click="startEditGroup(undefined, 'smart')">智能分组</button></div></div>
 
-            <template v-if="!editingGroup && importMode === 'link'">
+            <template v-if="importMode === 'link'">
               <div class="sr-editor sr-import-card">
                 <div class="sr-editor-head"><strong>输入链接</strong></div>
                 <textarea class="b3-text-field fn__block sr-textarea" v-model="importDraft" placeholder="每行一个本地路径、file 链接、网络直链或思盘链接" />
@@ -49,7 +62,7 @@
               </div>
             </template>
 
-            <template v-if="!editingGroup && importMode === 'cloud'">
+            <template v-if="importMode === 'cloud'">
               <div class="sr-editor sr-import-card">
                 <div class="sr-editor-head"><strong>思盘导入</strong></div>
                 <div class="sr-row"><input v-model.trim="cloudInput" class="b3-text-field sr-grow" placeholder="输入思盘路径" @keyup.enter="openCloudInput" /><button class="b3-button b3-button--outline" type="button" :disabled="cloudLoading || !cloudInput" @click="openCloudInput">输入</button></div>
@@ -61,13 +74,13 @@
               </div>
             </template>
 
-            <div v-if="showImportItems" class="sr-editor sr-import-card">
+            <div v-if="importHasItems" class="sr-editor sr-import-card">
               <div class="sr-editor-head"><strong>待导入</strong></div>
               <div class="sr-row"><button class="sr-chip" :class="{ 'is-active': importAllSelected }" type="button" @click="importAllSelected = !importAllSelected">{{ importAllSelected ? '取消全选' : '全选导入' }}</button><span>{{ importSelectedCount }} / {{ importItems.length }}</span><span v-if="importParsing">{{ importProgress }}%</span></div>
               <View class="sr-import-list" :items="importDisplayItems" mode="list" :status-map="STATUS_MAP" :get-cover-url="getCoverUrl" :get-progress="getProgress" @toggle-import="toggleImportItem" />
             </div>
 
-            <div v-if="showImportItems" class="sr-editor sr-import-card sr-import-card--sm">
+            <div v-if="importHasItems" class="sr-editor sr-import-card sr-import-card--sm">
               <div class="sr-editor-head"><strong>导入设置</strong></div>
               <input v-model="importBulkTags" class="b3-text-field sr-input" placeholder="添加标签，用逗号分隔" />
               <div v-if="allTags.length" class="sr-chips"><button v-for="t in allTags.slice(0, 10)" :key="t.tag" class="sr-chip" type="button" :class="{ 'is-active': importTagList.includes(t.tag) }" @click="toggleImportTag(t.tag)">#{{ t.tag }}</button></div>
@@ -77,6 +90,8 @@
                 <div class="sr-chips"><button v-for="item in row.items" :key="item.key" class="sr-chip" type="button" :class="{ 'is-active': item.active }" @click="item.click">{{ item.label }}</button></div>
               </template>
             </div>
+
+            </template>
 
           </template>
 
@@ -89,21 +104,11 @@
                   </div>
                 </template>
               </div>
-              <div v-if="modalMode === 'manage' && editingGroup" class="sr-editor">
-                <div class="sr-editor-head"><strong>{{ groups.some(g => g.id === editingGroup!.id) ? '编辑分组' : '新增分组' }}</strong></div>
-                <div v-for="f in groupFields" :key="f.key" class="sr-form-item">
-                  <span class="ft__secondary">{{ f.label }}</span>
-                  <input v-if="f.type === 'text'" v-model="editingGroup[f.key]" class="b3-text-field sr-input" :placeholder="f.placeholder" />
-                  <div v-else class="sr-chips"><button v-for="opt in f.options" :key="opt.value" class="sr-chip" :class="{ 'is-active': isGroupRuleActive(f, opt.value) }" type="button" @click="toggleGroupRule(f, opt.value)">{{ opt.label }}</button></div>
-                </div>
-                <div class="sr-row sr-actions-end sr-editor-actions"><button class="b3-button b3-button--outline" type="button" @click="editingGroup = null">取消</button><button class="b3-button b3-button--outline" type="button" @click="saveGroup">保存</button></div>
-              </div>
-
-          <template v-if="modalMode === 'manage'">
+          <template v-if="modalMode === 'manage' && !editingGroup">
             <div class="sr-row sr-actions-end sr-section-line">
               <button class="b3-button b3-button--outline" type="button" title="关闭面板，不导入当前待导入项目。" @click="closePopups">取消</button>
-              <button v-if="showImportItems && importMode === 'file'" class="b3-button b3-button--outline" type="button" title="复制文件到插件托管目录，适合希望书籍随插件数据一起管理的本地文件。" @click="confirmImport('file')" :disabled="!importSelectedCount || importParsing || importing">复制导入</button>
-              <button v-if="showImportItems" class="b3-button b3-button--outline" type="button" title="保留原始路径或链接添加到书架，支持 file 链接、本地路径、网络直链和思盘链接。" @click="confirmImport('link')" :disabled="!importLinkSelectedCount || importParsing || importing">链接导入</button>
+              <button v-if="importHasItems && importMode === 'file'" class="b3-button b3-button--outline" type="button" title="复制文件到插件托管目录，适合希望书籍随插件数据一起管理的本地文件。" @click="confirmImport('file')" :disabled="!importSelectedCount || importParsing || importing">复制导入</button>
+              <button v-if="importHasItems" class="b3-button b3-button--outline" type="button" title="保留原始路径或链接添加到书架，支持 file 链接、本地路径、网络直链和思盘链接。" @click="confirmImport('link')" :disabled="!importLinkSelectedCount || importParsing || importing">链接导入</button>
             </div>
           </template>
 
@@ -168,7 +173,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { showMessage, Menu } from 'siyuan'
 import { diagnosticLog } from '@/core/diagnostics'
-import { bookInGroup, bookshelfManager, SORTS, STATUS_OPTIONS, STATUS_MAP, RATING_OPTIONS, VIEW_MODES, VIEW_MODE_ICONS, MODAL_TITLES, STAR_OPTIONS, createDefaultGroupRules, createDefaultEditForm, filterGroupsByKeyword, getNextViewMode, buildFilterSections, buildEditFields, buildGroupFields, buildDetailFields, hasBookBulkPatch, normalizeCloudPath, siyuanCloudUrl, mergeCloudNodes, listCloudNodes, searchCloudNodes, cloudNodesToItems, isCloudBookPath, bookshelfSortValue, type BookBulkPatch, type SortType, type Book, type BookStatus, type BookFormat, type GroupConfig, type BookshelfViewMode, type BookshelfModalMode, type SiyuanCloudNode } from '@/core/bookshelf'
+import { bookInGroup, bookshelfManager, SORTS, STATUS_OPTIONS, STATUS_MAP, RATING_OPTIONS, VIEW_MODES, VIEW_MODE_ICONS, MODAL_TITLES, STAR_OPTIONS, createDefaultGroupRules, createDefaultEditForm, filterGroupsByKeyword, getNextViewMode, buildFilterSections, buildEditFields, buildGroupFields, buildDetailFields, hasBookBulkPatch, normalizeCloudPath, siyuanCloudUrl, mergeCloudNodes, listCloudNodes, searchCloudNodes, cloudNodesToItems, isCloudBookPath, bookshelfSortValue, compareBookshelfValues, type BookBulkPatch, type SortType, type Book, type BookStatus, type BookFormat, type GroupConfig, type BookshelfViewMode, type BookshelfModalMode, type SiyuanCloudNode } from '@/core/bookshelf'
 import View from '@/components/bookshelf/View.vue'
 import DockShell from './ui/DockShell.vue'
 import { isMobile } from '@/utils/mobile'
@@ -191,8 +196,10 @@ const stats = ref({ byStatus: { unread: 0, reading: 0, finished: 0 }, byFormat: 
 const keyword = ref(''), importGroupKeyword = ref(''), moveGroupKeyword = ref(''), currentGroup = ref<string | null>(null), filterRating = ref(0), sortReverse = ref(false)
 const filterStatus = ref<BookStatus[]>([]), filterFormats = ref<BookFormat[]>([]), filterTags = ref<string[]>([])
 const sortType = ref<SortType>('time'), viewMode = ref<BookshelfViewMode>('grid')
-const batchMode = ref<'rate' | 'status' | 'tags' | 'groups' | null>(null)
+const batchMode = ref<'rate' | 'status' | 'tags' | 'groups' | 'data' | null>(null)
 const selecting = ref(false), selectedBookUrls = ref<string[]>([]), groupCounts = ref<Record<string, number>>({})
+const completingData = ref(false)
+const completionProgress = ref({ done: 0, total: 0 })
 const editingBook = ref<string | null>(null), editingGroup = ref<GroupConfig | null>(null)
 const confirmDelete = ref<{ type: 'group' | 'book'; id: string; item: any; phase?: 'delete' } | { type: 'batch'; id: string; count: number; urls: string[]; phase?: 'delete' } | null>(null)
 const modalMode = ref<BookshelfModalMode>(null), panelBook = ref<Book | null>(null), importMode = ref<ImportMode>('link')
@@ -224,8 +231,12 @@ const gridStyle = computed(() => viewMode.value === 'grid' ? { gridTemplateColum
 const viewModeIcon = computed(() => VIEW_MODE_ICONS[viewMode.value])
 const toolbarStartActions = computed(() => currentGroup.value ? [{ id: 'back', icon: '#iconBack', label: '返回' }] : [])
 const toolbarActions = computed(() => [{ id: 'view', icon: viewModeIcon.value, label: '切换视图' }, { id: 'select', icon: selecting.value ? '#iconCheck' : '#iconUncheck', label: selecting.value ? '退出选择' : '选择书籍' }, { id: 'organize', icon: '#lucide-sliders-horizontal', label: '整理书架' }, { id: 'manage', icon: '#lucide-book-plus', label: '添加内容' }])
-const modalTitle = computed(() => modalMode.value ? MODAL_TITLES[modalMode.value] : '书架')
+const modalTitle = computed(() => editingGroup.value ? '编辑分组' : modalMode.value ? MODAL_TITLES[modalMode.value] : '书架')
 const panelCover = computed(() => panelBook.value ? getCoverUrl(panelBook.value) : '')
+const groupPanelCover = computed(() => {
+  if (!editingGroup.value) return ''
+  return getGroupCoverUrls(editingGroup.value)[0] || ''
+})
 const viewProps = computed(() => ({ items: displayItems.value, mode: viewMode.value, gridStyle: gridStyle.value, groupCounts: groupCounts.value, statusMap: STATUS_MAP, getCoverUrl, getGroupCoverUrls, getProgress, currentGroup: currentGroup.value, currentGroupIsSmart: currentGroupIsSmart.value, selecting: selecting.value, selectedUrls: selectedBookUrls.value, hiddenItems: props.hiddenItems || [], dragEnabled }))
 
 const getSortKey = (item: any, type: string) => item.type === 'group'
@@ -245,7 +256,7 @@ const displayItems = computed(() => {
   return items.sort((a, b) => {
     const ka = getSortKey(a, sortType.value)
     const kb = getSortKey(b, sortType.value)
-    return (sortReverse.value ? -1 : 1) * (typeof ka === 'string' ? ka.localeCompare(kb as string) : (ka as number) - (kb as number))
+    return compareBookshelfValues(ka, kb, sortType.value, sortReverse.value)
   })
 })
 const displayBooks = computed(() => displayItems.value.filter(i => i.type === 'book').map(i => i.data))
@@ -257,7 +268,6 @@ const batchRatingOptions = computed(() => [...RATING_OPTIONS, [0, '清除评分'
 const parseList = (value: string) => Array.from(new Set(value.split(/[,，\n]/).map(t => t.trim()).filter(Boolean)))
 const importTagList = computed(() => parseList(importBulkTags.value))
 const batchTagList = computed(() => parseList(batchTags.value))
-const showImportItems = computed(() => !editingGroup.value && importHasItems.value)
 const optionChip = (key: string, label: string, active: boolean, click: () => void) => ({ key, label, active, click })
 const importApplyRows = computed(() => [
   { key: 'groups', label: '导入到分组', items: importFolderGroups.value.map(g => optionChip(g.id, g.name, importBulkGroups.value.includes(g.id), () => toggleImportGroup(g.id))) },
@@ -270,7 +280,7 @@ const batchRows = computed(() => {
   const chip = (key: string, label: string, click: () => void, extra = {}) => ({ key, label, click, ...extra })
   const rows: any[] = [
     { key: 'main', items: [{ key: 'count', text: `选中 ${selectedCount.value}` }, chip('clear', '清空', clearSelection, { disabled: !selectedCount.value }), chip('all', '全选', selectDisplayedBooks), chip('invert', '反选', invertDisplayedBooks), chip('exit', '退出', exitSelection, { primary: true })] },
-    { key: 'ops', items: [modeButton('rate', '评分'), modeButton('status', '状态'), modeButton('tags', '标签'), modeButton('groups', '分组'), chip('remove', '移除', confirmBatchRemove, { danger: true, disabled: !selectedCount.value })] },
+    { key: 'ops', items: [modeButton('rate', '评分'), modeButton('status', '状态'), modeButton('tags', '标签'), modeButton('groups', '分组'), chip('data', completingData.value ? `补全中 ${completionProgress.value.done}/${completionProgress.value.total}` : '数据补全', completeSelectedData, { disabled: !selectedCount.value || completingData.value }), chip('remove', '移除', confirmBatchRemove, { danger: true, disabled: !selectedCount.value || completingData.value })] },
   ]
   if (batchMode.value === 'rate') rows.push({ key: 'rate', items: batchRatingOptions.value.map(([v, label]) => chip(`r-${v}`, label, () => batchOp('rate', v))) })
   if (batchMode.value === 'status') rows.push({ key: 'status', items: STATUS_OPTIONS.map(([v, label]) => chip(`s-${v}`, label, () => batchOp('status', v))) })
@@ -286,7 +296,7 @@ const confirmBatchRemove = () => { if (selectedCount.value) confirmDelete.value 
 const setImportMode = (mode: ImportMode) => { editingGroup.value = null; resetImport(); importMode.value = mode }
 const groupRowActions = (g: GroupConfig) => {
   const i = groups.value.findIndex(item => item.id === g.id)
-  return [i > 0 && { label: '上移', icon: '#iconUp', click: () => moveGroup(g, -1 as const) }, i < groups.value.length - 1 && { label: '下移', icon: '#iconDown', click: () => moveGroup(g, 1 as const) }, { label: '打开分组', icon: '#iconFolder', click: () => setGroup(g.id, true) }, { label: '编辑分组', icon: '#iconEdit', click: () => startEditGroup(g) }, { label: '删除分组', icon: '#lucide-trash-2', warn: true, click: () => confirmGroupDelete(g) }].filter(Boolean) as any[]
+  return [i > 0 && { label: '上移', icon: '#iconUp', click: () => moveGroup(g, -1 as const) }, i < groups.value.length - 1 && { label: '下移', icon: '#iconDown', click: () => moveGroup(g, 1 as const) }, { label: '打开分组', icon: '#iconFolder', click: () => setGroup(g.id, true) }, { label: '编辑信息', icon: '#iconEdit', click: () => startEditGroup(g) }, { label: '删除分组', icon: '#lucide-trash-2', warn: true, click: () => confirmGroupDelete(g) }].filter(Boolean) as any[]
 }
 const handleToolbarAction = (id: string) => {
   closeMenu()
@@ -297,7 +307,7 @@ const handleToolbarAction = (id: string) => {
   else if (id === 'manage') { modalMode.value = 'manage'; setImportMode('link') }
 }
 const getCoverUrl = (book: Book) => bookshelfManager.getCoverUrl(book)
-const getGroupCoverUrls = (group: GroupConfig) => books.value.filter(book => bookInGroup(book, group)).map(getCoverUrl).filter(Boolean).slice(0, 4)
+const getGroupCoverUrls = (group: GroupConfig) => group.coverMode === 'custom' && group.cover ? [getCoverUrl({ cover: group.cover })] : books.value.filter(book => bookInGroup(book, group)).map(getCoverUrl).filter(Boolean).slice(0, 4)
 const getProgress = (book: Book) => /^https?:\/\//i.test(book.path || '') && book.meta?.fileSize ? book.meta.fileSize : `${book.progress || 0}%`
 const toggleArrayItem = (arr: any[], value: any) => { const i = arr.indexOf(value); i > -1 ? arr.splice(i, 1) : arr.push(value) }
 const toggleFilterItem = (key: string, value: any) => key === 'rating' ? filterMap[key].value = value : toggleArrayItem(filterMap[key].value, value)
@@ -379,19 +389,18 @@ const confirmDeleteText = computed(() => confirmDelete.value?.type === 'batch'
     ? '确认删除该分组？'
     : confirmDelete.value?.phase === 'delete' ? '确认彻底删除？将删除标注数据' : '确认移除？将删除托管文件，保留阅读数据')
 
-const createGroupDraft = (type: GroupType): GroupConfig => ({ id: `group_${Date.now()}`, name: '', icon: type === 'smart' ? '⚡' : '📁', order: groups.value.length, type, rules: createDefaultGroupRules() })
+const createGroupDraft = (type: GroupType): GroupConfig => ({ id: `group_${Date.now()}`, name: '', icon: type === 'smart' ? '⚡' : '📁', order: groups.value.length, type, coverMode: 'default', cover: '', rules: createDefaultGroupRules() })
 const startEditGroup = (g?: GroupConfig, type: GroupType = 'folder') => {
   if (!g && !can.value(type === 'smart' ? 'smart-group' : 'folder-group')) return showUpgrade(type === 'smart' ? '智能分组' : '分组')
-  editingGroup.value = g ? { ...g, rules: g.rules || createDefaultGroupRules() } : createGroupDraft(type)
+  editingGroup.value = g ? { ...g, coverMode: g.coverMode === 'custom' || g.coverMode === 'books' ? g.coverMode : 'default', cover: g.cover || '', rules: g.rules || createDefaultGroupRules() } : createGroupDraft(type)
   modalMode.value = 'manage'
 }
 const saveGroup = async () => {
-  if (!editingGroup.value?.name.trim()) return (editingGroup.value = null)
+  if (!editingGroup.value?.name.trim()) return closePopups()
   const { created } = await bookshelfManager.upsertGroup(editingGroup.value)
   await refresh()
   showMessage(`已${created ? '创建' : '更新'}：${editingGroup.value.name}`, 2000, 'info')
-  editingGroup.value = null
-  modalMode.value = 'manage'
+  closePopups()
 }
 const moveGroup = async (group: GroupConfig, offset: -1 | 1) => { if (await bookshelfManager.moveGroup(group.id, offset)) { await refreshGroups(); showMessage(`已${offset < 0 ? '上移' : '下移'}：${group.name}`, 1200, 'info') } }
 const deleteGroup = async (g: GroupConfig) => {
@@ -406,7 +415,7 @@ const showGroupMenu = (group: GroupConfig, e: MouseEvent) => {
   e.preventDefault(); const m = new Menu()
   ;[
     { icon: 'iconFolder', label: '打开分组', click: () => setGroup(group.id) },
-    { icon: 'iconEdit', label: '重命名', click: () => startEditGroup(group) },
+    { icon: 'iconEdit', label: '编辑信息', click: () => startEditGroup(group) },
     { type: 'separator' },
     { icon: 'iconTrashcan', label: '删除', click: () => { closeMenu(); confirmGroupDelete(group) } },
   ].forEach(item => m.addItem(item))
@@ -560,10 +569,36 @@ const batchClearList = async (kind: 'tags' | 'groups', text: string, ok: string)
   showResult(res.success, res.failed, `${ok} ${res.success} 本`)
   if (!res.failed) exitSelection()
 }
+const completeSelectedData = async () => {
+  if (!selectedCount.value) return
+  if (!can.value('batch-operation')) return showUpgrade('批量操作')
+  if (completingData.value) return
+  completingData.value = true
+  completionProgress.value = { done: 0, total: selectedBookUrls.value.length }
+  try {
+    const result = await bookshelfManager.batchCompleteBookData(selectedBookUrls.value, (done, total) => { completionProgress.value = { done, total } })
+    batchMode.value = null
+    showMessage(`数据补全完成：成功 ${result.success} 本，跳过 ${result.skipped} 本，失败 ${result.failed} 本`, 3000, result.failed ? 'error' : 'info')
+    if (!result.failed) exitSelection()
+  } finally { completingData.value = false; completionProgress.value = { done: 0, total: 0 } }
+}
 const editFields = computed(() => buildEditFields())
 const groupFields = computed(() => buildGroupFields(editingGroup.value, allTags.value))
-const isGroupRuleActive = (field: any, value: any) => field.single ? editingGroup.value?.rules[field.key] === value : editingGroup.value?.rules[field.key]?.includes(value)
-const toggleGroupRule = (field: any, value: any) => field.single ? editingGroup.value && (editingGroup.value.rules[field.key] = value) : editingGroup.value && toggleArrayItem(editingGroup.value.rules[field.key], value)
+const isGroupRuleActive = (field: any, value: any) => {
+  if (!editingGroup.value) return false
+  if (field.key === 'coverMode') return editingGroup.value.coverMode === value
+  return field.single ? editingGroup.value.rules[field.key] === value : editingGroup.value.rules[field.key]?.includes(value)
+}
+const toggleGroupRule = (field: any, value: any) => {
+  if (!editingGroup.value) return
+  if (field.key === 'coverMode') {
+    editingGroup.value.coverMode = value
+    if (value !== 'custom') editingGroup.value.cover = ''
+    return
+  }
+  if (field.single) editingGroup.value.rules[field.key] = value
+  else toggleArrayItem(editingGroup.value.rules[field.key], value)
+}
 const resetEditForm = () => { editForm.value = createDefaultEditForm(); bindSearch.value = ''; bindResults.value = [] }
 const saveEdit = async () => {
   if (!editingBook.value) return
@@ -635,7 +670,6 @@ watch(viewMode, v => settingsLoaded && saveUiSetting('bookshelf_viewMode', v))
 .sr-section-line{padding-top:12px;border-top:1px solid var(--b3-border-color)}
 .sr-editor{display:flex;flex-direction:column;margin-top:12px;padding:12px;background:var(--b3-theme-background);border:1px solid var(--b3-border-color);border-radius:10px}
 .sr-editor-head{padding:0 0 12px;border-bottom:1px solid var(--b3-border-color);font-size:13px;font-weight:600}
-.sr-editor .sr-form-item{padding:0;border-bottom:none}.sr-editor .sr-form-item + .sr-form-item{margin-top:10px}.sr-editor-actions{margin-top:12px;padding-top:0}
 .sr-panel-cover{width:124px;height:176px;margin:0 auto 4px;overflow:hidden;border-radius:var(--b3-border-radius);background:var(--b3-theme-surface)}.sr-panel-cover img{width:100%;height:100%;object-fit:cover}
 .mono{font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;word-break:break-all}
 .fade-enter-active,.fade-leave-active{transition:opacity .18s ease}.fade-enter-from,.fade-leave-to{opacity:0}

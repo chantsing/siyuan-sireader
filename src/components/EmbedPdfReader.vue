@@ -842,6 +842,8 @@ const handleReady = async (registry: PluginRegistry) => {
       // 2.15.x exposes an explicit commit task.  Keep the PDF engine state
       // and the SiReader record in sync before announcing readiness.
       await taskToPromise(annotation.commit?.())
+      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      restoringIds.clear()
     }
     annotationsLoaded = true
     diagnosticLog('info', 'pdf.annotations.loaded', { key: storageKey(), stored: stored?.length || 0, native: nativePdfAnnotationIds.size, managed: managed.length, created: managed.filter((item: any) => !existingNativeIds.has((item.annotation || item)?.id)).length, durationMs: Date.now() - startedAt })
@@ -856,7 +858,7 @@ const handleReady = async (registry: PluginRegistry) => {
     })
     const offEvent = annotation.onAnnotationEvent?.((event: any) => {
       const id = event?.annotation?.id
-      if (event.type === 'create' && event.committed && restoringIds.delete(id)) return
+      if (event.committed && id && restoringIds.delete(id)) return
       if (event.committed === false && annotationPersistenceReady) {
         if (id && !nativePdfAnnotationIds.has(id)) {
           const previous = pendingAnnotations.get(id)

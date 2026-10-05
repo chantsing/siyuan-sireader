@@ -445,26 +445,38 @@ const normalizeStoragePath = (storageName = '') => {
 }
 const getPluginStoragePath = (key: string) => `${PLUGIN_STORAGE_ROOT}/${getPlugin().name}/${normalizeStoragePath(key)}`
 
-const isApiErrorPayload = (bytes?: Uint8Array | null) => {
-  if (!bytes?.byteLength || bytes.byteLength > 512) return false
+const pathKind = (path = '') => path.startsWith(SIYUAN_CLOUD_BASE + '/') ? 'siyuan-cloud' : path.startsWith('/public/') || path.startsWith('/data/public/') ? 'public' : /^https?:\/\//i.test(path) ? 'http' : 'storage'
+const fileReadTarget = (path: string) => {
+  const target = path.startsWith('/public/') ? publicToDataPath(path) : path
+  return target.startsWith(`${SIYUAN_CLOUD_BASE}/p/`) ? target.replace(`${SIYUAN_CLOUD_BASE}/p/`, `${SIYUAN_CLOUD_BASE}/d/`) : target
+}
+const fileReadError = (path: string) => path.startsWith(`${SIYUAN_CLOUD_BASE}/`) ? '思源云盘文件读取失败（可能无权限或文件已失效）' : '文件加载失败'
+const bodyPreview = (bytes?: Uint8Array | null) => {
+  if (!bytes?.byteLength) return ''
   const text = new TextDecoder().decode(bytes).trim()
-  if (!text.startsWith('{') || !text.includes('"code"')) return false
+  return text.slice(0, 500)
+}
+const parseApiErrorPayload = (bytes?: Uint8Array | null) => {
+  if (!bytes?.byteLength || bytes.byteLength > 4096) return null
+  const text = new TextDecoder().decode(bytes).trim()
+  if (!text.startsWith('{') || !text.includes('"code"')) return null
   try {
     const payload = JSON.parse(text)
-    return typeof payload?.code === 'number' && payload.code !== 0 && 'msg' in payload && 'data' in payload
-  } catch {
-    return false
-  }
+    return typeof payload?.code === 'number' && payload.code !== 0
+      ? { code: payload.code, msg: typeof payload.msg === 'string' ? payload.msg : '', data: payload.data, preview: text.slice(0, 500) }
+      : null
+  } catch { return null }
 }
 
 const readFileResponse = async (path: string) => {
   if (!path) return null
-  const target = path.startsWith('/public/') ? publicToDataPath(path) : path
+  const target = fileReadTarget(path)
+  if (path.startsWith(`${SIYUAN_CLOUD_BASE}/p/`)) return fetch(target)
   return fetch('/api/file/getFile', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path: target }),
-  }).catch(() => null)
+  })
 }
 
 export const isSupportedBookFile = (name = '') => new RegExp(`\\.(${SUPPORTED_BOOK_EXTS.join('|')})$`, 'i').test(name)
@@ -496,15 +508,30 @@ export const normalizeSiyuanCloudUrl = (value = '') => {
 }
 
 export const readFileBlob = async (path: string) => {
-  const res = await readFileResponse(path)
-  if (!res?.ok) return null
-  const blob = await res.blob().catch(() => null)
-  if (!blob) return null
-  if (blob.size <= 512) {
-    const text = await blob.text().catch(() => '')
-    if (text && isApiErrorPayload(new TextEncoder().encode(text))) return null
+  const startedAt = Date.now()
+  const target = fileReadTarget(path)
+  const kind = pathKind(path)
+  diagnosticLog('debug', 'file.read.start', { path: target, kind })
+  try {
+    const res = await readFileResponse(path)
+    if (!res) {
+      diagnosticLog('warn', 'file.read.failed', { path: target, kind, reason: 'empty-response', durationMs: Date.now() - startedAt })
+      return null
+    }
+    const bytes = new Uint8Array(await res.arrayBuffer())
+    const apiError = parseApiErrorPayload(bytes)
+    const contentType = res.headers.get('content-type') || ''
+    const base = { path: target, kind, status: res.status, ok: res.ok, contentType, contentLength: bytes.byteLength, durationMs: Date.now() - startedAt }
+    if (!res.ok || apiError) {
+      diagnosticLog('error', 'file.read.failed', { ...base, ...(apiError ? { apiCode: apiError.code, apiMsg: apiError.msg, bodyPreview: apiError.preview } : { bodyPreview: bodyPreview(bytes) }) })
+      return null
+    }
+    diagnosticLog('debug', 'file.read.response', base)
+    return new Blob([bytes], { type: contentType || 'application/octet-stream' })
+  } catch (error) {
+    diagnosticLog('error', 'file.read.failed', { path: target, kind, reason: 'network-or-read-error', durationMs: Date.now() - startedAt, error })
+    return null
   }
-  return blob
 }
 
 export const readManagedFile = async (path: string, fallbackName?: string) => {
@@ -658,6 +685,28 @@ export const deleteBookAnnotation = (url: string, id: string, nestedId = false, 
 export const removeBookRecord = async (url: string) => {
   return storageEngine.remove(getRecordKey(url))
 }
+
+export const touchBookRecordFiles = async (keys: string[]) => {
+  const unique = [...new Set(keys.filter(Boolean))]
+  if (!unique.length) return 0
+  const roots = [
+    ...(await pluginStorageAdapter.listAll?.('backups/storage-v1') || []).filter(item => item.isDir).map(item => `backups/storage-v1/${item.name}`),
+    ...(await pluginStorageAdapter.listAll?.('backups/before-recovery') || []).filter(item => item.isDir).map(item => `backups/before-recovery/${item.name}`),
+  ]
+  const paths = unique.flatMap(key => { const name = getRecordKey(key); return [name, ...roots.map(root => `${root}/${name}`)] })
+  let touched = 0
+  for (let i = 0; i < paths.length; i += 6) {
+    touched += (await Promise.all(paths.slice(i, i + 6).map(async path => {
+      try {
+        const stored = await pluginStorageAdapter.read(path)
+        if (!stored.found) return false
+        await pluginStorageAdapter.write(path, decodeStored<BookRecord>('records/' + path.split('/records/').pop(), stored.value))
+        return true
+      } catch { return false }
+    }))).filter(Boolean).length
+  }
+  return touched
+}
 const migratePdfRecordFor = (url: string, pageHeights: number[] = []) => ensurePdfRecordMigrated(url, {
   readRecord: readBookRecord,
   writeRecord: (url, record, base) => mergeMigratedBookRecord(url, base || null, record),
@@ -743,13 +792,6 @@ export const saveOptionalCover = async (blob: Blob | undefined, url: string) => 
 // 统一读取入口，避免上层重复判断 http / file / public / data 路径。
 export const loadBookFile = async (path: string): Promise<File> => {
   path = normalizeSiyuanCloudUrl(path)
-  if (path.startsWith(`${SIYUAN_CLOUD_BASE}/`)) {
-    const res = await fetch(path)
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-    return new File([await res.arrayBuffer()], path.split('/').pop()?.split('?')[0] || 'book', {
-      type: res.headers.get('content-type') || 'application/octet-stream',
-    })
-  }
   if (path.startsWith('http://') || path.startsWith('https://')) {
     const res = await fetch(path)
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`)
@@ -776,13 +818,13 @@ export const loadBookFile = async (path: string): Promise<File> => {
     })
     if (publicPath.startsWith(PUBLIC_ROOT)) {
       const file = await readManagedFile(publicPath, name)
-      if (!file) throw new Error('文件加载失败')
+      if (!file) throw new Error(fileReadError(path))
       return file
     }
-    throw new Error('文件加载失败')
+    throw new Error(fileReadError(path))
   }
   const blob = await readFileBlob(path)
-  if (!blob) throw new Error('文件加载失败')
+  if (!blob) throw new Error(fileReadError(path))
   return new File([blob], path.split(/[/\\]/).pop() || 'book', { type: blob.type || 'application/octet-stream' })
 }
 

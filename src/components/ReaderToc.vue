@@ -167,9 +167,11 @@ const ensureExpandedState = (items: TOCItem[], href = '') => {
   let changed = false
   const next = { ...expandedKeys.value }
   walkToc(items, (item, key) => {
-    if (!item.subitems?.length || next[key] !== undefined) return
-    next[key] = hasCurrentDescendant(item.subitems, href)
-    changed = true
+    if (!item.subitems?.length) return
+    if (hasCurrentDescendant(item.subitems, href) && next[key] !== true) {
+      next[key] = true
+      changed = true
+    }
   })
   if (changed) expandedKeys.value = next
 }

@@ -124,6 +124,7 @@ const summarize = (items = entries) => {
     scope: 'retained-entries', startedAt: items[0]?.time, endedAt: items.at(-1)?.lastTime || items.at(-1)?.time,
     events: Object.create(null), levels: Object.create(null), keys: Object.create(null),
     io: { reads: 0, writes: 0, removes: 0, lists: 0, failures: 0, totalDurationMs: 0, maxDurationMs: 0 },
+    fileIo: { reads: 0, failures: 0, cloudReads: 0, totalDurationMs: 0, maxDurationMs: 0, statuses: Object.create(null) },
     errors: 0, lastError: undefined as DiagnosticEntry | undefined,
   }
   for (const entry of items) {
@@ -131,6 +132,20 @@ const summarize = (items = entries) => {
     stats.events[entry.event] = (stats.events[entry.event] || 0) + count
     stats.levels[entry.level] = (stats.levels[entry.level] || 0) + count
     if (entry.level === 'error') { stats.errors += count; stats.lastError = entry }
+    if (entry.event === 'file.read.start') {
+      stats.fileIo.reads += count
+      if (entry.data?.kind === 'siyuan-cloud') stats.fileIo.cloudReads += count
+    }
+    if (entry.event === 'file.read.failed') {
+      stats.fileIo.failures += count
+      const status = String(entry.data?.status || entry.data?.apiCode || 'unknown')
+      stats.fileIo.statuses[status] = (stats.fileIo.statuses[status] || 0) + count
+    }
+    if (entry.event === 'file.read.start' || entry.event === 'file.read.response' || entry.event === 'file.read.failed') {
+      const duration = Number(entry.data?.durationMs) || 0
+      stats.fileIo.totalDurationMs += duration * count
+      stats.fileIo.maxDurationMs = Math.max(stats.fileIo.maxDurationMs, duration)
+    }
     if (!/^storage\.(read|write|remove|list)(\.failed)?$/.test(entry.event)) continue
     const key = entry.data?.key || entry.data?.prefix
     if (typeof key !== 'string') continue
@@ -178,22 +193,33 @@ export const exportDiagnostics = (extra: Record<string, unknown> = {}) => {
   } finally { setTimeout(() => URL.revokeObjectURL(url), 1000) }
 }
 
+export const recordErrorEvent = (event: ErrorEvent) => {
+  const target = event.target as (HTMLElement & { currentSrc?: string; src?: string; href?: string }) | null
+  const tag = String(target?.tagName || '').toLowerCase()
+  if (['img', 'link', 'script', 'video', 'audio'].includes(tag)) {
+    const kind = tag === 'img' ? 'image' : tag
+    diagnosticLog('warn', `resource.${kind}.failed`, { src: target?.currentSrc || target?.src || target?.href || '', element: tag })
+    return
+  }
+  diagnosticLog('error', 'window.error', { message: event.message, source: event.filename, line: event.lineno, column: event.colno, error: event.error })
+}
+
 export const installDiagnostics = (extra: Record<string, unknown> = {}) => {
   if (installed || typeof window === 'undefined') return
   load()
   installed = true
   context = clean(extra) as Record<string, unknown>
-  const onError = (event: ErrorEvent) => diagnosticLog('error', 'window.error', { message: event.message, source: event.filename, line: event.lineno, column: event.colno, error: event.error })
+  const onError = (event: ErrorEvent) => recordErrorEvent(event)
   const onRejection = (event: PromiseRejectionEvent) => diagnosticLog('error', 'window.unhandledrejection', { reason: event.reason })
   const onPageHide = () => persistNow()
-  window.addEventListener('error', onError)
+  window.addEventListener('error', onError, true)
   window.addEventListener('unhandledrejection', onRejection)
   window.addEventListener('pagehide', onPageHide)
   const api = ((window as any).sireader ||= {})
   api.exportDiagnostics = exportDiagnostics
   api.clearDiagnostics = clearDiagnostics
   removeDiagnosticListeners = () => {
-    window.removeEventListener('error', onError)
+    window.removeEventListener('error', onError, true)
     window.removeEventListener('unhandledrejection', onRejection)
     window.removeEventListener('pagehide', onPageHide)
     if (api.exportDiagnostics === exportDiagnostics) delete api.exportDiagnostics

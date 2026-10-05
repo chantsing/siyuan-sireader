@@ -7,7 +7,7 @@
 让思源笔记变身专业阅读器，支持 EPUB/PDF/TXT/在线小说  
 专业电子书阅读器，支持 EPUB/PDF/MOBI/TXT/在线小说；PDF 支持高亮、墨迹、形状、表单、印章、签名、图片、截图、搜索、打印、导出和回链，并提供标注笔记、词典、翻译、主题与书架管理
 
-[![Version](https://img.shields.io/badge/version-2.5.0-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-2.5.1-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,27 @@
 ---
 
 ## 📝 最新更新
+
+## v2.5.1 (2026-10-04)
+
+### 新增
+
+- EPUB 阅读工具栏新增百分比快捷定位，可直接输入进度跳转到对应位置。
+- 新增书架批量数据补全：支持 PDF、EPUB、MOBI、AZW3 的封面与元数据补全，仅填充缺失内容并显示处理进度。
+- 分组封面支持使用分组内书籍封面或自定义封面，分组编辑页与书籍编辑页统一。
+
+### 优化
+
+- EPUB 目录打开时自动展开并定位当前章节，方便在正文与参考内容之间快速切换。
+- 统一导入与批量补全的文件读取、封面解析和缓存刷新流程；补全完成后自动刷新书架并同步更新当前记录及备份文件的系统修改时间。
+- 优化批量处理速度和书架排序，统一最近阅读等排序方向，减少重复读取、刷新和界面更新。
+- 精简重复的补全、排序、文件读取和编辑界面逻辑，完善诊断日志以记录封面读取失败的关键原因。
+
+### 修复
+
+- 修复思源云盘文件读取错误导致 PDF 无法解析封面的问题。
+- 修复 EPUB/PDF 封面丢失、删除后显示破损图片，以及补全成功后必须手动刷新书架的问题。
+- 修复分组编辑取消后返回添加内容页面的问题。
 
 ## v2.5.0 (2026-09-30)
 

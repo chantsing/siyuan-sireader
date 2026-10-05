@@ -35,6 +35,7 @@
       </div>
       <div v-if="!isEmbedPdfMode" class="reader-toolbar" :class="{'is-visible':toolbarVisible}">
         <button v-if="!isEmbedPdfMode" class="toolbar-btn b3-tooltips b3-tooltips__n" @click.stop="handlePrev" :aria-label="i18n.prevChapter||'上一章'"><svg><use xlink:href="#iconLeft"/></svg></button>
+        <input v-model="progressJump" class="reader-progress-jump" type="number" min="0" max="100" step="1" placeholder="%" aria-label="跳转到阅读进度" @focus="progressJump=String(Math.round(readingProgress*100))" @keydown.enter.prevent="submitProgressJump">
                 <button v-if="!isEmbedPdfMode" class="toolbar-btn b3-tooltips b3-tooltips__n" @click.stop="handleNext" :aria-label="i18n.nextChapter||'下一章'"><svg><use xlink:href="#iconRight"/></svg></button>
         <button v-if="!isEmbedPdfMode" class="toolbar-btn b3-tooltips b3-tooltips__n" @click.stop="openToc" :aria-label="i18n.toc||'目录'"><svg><use xlink:href="#iconList"/></svg></button>
         <button v-if="!isEmbedPdfMode" class="toolbar-btn b3-tooltips b3-tooltips__n" :class="{active:hasBookmark}" @click.stop="toggleBookmark" :aria-label="hasBookmark?(i18n.removeBookmark||'删除书签'):(i18n.addBookmark||'添加书签')"><svg><use xlink:href="#iconBookmark"/></svg></button>
@@ -132,6 +133,7 @@ const readerSplashRef = ref<{ dismiss: () => void; cleanup: () => void; isVisibl
 const loading = ref(true)
 const error = ref('')
 const readingProgress = ref(0)
+const progressJump = ref('')
 const hasBookmark = ref(false)
 const currentBookUrl = ref('')
 let readerFocused = false
@@ -173,6 +175,13 @@ const ttsEnabled = computed(() => currentSettings.value?.tts?.enabled || false)
 const ttsPlaying = computed(() => ttsController.isActive.value && !ttsController.paused.value)
 const clearReadingSelection=()=>{try{reader?.getView?.()?.renderer?.getContents?.()?.forEach(({doc}:any)=>doc.defaultView?.getSelection()?.removeAllRanges());document.getSelection()?.removeAllRanges()}catch{}}
 const syncReadingProgress=(detail?:any)=>{const f=detail?.fraction??reader?.getLocation?.()?.fraction??currentView.value?.lastLocation?.fraction;readingProgress.value=Number.isFinite(f)?Math.max(0,Math.min(1,f)):0}
+const submitProgressJump=async()=>{
+  const value=Number(progressJump.value)
+  if(!Number.isFinite(value))return
+  const fraction=Math.max(0,Math.min(100,value))/100
+  progressJump.value=String(Math.round(fraction*100))
+  try{await reader?.goToFraction(fraction)}catch{showMessage('跳转失败',1500,'error')}
+}
 const toggleTTS = () => {if (!can.value('tts')) return showUpgrade('TTS朗读'); clearReadingSelection(); ttsController.toggle(() => reader, currentSettings.value?.tts, undefined, getBookName())}
 const syncTTS = async () => ttsController.sync(currentSettings.value?.tts?.enabled || false)
 const marks=computed(()=>markManager.value)
@@ -213,29 +222,33 @@ const imageEmbedPdfMark=async(item:any)=>{
   return item
 }
 const pdfSyncQueues=new Map<string,Promise<void>>()
-const pdfSyncedBlocks=new Map<string,{blockId?:string;blockIds?:string[]}>()
+const pdfSyncMetadataUpdates=new Set<string>()
 const syncEmbedPdfEvent=(event:any)=>{
   const a=event?.annotation,mark=a&&embedPdfMark({annotation:cloneStorageValue(a)})
   if(!mark)return
   const key=`${getBookUrl()}:${mark.id}`,previous=pdfSyncQueues.get(key)||Promise.resolve()
+  if(event?.type==='update'&&pdfSyncMetadataUpdates.delete(key)) return
   const task=previous.catch(()=>undefined).then(async()=>{
     try{
       const m=await import('@/utils/copy'),ctx={bookUrl:getBookUrl(),isPdf:true,marks:currentView.value?.marks}
-      Object.assign(mark,pdfSyncedBlocks.get(key)||{})
       const next=event?.type==='delete'?mark:await imageEmbedPdfMark(mark)
-      if(event?.type==='delete'){await m.syncMarkOnDelete(next);pdfSyncedBlocks.delete(key)}
+      if(event?.type==='delete')await m.syncMarkOnDelete(next)
       else{
-        const liveMarks=currentView.value?.marks
         const durableMarks={updateMark:async(item:any,updates:any)=>{
-          if(embedPdfAnnotations.value&&liveMarks?.updateMark)return liveMarks.updateMark(item,updates)
           const annotation=item.annotation||a
+          Object.assign(item,updates)
           await upsertEmbedPdfAnnotation(props.bookInfo?.dataId||getBookUrl(),{annotation:{...annotation,custom:{...(annotation.custom||{}),...updates}}})
+          const live=latestPdfAnnotation(item), scope=embedPdfAnnotations.value
+          if(scope?.updateAnnotation&&live){
+            pdfSyncMetadataUpdates.add(key)
+            await scope.updateAnnotation(live.pageIndex,live.id,{custom:{...(live.custom||{}),...updates}})
+            await embedPdfReaderRef.value?.flushAnnotations?.()
+          }
         }}
         const durableCtx={...ctx,marks:durableMarks}
         if(event?.type==='update'&&next.blockId)await m.updateMarkInDoc(next,durableCtx)
         else await m.syncMarkOnCreate(next,durableCtx)
       }
-      if(next.blockId||next.blockIds?.length)pdfSyncedBlocks.set(key,{blockId:next.blockId,blockIds:next.blockIds})
     }catch(e){console.error('[PdfSync]',e)}
   })
   pdfSyncQueues.set(key,task)
@@ -537,6 +550,7 @@ onBeforeUnmount(()=>{
 .toolbar-btn{width:28px;height:28px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;border-radius:4px;cursor:pointer;transition:all .15s;svg{width:14px;height:14px}&:hover{background:var(--b3-list-hover)}&.active{background:var(--b3-theme-primary-lightest);color:var(--b3-theme-primary)}}
 .toolbar-mark-btn{position:relative;.mark-indicator{position:absolute;right:2px;bottom:2px;width:8px;height:8px;border-radius:50%;border:1.5px solid var(--b3-theme-surface);box-shadow:0 0 0 .5px var(--b3-border-color)}}
 .search-input{width:160px;height:22px;padding:0 6px;border:none;background:var(--b3-theme-background-light);color:var(--b3-theme-on-surface);font-size:11px;border-radius:3px;transition:background .15s;&:focus{outline:none;background:var(--b3-theme-background)}}
+.reader-progress-jump{width:24px;height:20px;padding:0 1px;border:0;border-radius:2px;background:var(--b3-theme-background-light);color:var(--b3-theme-on-surface);font-size:9px;text-align:center;outline:none;appearance:textfield}.reader-progress-jump::-webkit-inner-spin-button,.reader-progress-jump::-webkit-outer-spin-button{margin:0;appearance:none}.reader-progress-jump:focus{background:var(--b3-theme-background);box-shadow:inset 0 -1px 0 var(--b3-theme-primary)}
 .search-count{font-size:11px;color:var(--b3-theme-on-surface-variant);min-width:40px;text-align:center;opacity:.7}
 .panel-divider{width:1px;height:20px;background:var(--b3-border-color)}
 .mark-colors,.mark-styles{display:flex;gap:3px}

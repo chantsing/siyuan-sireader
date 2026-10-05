@@ -84,7 +84,11 @@
       >
       <div class="bs-cover" :class="{ 'is-drop-target': isGroupDropTarget(item) }">
         <template v-if="groupCoverUrls(item).length">
-          <div class="bs-group-cover">
+          <div v-if="isSingleGroupCover(item)" class="bs-spine-cover">
+            <img :src="groupCoverUrls(item)[0]" :alt="mainText(item)" loading="lazy" decoding="async">
+            <span class="bs-spine-cover__edge" aria-hidden="true"></span>
+          </div>
+          <div v-else class="bs-group-cover">
             <img v-for="(src, index) in groupCoverUrls(item)" :key="`${item.data.id}-${index}`" :src="src" :alt="mainText(item)" loading="lazy" decoding="async">
           </div>
         </template>
@@ -127,7 +131,11 @@
       >
       <div class="bs-row__cover">
         <template v-if="groupCoverUrls(item).length">
-          <div class="bs-group-cover">
+          <div v-if="isSingleGroupCover(item)" class="bs-spine-cover">
+            <img :src="groupCoverUrls(item)[0]" :alt="mainText(item)" loading="lazy" decoding="async">
+            <span class="bs-spine-cover__edge" aria-hidden="true"></span>
+          </div>
+          <div v-else class="bs-group-cover">
             <img v-for="(src, index) in groupCoverUrls(item)" :key="`${item.data.id}-${index}`" :src="src" :alt="mainText(item)" loading="lazy" decoding="async">
           </div>
         </template>
@@ -416,6 +424,7 @@ const compactStatusLabel = (item: Item) => isBook(item) && !hidden('status') ? p
 const compactStatusClass = (item: Item) => isBook(item) ? `bs-status-dot--${item.data.status}` : ''
 const sideTexts = (item: Item) => isGroup(item) ? [countText(groupCount(item.data))] : isBook(item) ? [] : [importStateText(item.data)]
 const groupCoverUrls = (item: Item) => isGroup(item) ? props.getGroupCoverUrls(item.data) : []
+const isSingleGroupCover = (item: Item) => isGroup(item) && groupCoverUrls(item).length === 1
 const bookTags = (book: Book) => book.tags.slice(0, 4)
 const coverSrc = (item: Item) => (isBook(item) ? props.getCoverUrl(item.data) : isImport(item) ? item.data.preview?.cover || '' : '') || placeholderCover(item)
 const placeholderCover = (item: Item) => {
@@ -484,6 +493,9 @@ const tagStyle = (tag: string) => {
 .bs-cover{aspect-ratio:2/3;border-radius:6px}
 .bs-cover img,.bs-row__cover img{display:block;width:100%;height:100%;object-fit:cover;background:inherit;animation:bs-cover-fade .18s ease}
 .bs-group-cover{display:grid;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(2,1fr);width:100%;height:100%;gap:1px;background:var(--b3-border-color);border-radius:inherit;overflow:hidden}
+.bs-spine-cover{position:relative;width:100%;height:100%;overflow:hidden;border-radius:inherit;background:linear-gradient(90deg,#4b5563 0 16%,var(--b3-theme-surface-lighter) 16%)}
+.bs-spine-cover img{width:84%;height:100%;margin-left:16%;object-fit:cover}
+.bs-spine-cover__edge{position:absolute;inset:0 auto 0 0;z-index:1;width:16%;background:linear-gradient(90deg,rgba(0,0,0,.72),rgba(255,255,255,.18) 52%,rgba(0,0,0,.42));border-right:2px solid rgba(255,255,255,.72);box-shadow:inset 2px 0 3px rgba(255,255,255,.12),inset -3px 0 4px rgba(0,0,0,.38);pointer-events:none}
 .bs-import-check{position:absolute;top:4px;left:4px;z-index:2}
 .bs-title,.bs-row__title,.bs-row__author,.bs-row .ft__error{color:var(--b3-theme-on-surface);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bs-title{padding-top:3px;font-size:13px;line-height:1.4}
@@ -491,7 +503,7 @@ const tagStyle = (tag: string) => {
 .bs-badge--left{top:6px;left:6px}.bs-badge--right{top:6px;right:6px}.bs-badge--bottom{left:6px;bottom:6px}
 .bs-cover .bs-tags{position:absolute;top:6px;left:6px;right:28px;z-index:1}
 .bs-watermark{position:absolute;right:-.17em;bottom:-.13em;font-size:54px;font-weight:900;line-height:.82;letter-spacing:-.07em;pointer-events:none;opacity:.7;text-shadow:0 1px 0 rgba(255,255,255,.14)}
-.bs-watermark--group{color:var(--b3-theme-on-background)}
+.bs-watermark--group{right:6px;bottom:6px;padding:3px 6px;border-radius:999px;background:color-mix(in srgb,var(--b3-theme-background) 78%,transparent);box-shadow:0 1px 3px rgba(0,0,0,.16);color:var(--b3-theme-on-surface);font-size:10px;font-weight:600;line-height:1;letter-spacing:0}
 .bs-watermark--unread{color:#f59e0b}
 .bs-watermark--reading{color:var(--b3-theme-primary)}
 .bs-watermark--finished{color:var(--b3-card-success-color,#2aa775)}

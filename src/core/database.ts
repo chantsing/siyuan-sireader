@@ -5,6 +5,15 @@ const SETTINGS_KEY = 'settings.json'
 const DAILY_READING_KEY = 'daily.json'
 
 const same = (a: any, b: any) => JSON.stringify(a) === JSON.stringify(b)
+export const compareSortValues = (a: unknown, b: unknown, type: string, reverse = false) => {
+  const text = type === 'name' || type === 'author'
+  const av = text ? String(a ?? '').toLocaleLowerCase() : Number(a || 0)
+  const bv = text ? String(b ?? '').toLocaleLowerCase() : Number(b || 0)
+  const natural = text ? (av as string).localeCompare(bv as string) : (av === bv ? 0 : av < bv ? -1 : 1)
+  if (!natural) return 0
+  return (reverse ? -1 : 1) * (text ? natural : -natural)
+}
+export const bookshelfSortValue = (book: any, type: string) => type === 'name' ? book?.title || '' : type === 'author' ? book?.author || '' : type === 'progress' ? book?.progress || 0 : type === 'rating' ? book?.rating || 0 : type === 'readTime' ? book?.time || 0 : type === 'time' || type === 'update' ? book?.read || 0 : book?.added || 0
 export interface Book {
   url: string
   title: string
@@ -432,29 +441,14 @@ export class ReaderDatabase {
     sortBy?: string
     reverse?: boolean
   } = {}, source?: Book[]) {
-    const sortMap: Record<string, keyof Book> = {
-      time: 'read',
-      added: 'added',
-      progress: 'progress',
-      rating: 'rating',
-      readTime: 'time',
-      update: 'read',
-      name: 'title',
-      author: 'author',
-    }
-    const column = sortMap[opt.sortBy || 'time']
+    const sortBy = opt.sortBy || 'time'
     let books = (source ?? Object.values(await storageEngine.read(booksKey))).filter(book =>
       (!opt.status?.length || opt.status.includes(book.status)) &&
       (!opt.rating || (book.rating || 0) >= opt.rating) &&
       (!opt.formats?.length || opt.formats.includes(book.format)) &&
       (!opt.tags?.length || opt.tags.some(tag => (book.tags || []).includes(tag))),
     )
-    books = books.sort((a, b) => {
-      const av = column === 'title' || column === 'author' ? String(a[column] || '').toLowerCase() : Number(a[column] || 0)
-      const bv = column === 'title' || column === 'author' ? String(b[column] || '').toLowerCase() : Number(b[column] || 0)
-      if (av === bv) return 0
-      return opt.reverse ? (av > bv ? 1 : -1) : (av < bv ? -1 : 1)
-    })
+    books = books.sort((a, b) => compareSortValues(bookshelfSortValue(a, sortBy), bookshelfSortValue(b, sortBy), sortBy, opt.reverse))
     return books
   }
 

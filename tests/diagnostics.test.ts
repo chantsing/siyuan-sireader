@@ -47,6 +47,13 @@ test('diagnostics are export-only and never replace the host console', async () 
   expect((await report()).entries.some((entry: any) => entry.event === 'silent-event')).toBe(true)
 })
 
+test('captures image resource failures through the central diagnostics listener', async () => {
+  diagnostics.installDiagnostics()
+  const image = { tagName: 'IMG', src: '/public/siyuan-sireader/covers/book.jpg', currentSrc: '/public/siyuan-sireader/covers/book.jpg' }
+  diagnostics.recordErrorEvent({ target: image } as ErrorEvent)
+  expect(diagnostics.getDiagnosticEntries()).toMatchObject([{ event: 'diagnostics.installed' }, { event: 'resource.image.failed', data: { src: '/public/siyuan-sireader/covers/book.jpg' } }])
+})
+
 test('repeated installation preserves recent entries and installation context in exports', async () => {
   diagnostics.installDiagnostics({ version: '2.3.4', frontend: 'desktop' })
   diagnostics.diagnosticLog('info', 'recent')
@@ -76,6 +83,13 @@ test('file failure totals do not count the transaction wrapper twice', async () 
   diagnostics.diagnosticLog('error', 'storage.transact.failed', { key: 'records/a.json', failed: true })
   const result = await report()
   expect(result.stats.keys['records/a.json'].failures).toBe(1)
+})
+
+test('export summarizes file read failures with their transport status', async () => {
+  diagnostics.diagnosticLog('debug', 'file.read.start', { path: '/plugin/private/siyuan-cloud/p/a.pdf', kind: 'siyuan-cloud' })
+  diagnostics.diagnosticLog('error', 'file.read.failed', { path: '/plugin/private/siyuan-cloud/p/a.pdf', kind: 'siyuan-cloud', status: 202, apiCode: 403, durationMs: 18 })
+  const result = await report()
+  expect(result.stats.fileIo).toMatchObject({ reads: 1, cloudReads: 1, failures: 1, totalDurationMs: 18, maxDurationMs: 18, statuses: { '202': 1 } })
 })
 
 test('export separates current-session IO from retained history', async () => {
