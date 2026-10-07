@@ -1,5 +1,6 @@
 import type { HttpBook, HttpSourceConfig, HttpSourceExtension, HttpSourceHelpers, HttpSourceManager } from '@/utils/HttpSources'
 import type { OnlineBookImportInfo } from '@/composables/useBookImport'
+import { forwardProxy } from '@/api'
 
 const GATEWAY_URL = 'https://i.weread.qq.com/api/agent/gateway'
 const SKILL_VERSION = '1.0.3'
@@ -26,7 +27,28 @@ const md5 = (value: string) => {
     const crypto = (window as any).require?.('crypto')
     if (crypto?.createHash) return crypto.createHash('md5').update(value).digest('hex')
   } catch {}
-  return ''
+  const bytes = new TextEncoder().encode(value), words: number[] = []
+  for (let i = 0; i < bytes.length; i++) words[i >> 2] = (words[i >> 2] || 0) | (bytes[i] << ((i & 3) * 8))
+  const bitLen = bytes.length * 8
+  words[bytes.length >> 2] = (words[bytes.length >> 2] || 0) | (0x80 << ((bytes.length & 3) * 8))
+  words[(((bytes.length + 8) >> 6) + 1) * 16 - 2] = bitLen
+  let a = 0x67452301, b = 0xefcdab89, c = 0x98badcfe, d = 0x10325476
+  const rol = (x: number, n: number) => (x << n) | (x >>> (32 - n))
+  const add = (x: number, y: number) => (x + y) | 0
+  const k = Array.from({ length: 64 }, (_, i) => Math.floor(Math.abs(Math.sin(i + 1)) * 0x100000000))
+  const s = [7, 12, 17, 22, 5, 9, 14, 20, 4, 11, 16, 23, 6, 10, 15, 21]
+  for (let o = 0; o < words.length; o += 16) {
+    let aa = a, bb = b, cc = c, dd = d
+    for (let i = 0; i < 64; i++) {
+      let f: number, g: number
+      if (i < 16) { f = (bb & cc) | (~bb & dd); g = i } else if (i < 32) { f = (dd & bb) | (~dd & cc); g = (5 * i + 1) % 16 } else if (i < 48) { f = bb ^ cc ^ dd; g = (3 * i + 5) % 16 } else { f = cc ^ (bb | ~dd); g = (7 * i) % 16 }
+      const t = dd; dd = cc; cc = bb
+      bb = add(bb, rol(add(add(aa, f), add(k[i], words[o + g] || 0)), s[(i >> 4) * 4 + (i & 3)]))
+      aa = t
+    }
+    a = add(a, aa); b = add(b, bb); c = add(c, cc); d = add(d, dd)
+  }
+  return [a, b, c, d].flatMap(x => [0, 8, 16, 24].map(n => ((x >>> n) & 255).toString(16).padStart(2, '0'))).join('')
 }
 
 const getFa = (bookId: string): [string, string[]] => {
@@ -68,7 +90,10 @@ const pcChapterReadUrlOf = (bookId: string, chapterUid: string | number) => {
   return bookHash && chapterHash ? `https://weread.qq.com/web/reader/${bookHash}k${chapterHash}` : pcReadUrlOf(bookId)
 }
 
-const nodePostJson = (url: string, headers: Record<string, string>, body: Record<string, unknown>, redirects = 0): Promise<string> => {
+/* all Agent calls run in the kernel plugin */
+const nodePostJson = async (_url: string, _headers: Record<string, string>, _body: Record<string, unknown>): Promise<string> => {
+  throw new Error('legacy direct transport disabled')
+  /*
   const req = (window as any).require
   if (!req || redirects > 5) return Promise.reject(new Error('Node request unavailable'))
   const target = new URL(url)
@@ -106,8 +131,9 @@ const nodePostJson = (url: string, headers: Record<string, string>, body: Record
     request.setTimeout(15000, () => request.destroy(new Error('微信读书 API 请求超时')))
     request.write(payload)
     request.end()
-  })
+  })*/
 }
+void nodePostJson
 
 export const callWereadAgent = async (
   apiKey: string,
@@ -146,42 +172,12 @@ export const callWereadAgentDirect = async (
     'Content-Type': 'application/json',
     Accept: 'application/json',
   }
-  try {
-    const directBody = await nodePostJson(GATEWAY_URL, requestHeaders, requestBody)
-    const directData = JSON.parse(directBody) as WereadAgentResponse
-    if (directData.errcode && directData.errcode !== 0) {
-      const error = new Error(directData.errmsg || `微信读书 Agent API 错误：${directData.errcode}`) as Error & { errcode?: number; errlog?: string }
-      error.errcode = Number(directData.errcode)
-      error.errlog = String(directData.errlog || '')
-      throw error
-    }
-    return directData
-  } catch (error: any) {
-    if (error?.errcode) throw error
-  }
-  const response = await fetch('/api/network/forwardProxy', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      url: GATEWAY_URL,
-      method: 'POST',
-      contentType: 'application/json',
-      timeout: 15000,
-      headers: [
-        { Authorization: requestHeaders.Authorization },
-        { 'Content-Type': requestHeaders['Content-Type'] },
-        { Accept: requestHeaders.Accept },
-      ],
-      payload: JSON.stringify(requestBody),
-    }),
-  }).catch(() => null)
-  const res = response?.ok ? await response.json().catch(() => null) : null
-  const responseBody = res?.code === 0 ? res.data?.body : ''
-  if (!responseBody) throw new Error(`微信读书 Agent API 无响应${res?.data?.status ? `：HTTP ${res.data.status}` : ''}`)
-  const data = JSON.parse(responseBody) as WereadAgentResponse
+  const res = await forwardProxy(GATEWAY_URL, 'POST', JSON.stringify(requestBody), Object.entries(requestHeaders).map(([name, value]) => ({ name, value })), 15000, 'application/json')
+  if (!res?.body) throw new Error('微信读书 Agent API 无响应')
+  const data = JSON.parse(res.body) as WereadAgentResponse
   if (data.errcode && data.errcode !== 0) {
     const error = new Error(data.errmsg || `微信读书 Agent API 错误：${data.errcode}`) as Error & { status?: number; errcode?: number; errlog?: string }
-    error.status = Number(res?.data?.status || 0)
+    error.status = Number(res?.status || 0)
     error.errcode = Number(data.errcode)
     error.errlog = String(data.errlog || '')
     throw error

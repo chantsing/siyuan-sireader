@@ -306,8 +306,8 @@ const handleToolbarAction = (id: string) => {
   else if (id === 'organize') modalMode.value = 'organize'
   else if (id === 'manage') { modalMode.value = 'manage'; setImportMode('link') }
 }
-const getCoverUrl = (book: Book) => bookshelfManager.getCoverUrl(book)
-const getGroupCoverUrls = (group: GroupConfig) => group.coverMode === 'custom' && group.cover ? [getCoverUrl({ cover: group.cover })] : books.value.filter(book => bookInGroup(book, group)).map(getCoverUrl).filter(Boolean).slice(0, 4)
+const getCoverUrl = (book: Book | string) => bookshelfManager.getCoverUrl(book)
+const getGroupCoverUrls = (group: GroupConfig) => group.coverMode === 'custom' && group.cover ? [getCoverUrl(group.cover)] : books.value.filter(book => bookInGroup(book, group)).map(getCoverUrl).filter(Boolean).slice(0, 4)
 const getProgress = (book: Book) => /^https?:\/\//i.test(book.path || '') && book.meta?.fileSize ? book.meta.fileSize : `${book.progress || 0}%`
 const toggleArrayItem = (arr: any[], value: any) => { const i = arr.indexOf(value); i > -1 ? arr.splice(i, 1) : arr.push(value) }
 const toggleFilterItem = (key: string, value: any) => key === 'rating' ? filterMap[key].value = value : toggleArrayItem(filterMap[key].value, value)

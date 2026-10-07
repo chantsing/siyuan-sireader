@@ -1,7 +1,12 @@
 import { forwardProxy } from '@/api'
 
 const proxyJson = async (url: string, method: 'GET' | 'POST', payload: object | string, headers: Record<string, string>[], contentType: string) => {
-  const response = await forwardProxy(url, method, payload, headers, 15000, contentType)
+  let response
+  try { response = await forwardProxy(url, method, payload, headers, 15000, contentType); if (!response) throw new Error('kernel unavailable') }
+  catch {
+    const direct = await fetch(url, { method, headers: Object.fromEntries(headers.flatMap(item => Object.entries(item))), body: method === 'GET' ? undefined : String(payload) })
+    return direct.json()
+  }
   if (!response || response.status < 200 || response.status >= 300) throw new Error(`Translation proxy HTTP ${response?.status || 0}`)
   return JSON.parse(response.body)
 }
@@ -14,9 +19,7 @@ export async function translateGoogle(text: string, targetLang: string = 'zh-CN'
   url.searchParams.append('tl', targetLang)
   url.searchParams.append('q', text)
   
-  const response = await fetch(url.toString())
-  if (!response.ok) throw new Error(`Google HTTP ${response.status}`)
-  const data = await response.json()
+  const data = await proxyJson(url.toString(), 'GET', {}, [], 'text/plain')
   
   if (Array.isArray(data) && Array.isArray(data[0])) {
     return data[0].filter((s: any) => Array.isArray(s) && s[0]).map((s: any) => s[0]).join('')
@@ -28,9 +31,7 @@ export async function translateMyMemory(text: string, targetLang: string = 'zh-C
   const url = new URL('https://api.mymemory.translated.net/get')
   url.searchParams.set('q', text)
   url.searchParams.set('langpair', `en|${targetLang}`)
-  const response = await fetch(url)
-  if (!response.ok) throw new Error(`MyMemory HTTP ${response.status}`)
-  const data = await response.json()
+  const data = await proxyJson(url.toString(), 'GET', {}, [], 'text/plain')
   const result = data?.responseData?.translatedText?.trim()
   if (!result) throw new Error(data?.responseDetails || 'MyMemory returned no translation')
   return result
@@ -38,32 +39,22 @@ export async function translateMyMemory(text: string, targetLang: string = 'zh-C
 
 export async function translateTransmart(text: string, targetLang: string = 'zh-CN'): Promise<string> {
   const target = targetLang.startsWith('zh') ? 'zh' : targetLang
-  const response = await fetch('https://transmart.qq.com/api/imt', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  const response = await proxyJson('https://transmart.qq.com/api/imt', 'POST', JSON.stringify({
       header: { fn: 'auto_translation', client_key: 'browser-chrome', client_ver: '1.0.0', common: { model: 'browser' } },
       type: 'plain',
       model_category: 'normal',
       source: { lang: 'auto', text_list: [text] },
       target: { lang: target },
-    }),
-  })
-  if (!response.ok) throw new Error(`Transmart HTTP ${response.status}`)
-  const result = (await response.json())?.auto_translation?.[0]?.trim()
+    }), [{ 'Content-Type': 'application/json' }], 'application/json')
+  const result = response?.auto_translation?.[0]?.trim()
   if (!result) throw new Error('Transmart returned no translation')
   return result
 }
 
 export async function translateYoudao(text: string, targetLang: string = 'zh-CN'): Promise<string> {
   const target = ({ 'zh-CN': 'zh-CHS', 'zh-TW': 'zh-CHT' } as Record<string, string>)[targetLang] || targetLang
-  const response = await fetch('https://aidemo.youdao.com/trans', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
-    body: new URLSearchParams({ q: text, from: 'auto', to: target }),
-  })
-  if (!response.ok) throw new Error(`Youdao HTTP ${response.status}`)
-  const result = (await response.json())?.translation?.join('\n')?.trim()
+  const data = await proxyJson('https://aidemo.youdao.com/trans', 'POST', new URLSearchParams({ q: text, from: 'auto', to: target }).toString(), [{ 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' }], 'application/x-www-form-urlencoded; charset=UTF-8')
+  const result = data?.translation?.join('\n')?.trim()
   if (!result) throw new Error('Youdao returned no translation')
   return result
 }
@@ -103,13 +94,8 @@ export async function translateWechat(text: string, targetLang: string = 'zh-CN'
 export async function translateAzure(text: string, targetLang: string = 'zh-CN'): Promise<string> {
   const language = ({ 'zh-CN': 'zh-Hans', 'zh-TW': 'zh-Hant' } as Record<string, string>)[targetLang] || targetLang
   const params = new URLSearchParams({ to: language, isEnterpriseClient: 'false' })
-  const response = await fetch(`https://edge.microsoft.com/translate/translatetext?${params}`, {
-    method: 'POST',
-    headers: { Accept: '*/*', 'Content-Type': 'application/json' },
-    body: JSON.stringify([text])
-  })
-  if (!response.ok) throw new Error(`Microsoft HTTP ${response.status}`)
-  const result = (await response.json())?.[0]?.translations?.[0]?.text?.trim()
+  const data = await proxyJson(`https://edge.microsoft.com/translate/translatetext?${params}`, 'POST', JSON.stringify([text]), [{ Accept: '*/*', 'Content-Type': 'application/json' }], 'application/json')
+  const result = data?.[0]?.translations?.[0]?.text?.trim()
   if (!result) throw new Error('Microsoft returned no translation')
   return result
 }

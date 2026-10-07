@@ -2,6 +2,7 @@ import { bookshelfManager } from '@/core/bookshelf'
 import type { RemoteBookInfo, RemoteDownloadRequest, OnlineBookImportInfo } from '@/composables/useBookImport'
 import { registerPrivateSources } from '@private-sources'
 import { registerWereadAgentSources } from '@/weread/agent'
+import { forwardProxy, kernelDownloadUrl } from '@/api'
 
 type HttpSourceType = 'anna' | 'gutenberg' | 'standardebooks' | 'custom' | (string & {})
 
@@ -497,28 +498,18 @@ export class HttpSourceManager {
   }
 
   private async fetchText(url: string, timeout = 8000) {
-    try {
-      const controller = new AbortController()
-      const timer = window.setTimeout(() => controller.abort(), timeout)
-      const response = await fetch(url, { signal: controller.signal, credentials: 'omit', cache: 'no-store' })
-      window.clearTimeout(timer)
-      if (response.ok) return response.text()
-    } catch {}
     const res = await this.forwardProxy(url, 'GET', timeout, [{ name: 'User-Agent', value: 'Mozilla/5.0' }], {}, 'text/plain')
     return res?.body || ''
   }
 
   private async forwardProxy(url: string, method = 'GET', timeout = 15000, headers: Array<{ name: string; value: string }> = [], payload: any = {}, contentType = 'text/html') {
-    const response = await fetch('/api/network/forwardProxy', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, method, contentType, headers: toForwardProxyHeaders(headers), payload, timeout }),
-    }).catch(() => null)
-    const res = response?.ok ? await response.json().catch(() => null) : null
-    return res?.code === 0 ? res.data as { body: string; headers: Record<string, string>; status: number } : null
+    return forwardProxy(url, method, payload, toForwardProxyHeaders(headers), timeout, contentType)
   }
 
   private nodeFetchText(url: string, headers: Array<{ name: string; value: string }>, redirects = 0): Promise<string> {
+    if (redirects > 5) return Promise.reject(new Error('Too many redirects'))
+    return this.forwardProxy(url, 'GET', 15000, headers, {}, 'text/plain').then(response => response?.body || '')
+    /*
     const req = (window as any).require
     if (!req || redirects > 5) return Promise.reject(new Error('Node request unavailable'))
     const client = req(new URL(url).protocol === 'http:' ? 'http' : 'https')
@@ -548,12 +539,13 @@ export class HttpSourceManager {
       request.on('error', reject)
       request.setTimeout(15000, () => request.destroy(new Error('请求超时')))
     })
+    */
   }
 
   async downloadCover(url: string) {
     if (!url) return null
     try {
-      const res = await fetch(url, { mode: 'cors', credentials: 'omit' })
+      const res = await fetch(kernelDownloadUrl(url))
       return res.ok ? await res.blob() : null
     } catch {
       return null

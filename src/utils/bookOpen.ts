@@ -45,8 +45,10 @@ const activateOpenedTab = (tab: HTMLElement | null, onReady?: () => void) => {
 }
 
 export const openOnlineReaderTab = (plugin: Plugin, title: string, url: string, settings?: Pick<ReaderSettings, 'openMode'>, onReady?: () => void, context?: any) =>
-  activateOpenedTab(findOpenedTab(title, plugin.name, 'online_reader'), onReady)
-  || openReaderTab(plugin, title, { url, bookInfo: { title }, context }, `${plugin.name}online_reader`, settings, onReady)
+  (plugin as any).isBrowser && /^https:\/\/weread\.qq\.com\/web\/reader\//i.test(url)
+    ? (window.open(url, '_blank', 'noopener,noreferrer'), onReady?.(), true)
+    : activateOpenedTab(findOpenedTab(title, plugin.name, 'online_reader'), onReady)
+      || openReaderTab(plugin, title, { url, bookInfo: { title }, context }, `${plugin.name}online_reader`, settings, onReady)
 
 const normalizeNativePdfPath = (path: string) => {
   if (!path || /^https?:\/\//i.test(path) || /^file:\/\//i.test(path)) return null

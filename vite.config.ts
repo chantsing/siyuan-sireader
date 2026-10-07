@@ -6,6 +6,7 @@ import fg from "fast-glob"
 import minimist from "minimist"
 import livereload from "rollup-plugin-livereload"
 import {
+  build as viteBuild,
   defineConfig,
   loadEnv,
 } from "vite"
@@ -14,6 +15,15 @@ import zipPack from "vite-plugin-zip-pack"
 
 const pluginInfo = require("./plugin.json")
 const PRIVATE_SOURCES_ID = "@private-sources"
+
+function buildKernelPlugin(outDir: string) {
+  return {
+    name: 'build-siyuan-kernel',
+    async closeBundle() {
+      await viteBuild({ configFile: false, build: { outDir, emptyOutDir: false, sourcemap: false, minify: false, lib: { entry: resolve(__dirname, 'src/kernel/index.js'), name: 'SiReaderKernel', formats: ['iife'], fileName: () => 'kernel.js' } } })
+    },
+  }
+}
 const VIRTUAL_PRIVATE_SOURCES_ID = "\0@private-sources"
 const FOLIATE_PDF_STUB_ID = "\0foliate-pdf-stub"
 const FOLIATE_CUSTOM_ELEMENTS = {
@@ -191,6 +201,7 @@ export default defineConfig(({
       },
       rollupOptions: {
         plugins: [
+          buildKernelPlugin(distDir),
           ...(isWatch
             ? [
                 ...(useLiveReload ? [livereload(devDistDir)] : []),

@@ -7,7 +7,7 @@
 Transform SiYuan Notes into a professional eBook reader  
 Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support highlights, ink, shapes, forms, stamps, signatures, images, screenshots, search, printing, export, and backlinks, with annotation notes, dictionary, translation, themes, and bookshelf management.
 
-[![Version](https://img.shields.io/badge/version-2.5.1-blue.svg)](https://github.com/your-repo/siyuan-sireader)
+[![Version](https://img.shields.io/badge/version-2.5.2-blue.svg)](https://github.com/your-repo/siyuan-sireader)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![SiYuan](https://img.shields.io/badge/SiYuan-3.0+-orange.svg)](https://github.com/siyuan-note/siyuan)
 
@@ -18,6 +18,20 @@ Professional eBook reader for EPUB/PDF/MOBI/TXT/online novels. PDFs support high
 ---
 
 ## 📝 Latest Updates
+
+## v2.5.2 (2026-10-07)
+
+### Added
+
+- Added a SiYuan kernel-plugin network bridge for WeRead, book-source search and downloads, translation, dictionaries, and other online requests across desktop, server, and Docker deployments.
+
+### Improved
+
+- Aligned EPUB typography with Readest's default rules: Chinese books use 2em first-line indentation by default while preserving the book's native heading hierarchy, fonts, font sizes, bold text, paragraph styles, and inline formatting. Paragraph wrapping, alignment, code fonts, and image-paragraph exceptions now follow the same baseline.
+
+### Fixed
+
+- Fixed server-mode group covers being rendered with a different path treatment from book covers.
 
 ## v2.5.1 (2026-10-04)
 

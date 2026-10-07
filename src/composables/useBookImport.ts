@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import { buildBookMetadata, bookshelfManager, dataIdFromFingerprint, fileFingerprint, hasBookBulkPatch, type BookBulkPatch, type BookFormat, urlFingerprint } from '@/core/bookshelf'
 import { createLocalFileRef, filterSupportedBookFiles, materializeNativeFile, normalizeBookTitle, saveBookFile, saveCoverFile, toFileUrl } from '@/core/storage'
+import { kernelDownloadUrl } from '@/api'
 
 export interface BookImportItem {
   id: string
@@ -136,6 +137,7 @@ const toDraftItem = (value: string) => {
   }
 }
 
+/* Downloads are intentionally handled by the kernel plugin for every client. */
 const nodeDownloadFile = ({ url, fileName, headers = [], onProgress }: RemoteDownloadRequest, redirects = 0): Promise<File> => {
   const req = (window as any).require
   if (!req || redirects > 5) return Promise.reject(new Error('Node download unavailable'))
@@ -170,10 +172,18 @@ const nodeDownloadFile = ({ url, fileName, headers = [], onProgress }: RemoteDow
   })
 }
 
+const browserDownloadFile = async ({ url, fileName, headers = [], onProgress }: RemoteDownloadRequest): Promise<File> => {
+  const response = await fetch(kernelDownloadUrl(url, headers))
+  if (!response.ok) throw new Error(`HTTP ${response.status}: download failed`)
+  const buffer = await response.arrayBuffer()
+  onProgress?.(`Downloaded ${formatBytes(buffer.byteLength)}`)
+  return new File([buffer], fileName, { type: response.headers.get('content-type') || 'application/octet-stream' })
+}
+
 export const importRemoteBook = async (request: RemoteDownloadRequest) => {
   if (!request.url) throw new Error('无效的下载链接')
   request.onProgress?.('连接下载...')
-  const file = await nodeDownloadFile(request)
+  const file = await browserDownloadFile(request)
   const format = (request.bookInfo?.format || file.name.split('.').pop()?.toLowerCase() || 'epub') as BookFormat
   await assertBookFile(file, format, request.bookInfo?.fileSize)
   const info = request.bookInfo

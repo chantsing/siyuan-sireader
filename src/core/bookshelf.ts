@@ -460,12 +460,15 @@ export class BookshelfManager {
   // ===== UI辅助 =====
   getBookColor(title: string) { const colors = ['#fef3c7', '#dbeafe', '#fce7f3', '#e0e7ff', '#d1fae5', '#fed7aa', '#fae8ff', '#f3e8ff', '#fecaca', '#fbcfe8']; let hash = 0; for (let i = 0; i < title.length; i++) hash = title.charCodeAt(i) + ((hash << 5) - hash); return colors[Math.abs(hash) % colors.length] }
   
-  getCoverUrl(book: any) {
-    if (!book.cover) return '';
-    if (book.cover.startsWith('/assets/') || /^https?:\/\//.test(book.cover)) return book.cover;
-    if (book.cover.startsWith('/public/')) return `${book.cover}?v=${this.coverRevision}`;
-    if (book.cover.startsWith('/data/public/')) return `${book.cover.replace('/data/public/', '/public/')}?v=${this.coverRevision}`;
-    return book.cover;
+  getCoverUrl(bookOrCover: any) {
+    const raw = typeof bookOrCover === 'string' ? bookOrCover : bookOrCover?.cover
+    const cover = typeof raw === 'string' ? raw.trim() : ''
+    if (!cover) return ''
+    if (/^(?:https?:|data:|blob:|\/assets\/)/i.test(cover)) return cover
+    const path = cover.replace(/^\/?(?:data\/)?public\//i, '/public/')
+    if (!path.startsWith('/public/')) return cover
+    const separator = path.includes('?') ? '&' : '?'
+    return `${path}${separator}v=${this.coverRevision}`
   }
   
   // ===== 书籍操作 =====

@@ -225,7 +225,7 @@ function applyCustomCSS(view: FoliateView, settings: ReaderSettings) {
   const mobile = isMobile()
   const dark = isDark(theme.bg)
   const customFont = text.fontFamily === 'custom' ? text.customFont?.fontFamily : ''
-  const font = customFont ? `"${customFont}", sans-serif` : text.fontFamily || 'inherit'
+  const font = customFont ? `"${customFont}", sans-serif` : text.fontFamily || 'serif'
   const fontUrl = customFont ? `${location.origin}/public/siyuan-sireader/fonts/${encodeURIComponent(text.customFont.fontFile)}` : ''
   const fontFace = customFont ? `@font-face{font-family:"${customFont}";src:url("${fontUrl}");font-display:swap}` : ''
   const contentBackground = getViewBackground(theme)
@@ -238,30 +238,48 @@ function applyCustomCSS(view: FoliateView, settings: ReaderSettings) {
       background:${contentBackground}!important;
       background-color:${theme.bg}!important;
       box-sizing:border-box!important;
+      font-family:${font};
+      hanging-punctuation:allow-end last;
+      orphans:2;
+      widows:2;
       ${mobile ? '-webkit-touch-callout:none!important;' : ''}
     }
-    html,body{color:${theme.color}!important;background:${contentBackground}!important;background-color:${theme.bg}!important}
+    html,body{color:${theme.color}!important;background:${contentBackground}!important;background-color:${theme.bg}!important;font-size:${text.fontSize}px!important;font-weight:${text.fontWeight};-webkit-text-size-adjust:none;text-size-adjust:none;text-align:justify}
     body{
       color:${theme.color}!important;
-      font-family:${font}!important;
-      font-size:${text.fontSize}px!important;
-      font-weight:${text.fontWeight}!important;
-      letter-spacing:${text.letterSpacing}em!important;
+      line-height:unset;
       margin:0!important;
+      padding:unset;
+      overflow:unset;
       box-sizing:border-box!important;
       ${mobile ? 'width:100%!important;min-width:100%!important;max-width:none!important;display:block!important;' : ''}
     }
-    body,body *{font-family:${font}!important}
-    p,li,dd,blockquote,span,div{font-size:${text.fontSize}px!important;font-weight:${text.fontWeight}!important}
-    p:not(:has(img)),li,blockquote,dd{line-height:${paragraph.lineHeight}!important;text-align:start;text-indent:${paragraph.textIndent}em!important;margin-bottom:${paragraph.paragraphSpacing}em!important}
+    [align="left"]{text-align:left}
+    [align="right"]{text-align:right}
+    [align="center"]{text-align:center}
+    [align="justify"]{text-align:justify}
+    :is(hgroup,header) p{text-align:unset;hyphens:unset}
+    p,blockquote,dd,div:not(:has(*:not(b,a,em,i,strong,u,span))){line-height:${paragraph.lineHeight};letter-spacing:${text.letterSpacing}em;text-indent:${paragraph.textIndent}em;-webkit-hyphens:auto;hyphens:auto;-webkit-hyphenate-limit-before:3;-webkit-hyphenate-limit-after:2;-webkit-hyphenate-limit-lines:2;hanging-punctuation:allow-end last;widows:2}
+    li{line-height:${paragraph.lineHeight};-webkit-hyphens:auto;hyphens:auto}
+    p{margin:${paragraph.paragraphSpacing}em 0}
+    h1,h2,h3,h4,h5,h6,blockquote[align="center"],div[align="center"],p[align="center"],dd[align="center"],p.aligned-center,blockquote.aligned-center,dd.aligned-center,div.aligned-center,li p,ol p,ul p,td p,p:has(>img:only-child),p:has(>span:only-child>img:only-child),p:has(>img:not(.has-text-siblings)),p:has(>a:first-child+img:last-child){text-indent:initial}
+    .nonindent,.noindent{text-indent:unset!important}
+    div.left *,p.left *{text-align:left}
+    div.right *,p.right *{text-align:right}
+    div.center *,p.center *{text-align:center}
+    div.justify *,p.justify *{text-align:justify}
     img,svg,p:has(img),figure,figure *{background-color:transparent!important}
     p:has(img){text-indent:0!important;margin:0!important}
+    p>font:only-child{display:flow-root}
+    font[size="1"]{font-size:${Math.max(8, text.fontSize * 0.5)}px}
+    font[size="2"]{font-size:${text.fontSize * 0.75}px}
+    font[size="3"]{font-size:${text.fontSize}px}
+    font[size="4"]{font-size:${text.fontSize * 1.2}px}
+    font[size="5"]{font-size:${text.fontSize * 1.5}px}
+    font[size="6"]{font-size:${text.fontSize * 2}px}
+    font[size="7"]{font-size:${text.fontSize * 3}px}
+    pre,code,kbd{font-family:monospace;font-variant-ligatures:none;white-space:pre-wrap!important}
     ${mobile ? 'body>*{max-width:100%!important}img,svg,video,table,pre,code{max-width:100%!important}' : ''}
-    [align="left"]{text-align:left!important}
-    [align="right"]{text-align:right!important}
-    [align="center"]{text-align:center!important}
-    [align="justify"]{text-align:justify!important}
-    pre{white-space:pre-wrap!important}
     aside[epub|type~="footnote"],
     aside[epub|type~="endnote"],
     aside[epub|type~="note"],

@@ -22,6 +22,13 @@ test('bookshelf sorting defaults to newest-first for numeric fields', () => {
   expect(compareBookshelfValues('Alpha', 'beta', 'name', true)).toBe(1)
 })
 
+test('book and group covers share the canonical SiYuan public URL', () => {
+  const manager = new BookshelfManager()
+  expect(manager.getCoverUrl('data/public/siyuan-sireader/covers/group.jpg')).toMatch(/^\/public\/siyuan-sireader\/covers\/group\.jpg\?v=/)
+  expect(manager.getCoverUrl({ cover: '/data/public/siyuan-sireader/covers/book.jpg' })).toMatch(/^\/public\/siyuan-sireader\/covers\/book\.jpg\?v=/)
+  expect(manager.getCoverUrl('public/siyuan-sireader/covers/group.jpg?size=small')).toMatch(/^\/public\/siyuan-sireader\/covers\/group\.jpg\?size=small&v=/)
+})
+
 test('completion fills only missing fields and preserves user values', () => {
   const current = { title: '用户标题', author: '用户作者', cover: '/public/custom.jpg', meta: { isbn: 'old-isbn', description: '' }, tags: ['用户标签'], groups: ['g'], rating: 4, status: 'reading', progress: 42 }
   const candidate = { title: '解析标题', author: '解析作者', cover: '/public/extracted.jpg', meta: { isbn: 'new-isbn', publisher: '出版社', description: '简介' }, tags: ['解析标签'] }

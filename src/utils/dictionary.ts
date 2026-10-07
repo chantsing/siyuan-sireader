@@ -1,5 +1,5 @@
 import type { Plugin } from 'siyuan'
-import { getFile } from '@/api'
+import { forwardProxy, getFile } from '@/api'
 import { removeManagedFileTransactionally, writeManagedFile } from '@/core/storage'
 
 const BASE_URL='https://dictionary.cambridge.org'
@@ -283,7 +283,7 @@ export function initDictModule(p:Plugin){
 }
 
 // ===== 查询函数 =====
-const fetchHTML=async(url:string)=>new DOMParser().parseFromString(await(await fetch(url)).text(),'text/html')
+const fetchHTML=async(url:string)=>new DOMParser().parseFromString((await forwardProxy(url,'GET',{},[],15000,'text/html')).body,'text/html')
 const getTexts=(doc:Document,selector:string)=>Array.from(doc.querySelectorAll(selector)).map(el=>el.textContent?.trim()).filter(Boolean)
 
 // 智能解析文本，自动提取词性、标签、注释等信息并分类
@@ -333,7 +333,7 @@ const queryWithParse=async(fetchFn:()=>Promise<{entry:string;phonetic?:string;au
 }
 
 export async function queryYoudao(word:string){
-  const{data}=await(await fetch(`https://dict.youdao.com/suggest?q=${encodeURIComponent(word)}&le=en&num=5&doctype=json`)).json().catch(()=>({data:null}))
+  const{data}=await (async()=>{try{return JSON.parse((await forwardProxy(`https://dict.youdao.com/suggest?q=${encodeURIComponent(word)}&le=en&num=5&doctype=json`)).body)}catch{return {data:null}}})()
   const entries=data?.entries||[]
   if(!entries.length)return null
   const allExtras:{label:string;text:string}[][]=[]
@@ -352,7 +352,7 @@ export const queryHaici=(word:string)=>queryWithParse(async()=>{
 
 export async function queryMxnzp(word:string){
   try{
-    const json=await(await fetch(`https://www.mxnzp.com/api/convert/dictionary?content=${encodeURIComponent(word)}&app_id=${MXNZP_ID}&app_secret=${MXNZP_SECRET}`)).json()
+    const json=JSON.parse((await forwardProxy(`https://www.mxnzp.com/api/convert/dictionary?content=${encodeURIComponent(word)}&app_id=${MXNZP_ID}&app_secret=${MXNZP_SECRET}`)).body)
     if(json.code!==1||!json.data?.length)return null
     const d=json.data[0],meanings=d.explanation?d.explanation.split('\n').filter((s:string)=>s.trim()).slice(0,10).map((text:string)=>({pos:'',text})):[]
     return{word:d.word+(d.traditional!==d.word?`（繁：${d.traditional}）`:''),phonetic:d.pinyin||'',badges:[d.radicals?{text:`部首: ${d.radicals}`,gradient:false}:null,d.strokes?{text:`笔画: ${d.strokes}画`,gradient:false}:null].filter(Boolean)as any,meanings,extras:[{label:'来源',text:'汉字词典'}]}
@@ -416,7 +416,7 @@ export async function queryCambridge(w:string):Promise<DictResult|null>{
       })
       return{word,phonetics,parts:Array.from(partMap).map(([part,means])=>({part,means})),examples}
     }
-    const fetchDict=async(path:string)=>{try{const res=await fetch(`${BASE_URL}/${path}/${w.split(' ').join('-')}`);return res.ok?parseHTML(await res.text()):null}catch{return null}}
+    const fetchDict=async(path:string)=>{try{const res=await forwardProxy(`${BASE_URL}/${path}/${w.split(' ').join('-')}`);return res.status>=200&&res.status<300?parseHTML(res.body):null}catch{return null}}
     return await fetchDict('dictionary/english-chinese-simplified')||await fetchDict('dictionary/english')
   }catch{return null}
 }

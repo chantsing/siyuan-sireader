@@ -483,17 +483,22 @@ export async function forwardProxy(
   timeout: number = 7000,
   contentType: string = "text/html"
 ): Promise<IResForwardProxy> {
-  let data = {
-    url: url,
-    method: method,
-    timeout: timeout,
-    contentType: contentType,
-    headers: headers,
-    payload: payload,
-  };
-  let url1 = "/api/network/forwardProxy";
-  return request(url1, data);
+  const response = await fetch('/plugin/private/siyuan-sireader/api/network/forwardProxy', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, method, timeout, contentType, headers, payload }),
+  })
+  const envelope = await response.json().catch(() => null)
+  const result = envelope?.code === 0
+    ? envelope.data
+    : envelope?.data?.code === 0
+      ? envelope.data.data
+      : null
+  if (!response.ok || !result) throw new Error(envelope?.msg || envelope?.data?.msg || `Network request failed: ${url}`)
+  return result
 }
+
+export const kernelDownloadUrl = (url: string, headers: Array<{ name: string; value: string }> = []) =>
+  `/plugin/private/siyuan-sireader/api/network/download?url=${encodeURIComponent(url)}&headers=${encodeURIComponent(JSON.stringify(Object.fromEntries(headers.map(header => [header.name, header.value]))))}`
 
 // **************************************** System ****************************************
 
